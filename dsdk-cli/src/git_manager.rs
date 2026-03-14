@@ -13,7 +13,7 @@ use crate::config::GitConfig;
 use crate::git_operations;
 use crate::messages;
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Returns true if the repo at `repo_path` has pending/changed files (uncommitted or staged).
 ///
@@ -46,6 +46,61 @@ pub fn update_workspace_repo(repo_path: &Path, commit: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the correct mirror directory for a repository, handling URL collisions.
+///
+/// When two targets define a repo with the same name but different upstream URLs
+/// (e.g., `u-boot` pointing to `u-boot/u-boot.git` vs `analogdevicesinc/u-boot-xlnx.git`),
+/// this function ensures each URL gets its own mirror directory.
+///
+/// Resolution order:
+/// 1. `mirror/<name>` - if it doesn't exist yet, or its origin URL matches
+/// 2. `mirror/<name>-<hash>` - where hash is first 8 chars of SHA-256 of the URL
+pub fn get_mirror_repo_path(mirror_path: &Path, name: &str, url: &str) -> PathBuf {
+    let default_path = mirror_path.join(name);
+
+    // If the default mirror directory doesn't exist, use it
+    if !default_path.exists() {
+        return default_path;
+    }
+
+    // Check if the existing mirror's origin URL matches the requested URL
+    if let Ok(existing_url) = git_operations::get_remote_url(&default_path, "origin") {
+        if git_operations::normalize_git_url(&existing_url)
+            == git_operations::normalize_git_url(url)
+        {
+            return default_path;
+        }
+
+        // URL mismatch: need a separate mirror directory
+        messages::info(&format!(
+            "Mirror '{}' exists with a different URL ({}), using separate mirror for {}",
+            name, &existing_url, url
+        ));
+    }
+
+    // Use hash-based suffix for disambiguation
+    let hash = git_operations::hash_url(url);
+    let collision_path = mirror_path.join(format!("{}-{}", name, hash));
+
+    // If collision path doesn't exist, use it
+    if !collision_path.exists() {
+        return collision_path;
+    }
+
+    // Collision path exists - check if URL matches
+    if let Ok(existing_url) = git_operations::get_remote_url(&collision_path, "origin") {
+        if git_operations::normalize_git_url(&existing_url)
+            == git_operations::normalize_git_url(url)
+        {
+            return collision_path;
+        }
+    }
+
+    // If we still have a collision (very unlikely), fall back to org-repo format
+    let org_repo = git_operations::extract_org_and_repo(url);
+    mirror_path.join(format!("{}-{}", org_repo, hash))
+}
+
 /// Updates a git repository by cloning or fetching from the configured URL.
 ///
 /// # Errors
@@ -55,7 +110,7 @@ pub fn update_workspace_repo(repo_path: &Path, commit: &str) -> Result<()> {
 /// - Network operations fail
 /// - Git operations such as fetch or checkout fail
 pub fn update_git(config: &GitConfig, mirror_path: &Path) -> Result<()> {
-    let repo_path = mirror_path.join(&config.name);
+    let repo_path = get_mirror_repo_path(mirror_path, &config.name, &config.url);
 
     if repo_path.exists() {
         messages::status(&format!("Fetching {}...", config.name));

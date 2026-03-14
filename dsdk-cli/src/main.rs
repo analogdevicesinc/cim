@@ -5064,7 +5064,11 @@ fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
         let mirror_path = sdk_config.mirror().clone();
 
         pool.execute(move || {
-            let repo_mirror_path = mirror_path.join(&git_cfg.name);
+            let repo_mirror_path = dsdk_cli::git_manager::get_mirror_repo_path(
+                &mirror_path,
+                &git_cfg.name,
+                &git_cfg.url,
+            );
             let result = if repo_mirror_path.exists() {
                 // Update existing mirror
                 messages::progress(&git_cfg.name, "updating remote URL and fetching");
@@ -5320,7 +5324,8 @@ fn handle_existing_workspace_repo(
     mirror_path: &Path,
 ) -> bool {
     // Add mirror and set origin to upstream
-    let mirror_repo_path = mirror_path.join(&git_cfg.name);
+    let mirror_repo_path =
+        dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
     let _ = git_operations::git_command(
         &["remote", "set-url", "origin", &git_cfg.url],
         Some(repo_path),
@@ -5452,7 +5457,8 @@ fn clone_repo_to_workspace(
 ) -> bool {
     messages::progress(&git_cfg.name, "cloning repository");
 
-    let mirror_repo_path = mirror_path.join(&git_cfg.name);
+    let mirror_repo_path =
+        dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
     // Determine the clone source (prefer mirror if exists, otherwise use original URL)
     let clone_source = if mirror_repo_path.exists() {

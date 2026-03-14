@@ -15,6 +15,7 @@
 //! using the host system's git command rather than libgit2.
 
 use anyhow::{anyhow, Result};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::process::Command;
 
@@ -460,6 +461,63 @@ pub fn clone_mirror(url: &str, path: &Path) -> Result<GitResult> {
     git_command(&args, None)
 }
 
+/// Get the URL of a remote
+pub fn get_remote_url(repo_path: &Path, remote_name: &str) -> Result<String> {
+    let result = git_command(&["remote", "get-url", remote_name], Some(repo_path))?;
+    if result.is_success() {
+        Ok(result.stdout.trim().to_string())
+    } else {
+        Err(anyhow!("Failed to get URL for remote '{}'", remote_name))
+    }
+}
+
+/// Normalize a git URL for comparison purposes.
+/// Strips trailing `/` and `.git`, then lowercases.
+pub fn normalize_git_url(url: &str) -> String {
+    let mut s = url.trim().to_lowercase();
+    // Strip trailing slashes
+    while s.ends_with('/') {
+        s.pop();
+    }
+    // Strip trailing .git
+    if let Some(stripped) = s.strip_suffix(".git") {
+        s = stripped.to_string();
+    }
+    s
+}
+
+/// Generate a truncated hash of a URL for mirror disambiguation.
+/// Returns the first 8 characters of the SHA-256 hash.
+pub fn hash_url(url: &str) -> String {
+    let normalized = normalize_git_url(url);
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(result)[..8].to_string()
+}
+
+/// Extract `org-repo` slug from a git URL for disambiguation.
+/// E.g., `https://github.com/analogdevicesinc/u-boot-xlnx.git` -> `analogdevicesinc-u-boot-xlnx`
+pub fn extract_org_and_repo(url: &str) -> String {
+    let normalized = normalize_git_url(url);
+    // Handle ssh-style URLs like git@github.com:org/repo
+    let path_part = if let Some((_host, path)) = normalized.split_once(':') {
+        if !normalized.contains("://") {
+            path.to_string()
+        } else {
+            normalized.clone()
+        }
+    } else {
+        normalized.clone()
+    };
+    let segments: Vec<&str> = path_part.rsplit('/').take(2).collect();
+    match segments.len() {
+        2 => format!("{}-{}", segments[1], segments[0]),
+        1 => segments[0].to_string(),
+        _ => normalized,
+    }
+}
+
 /// Set remote URL
 pub fn remote_set_url(repo_path: &Path, remote_name: &str, url: &str) -> Result<GitResult> {
     git_command(&["remote", "set-url", remote_name, url], Some(repo_path))
@@ -597,6 +655,69 @@ mod tests {
         assert!(error_msg.contains("Git clone failed"));
         assert!(error_msg.contains("test context"));
         assert!(error_msg.contains("error message"));
+    }
+
+    #[test]
+    fn test_normalize_git_url() {
+        assert_eq!(
+            normalize_git_url("https://github.com/u-boot/u-boot.git"),
+            "https://github.com/u-boot/u-boot"
+        );
+        assert_eq!(
+            normalize_git_url("https://github.com/u-boot/u-boot.git/"),
+            "https://github.com/u-boot/u-boot"
+        );
+        assert_eq!(
+            normalize_git_url("https://GitHub.com/U-Boot/U-Boot.GIT"),
+            "https://github.com/u-boot/u-boot"
+        );
+        assert_eq!(
+            normalize_git_url("git@github.com:org/repo.git"),
+            "git@github.com:org/repo"
+        );
+        assert_eq!(
+            normalize_git_url("  https://example.com/repo  "),
+            "https://example.com/repo"
+        );
+    }
+
+    #[test]
+    fn test_hash_url() {
+        let hash1 = hash_url("https://github.com/u-boot/u-boot.git");
+        assert_eq!(hash1.len(), 8);
+        // Same URL should produce same hash
+        assert_eq!(hash1, hash_url("https://github.com/u-boot/u-boot.git"));
+        // Different URL should produce different hash
+        let hash2 = hash_url("https://github.com/analogdevicesinc/u-boot-xlnx.git");
+        assert_ne!(hash1, hash2);
+        // URLs that normalize to same should produce same hash
+        assert_eq!(
+            hash_url("https://github.com/u-boot/u-boot.git"),
+            hash_url("https://github.com/u-boot/u-boot.git/")
+        );
+        // Test specific URLs from test cases
+        let hash_analog = hash_url("https://github.com/analogdevicesinc/u-boot-xlnx.git");
+        let hash_someorg = hash_url("https://github.com/someorg/u-boot-xlnx.git");
+        assert_ne!(
+            hash_analog, hash_someorg,
+            "Different orgs should have different hashes"
+        );
+    }
+
+    #[test]
+    fn test_extract_org_and_repo() {
+        assert_eq!(
+            extract_org_and_repo("https://github.com/u-boot/u-boot.git"),
+            "u-boot-u-boot"
+        );
+        assert_eq!(
+            extract_org_and_repo("https://github.com/analogdevicesinc/u-boot-xlnx.git"),
+            "analogdevicesinc-u-boot-xlnx"
+        );
+        assert_eq!(
+            extract_org_and_repo("git@github.com:org/repo.git"),
+            "org-repo"
+        );
     }
 
     #[test]

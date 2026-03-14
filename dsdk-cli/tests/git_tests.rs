@@ -17,6 +17,7 @@
 mod common;
 
 use common::{MockGitRepo, TestFixture};
+use dsdk_cli::git_manager;
 use dsdk_cli::git_operations;
 use std::fs;
 
@@ -384,4 +385,75 @@ fn test_mirror_discovers_new_branches() {
         "Mirror should have discovered the new dev/new-feature branch. Found branches: {:?}",
         branches
     );
+}
+
+#[test]
+fn test_get_mirror_repo_path_no_existing_mirror() {
+    let fixture = TestFixture::new();
+    let mirror_path = fixture.create_dir("mirror");
+
+    let result = git_manager::get_mirror_repo_path(
+        &mirror_path,
+        "u-boot",
+        "https://github.com/u-boot/u-boot.git",
+    );
+    assert_eq!(result, mirror_path.join("u-boot"));
+}
+
+#[test]
+fn test_get_mirror_repo_path_matching_url() {
+    let fixture = TestFixture::new();
+    let mirror_path = fixture.create_dir("mirror");
+    let upstream = MockGitRepo::new("upstream-uboot");
+
+    // Create a mirror clone with the upstream URL
+    let mirror_repo = mirror_path.join("u-boot");
+    git_operations::clone_mirror(&upstream.file_url(), &mirror_repo).expect("Should create mirror");
+
+    // Same URL should resolve to the same path
+    let result = git_manager::get_mirror_repo_path(&mirror_path, "u-boot", &upstream.file_url());
+    assert_eq!(result, mirror_path.join("u-boot"));
+}
+
+#[test]
+fn test_get_mirror_repo_path_url_mismatch_uses_hash() {
+    let fixture = TestFixture::new();
+    let mirror_path = fixture.create_dir("mirror");
+    let upstream1 = MockGitRepo::new("upstream1");
+
+    // Create a mirror for the first upstream
+    let mirror_repo = mirror_path.join("u-boot");
+    git_operations::clone_mirror(&upstream1.file_url(), &mirror_repo)
+        .expect("Should create mirror");
+
+    // Different URL should resolve to hash-based path
+    let result = git_manager::get_mirror_repo_path(
+        &mirror_path,
+        "u-boot",
+        "https://github.com/analogdevicesinc/u-boot-xlnx.git",
+    );
+    let hash = git_operations::hash_url("https://github.com/analogdevicesinc/u-boot-xlnx.git");
+    assert_eq!(result, mirror_path.join(format!("u-boot-{}", hash)));
+}
+
+#[test]
+fn test_get_mirror_repo_path_different_urls_get_different_paths() {
+    let fixture = TestFixture::new();
+    let mirror_path = fixture.create_dir("mirror");
+    let upstream1 = MockGitRepo::new("upstream1");
+
+    // Create a mirror at the default name
+    let mirror1 = mirror_path.join("u-boot");
+    git_operations::clone_mirror(&upstream1.file_url(), &mirror1).expect("Should create mirror 1");
+
+    // Different URL should get a unique hash-based path
+    let result = git_manager::get_mirror_repo_path(
+        &mirror_path,
+        "u-boot",
+        "https://github.com/analogdevicesinc/u-boot-xlnx.git",
+    );
+    let hash = git_operations::hash_url("https://github.com/analogdevicesinc/u-boot-xlnx.git");
+    assert_eq!(result, mirror_path.join(format!("u-boot-{}", hash)));
+    // Ensure it's different from the default path
+    assert_ne!(result, mirror_path.join("u-boot"));
 }
