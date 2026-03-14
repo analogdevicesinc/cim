@@ -112,6 +112,9 @@ struct WorkspaceMarker {
     cim_commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     no_mirror: Option<bool>,
+    /// Directory containing the original config file (for resolving relative copy_files paths)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_source_dir: Option<String>,
 }
 
 /// Code in Motion version information
@@ -1740,6 +1743,11 @@ fn create_workspace_marker(
     // Get Code in Motion version information
     let version_info = get_cim_version();
 
+    // Get the source directory of the original config file
+    let config_source_dir = original_config_path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string());
+
     let marker_path = workspace_path.join(".workspace");
     let marker = WorkspaceMarker {
         workspace_version: "1".to_string(),
@@ -1757,6 +1765,7 @@ fn create_workspace_marker(
         cim_sha256: version_info.sha256,
         cim_commit: version_info.commit,
         no_mirror: if skip_mirror { Some(true) } else { None },
+        config_source_dir,
     };
 
     fs::write(&marker_path, serde_yaml::to_string(&marker)?)?;
@@ -7290,6 +7299,7 @@ gits:
                 .to_string(),
             cim_commit: "6b4768b7".to_string(),
             no_mirror: Some(true),
+            config_source_dir: Some("/path/to/source".to_string()),
         };
 
         let serialized = serde_yaml::to_string(&marker).expect("Failed to serialize marker");
@@ -7307,6 +7317,7 @@ gits:
         assert_eq!(marker.cim_sha256, deserialized.cim_sha256);
         assert_eq!(marker.cim_commit, deserialized.cim_commit);
         assert_eq!(marker.no_mirror, deserialized.no_mirror);
+        assert_eq!(marker.config_source_dir, deserialized.config_source_dir);
     }
 
     #[test]
