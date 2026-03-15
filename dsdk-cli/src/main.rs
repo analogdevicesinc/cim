@@ -621,6 +621,21 @@ enum UtilsCommand {
         #[arg(short, long, help = "Show detailed progress information")]
         verbose: bool,
     },
+    /// Re-run copy_files operation to sync files to workspace
+    SyncCopyFiles {
+        /// Only sync specific file (by dest path or source URL)
+        #[arg(value_name = "FILE", help = "Specific file to sync (optional)")]
+        file: Option<String>,
+        /// Show what would be copied without modifying workspace
+        #[arg(long, help = "Show proposed changes without copying files")]
+        dry_run: bool,
+        /// Enable verbose output
+        #[arg(short, long, help = "Show detailed progress information")]
+        verbose: bool,
+        /// Force overwrite existing files
+        #[arg(short, long, help = "Overwrite existing files")]
+        force: bool,
+    },
 }
 
 /// Copy YAML configuration files to workspace root
@@ -7503,7 +7518,272 @@ fn handle_copy_files_hash_command(file_filter: Option<&str>, dry_run: bool, verb
         messages::info("No files matched the filter or no copy_files entries found");
     }
 }
+/// Handle the sync-files command - re-run copy_files operation
+fn handle_sync_files_hash_command(
+    file_filter: Option<&str>,
+    dry_run: bool,
+    verbose: bool,
+    force: bool,
+) {
+    use std::collections::HashSet;
 
+    // Set verbose mode for this command
+    messages::set_verbose(verbose);
+
+    // Must be run from within a workspace
+    let workspace_path = match get_current_workspace() {
+        Ok(path) => path,
+        Err(e) => {
+            messages::error(&format!("Error: {}", e));
+            return;
+        }
+    };
+
+    // Use sdk.yml from workspace root
+    let config_path = workspace_path.join("sdk.yml");
+    if !config_path.exists() {
+        messages::error(&format!(
+            "sdk.yml not found in workspace root: {}",
+            workspace_path.display()
+        ));
+        return;
+    }
+
+    // Load SDK config (without user overrides for sync operation)
+    let sdk_config = match config::load_config(&config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            messages::error(&format!("Error loading config: {}", e));
+            return;
+        }
+    };
+
+    // Get copy_files configuration
+    let Some(copy_files) = &sdk_config.copy_files else {
+        messages::status("No copy_files section found in sdk.yml");
+        return;
+    };
+
+    if copy_files.is_empty() {
+        messages::status("copy_files section is empty");
+        return;
+    }
+
+    // Expand mirror path
+    let mirror_path = expand_config_mirror_path(&sdk_config);
+
+    // Determine the base directory for resolving relative source paths in copy_files.
+    // Priority:
+    // 1. Use config_source_dir from .workspace marker (set during cim init)
+    // 2. Fall back to canonicalized config path (for symlinks)
+    // 3. Finally fall back to workspace path
+    let marker_path = workspace_path.join(".workspace");
+    let config_source_dir = if marker_path.exists() {
+        match fs::read_to_string(&marker_path) {
+            Ok(content) => serde_yaml::from_str::<WorkspaceMarker>(&content)
+                .ok()
+                .and_then(|m| m.config_source_dir)
+                .map(PathBuf::from)
+                .filter(|p| p.exists()),
+            Err(_) => None,
+        }
+        .or_else(|| {
+            config_path
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        })
+        .unwrap_or_else(|| workspace_path.clone())
+    } else {
+        workspace_path.clone()
+    };
+
+    // Filter files if a specific filter is provided
+    let files_to_process: Vec<_> = if let Some(filter) = file_filter {
+        copy_files
+            .iter()
+            .filter(|cf| cf.dest.contains(filter) || cf.source.contains(filter))
+            .cloned()
+            .collect()
+    } else {
+        copy_files.clone()
+    };
+
+    if files_to_process.is_empty() {
+        messages::info("No files matched the filter");
+        return;
+    }
+
+    let mode_str = if dry_run { "[DRY RUN] " } else { "" };
+    messages::status(&format!(
+        "{}Syncing {} file(s) to workspace...",
+        mode_str,
+        files_to_process.len()
+    ));
+
+    let mut synced_count = 0;
+    let mut skipped_count = 0;
+    let mut failed_count = 0;
+    let mut processed_urls = HashSet::new();
+
+    // Separate URL downloads from local file operations
+    let (url_files, local_files): (Vec<_>, Vec<_>) =
+        files_to_process.iter().partition(|cf| is_url(&cf.source));
+
+    // Process URL downloads
+    for copy_file in &url_files {
+        // Skip duplicate URLs
+        if !processed_urls.insert(copy_file.source.clone()) {
+            messages::verbose(&format!("Skipping duplicate URL: {}", copy_file.source));
+            continue;
+        }
+
+        let dest_path = workspace_path.join(&copy_file.dest);
+        let use_cache = copy_file.cache.unwrap_or(false);
+        let use_symlink = copy_file.symlink.unwrap_or(false) && use_cache;
+        let expected_sha256 = copy_file.sha256.clone();
+
+        messages::status(&format!(
+            "{}Processing: {} -> {}",
+            mode_str, copy_file.source, copy_file.dest
+        ));
+
+        if dry_run {
+            messages::status(&format!("  Would download to: {}", dest_path.display()));
+            if use_cache {
+                messages::status(&format!(
+                    "  Cache: enabled (mirror: {})",
+                    mirror_path.display()
+                ));
+            }
+            if use_symlink {
+                messages::status("  Symlink: true");
+            }
+            if expected_sha256.is_some() {
+                messages::status("  SHA256 verification: enabled");
+            }
+            synced_count += 1;
+            continue;
+        }
+
+        // Check if file exists and --force is not set
+        if dest_path.exists() && !force {
+            messages::info(&format!(
+                "  Skipping: {} already exists (use --force to overwrite)",
+                copy_file.dest
+            ));
+            skipped_count += 1;
+            continue;
+        }
+
+        // Download the file
+        match download_file_with_cache(DownloadConfig {
+            url: &copy_file.source,
+            dest_path: &dest_path,
+            mirror_path: &mirror_path,
+            use_cache,
+            expected_sha256: expected_sha256.as_deref(),
+            post_data: copy_file.post_data.as_deref(),
+            multi_progress: None,
+            use_symlink,
+        }) {
+            Ok(_) => {
+                messages::success(&format!("  Synced: {}", copy_file.dest));
+                synced_count += 1;
+            }
+            Err(e) => {
+                messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
+                failed_count += 1;
+            }
+        }
+    }
+
+    // Process local files
+    for copy_file in &local_files {
+        let expanded_source = expand_env_vars(&copy_file.source);
+        let source_path = if Path::new(&expanded_source).is_absolute() {
+            PathBuf::from(&expanded_source)
+        } else {
+            config_source_dir.join(&expanded_source)
+        };
+
+        let dest_path = workspace_path.join(&copy_file.dest);
+
+        messages::status(&format!(
+            "{}Processing: {} -> {}",
+            mode_str, copy_file.source, copy_file.dest
+        ));
+
+        if !source_path.exists() {
+            messages::error(&format!(
+                "  Source file does not exist: {}",
+                source_path.display()
+            ));
+            failed_count += 1;
+            continue;
+        }
+
+        if dry_run {
+            messages::status(&format!("  Would copy to: {}", dest_path.display()));
+            synced_count += 1;
+            continue;
+        }
+
+        // Check if destination exists and --force is not set
+        if dest_path.exists() && !force {
+            messages::info(&format!(
+                "  Skipping: {} already exists (use --force to overwrite)",
+                copy_file.dest
+            ));
+            skipped_count += 1;
+            continue;
+        }
+
+        // Handle directories
+        if source_path.is_dir() {
+            match copy_dir_recursive(&source_path, &dest_path) {
+                Ok(_) => {
+                    messages::success(&format!("  Synced directory: {}", copy_file.dest));
+                    synced_count += 1;
+                }
+                Err(e) => {
+                    messages::error(&format!(
+                        "  Failed to sync directory {}: {}",
+                        copy_file.dest, e
+                    ));
+                    failed_count += 1;
+                }
+            }
+        } else {
+            // Single file copy
+            match copy_single_file(&source_path, &dest_path, &copy_file.source, &copy_file.dest) {
+                Ok(_) => {
+                    messages::success(&format!("  Synced: {}", copy_file.dest));
+                    synced_count += 1;
+                }
+                Err(e) => {
+                    messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
+                    failed_count += 1;
+                }
+            }
+        }
+    }
+
+    // Print summary
+    messages::status("\n=== Summary ===");
+    if dry_run {
+        messages::status(&format!("Would sync: {}", synced_count));
+        messages::status("(Dry run mode - no changes were made)");
+    } else {
+        messages::status(&format!("Synced:  {}", synced_count));
+        messages::status(&format!("Skipped: {}", skipped_count));
+        messages::status(&format!("Failed:  {}", failed_count));
+    }
+
+    if failed_count > 0 {
+        std::process::exit(1);
+    }
+}
 
 /// Handle utility commands for workspace maintenance
 fn handle_utils_command(utils_command: &UtilsCommand) {
@@ -7514,6 +7794,14 @@ fn handle_utils_command(utils_command: &UtilsCommand) {
             verbose,
         } => {
             handle_copy_files_hash_command(file.as_deref(), *dry_run, *verbose);
+        }
+        UtilsCommand::SyncCopyFiles {
+            file,
+            dry_run,
+            verbose,
+            force,
+        } => {
+            handle_sync_files_hash_command(file.as_deref(), *dry_run, *verbose, *force);
         }
     }
 }
