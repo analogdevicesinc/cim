@@ -1756,24 +1756,31 @@ fn find_workspace_root() -> Option<PathBuf> {
     None
 }
 
+/// Parameters for creating a workspace marker
+struct CreateWorkspaceMarkerParams<'a> {
+    workspace_path: &'a Path,
+    config_name: &'a str,
+    original_config_path: &'a Path,
+    mirror_path: &'a Path,
+    original_identifier: Option<&'a str>,
+    target_version: Option<&'a str>,
+    skip_mirror: bool,
+    source_url: Option<&'a str>,
+}
+
 /// Create workspace marker file
 fn create_workspace_marker(
-    workspace_path: &Path,
-    config_name: &str,
-    original_config_path: &Path,
-    mirror_path: &Path,
-    original_identifier: Option<&str>,
-    target_version: Option<&str>,
-    skip_mirror: bool,
+    params: CreateWorkspaceMarkerParams,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Calculate SHA256 of the original config file
-    let config_content = fs::read(original_config_path)?;
+    let config_content = fs::read(params.original_config_path)?;
     let mut hasher = Sha256::new();
     hasher.update(&config_content);
     let config_sha256 = format!("{:x}", hasher.finalize());
 
-    let target_name = original_identifier.unwrap_or_else(|| {
-        original_config_path
+    let target_name = params.original_identifier.unwrap_or_else(|| {
+        params
+            .original_config_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
@@ -1783,11 +1790,17 @@ fn create_workspace_marker(
     let version_info = get_cim_version();
 
     // Get the source directory of the original config file
-    let config_source_dir = original_config_path
-        .parent()
-        .map(|p| p.to_string_lossy().to_string());
+    let config_source_dir = if let Some(url) = params.source_url {
+        // For remote git sources, store the URL so sync-copy-files can re-clone
+        Some(url.to_string())
+    } else {
+        params
+            .original_config_path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+    };
 
-    let marker_path = workspace_path.join(".workspace");
+    let marker_path = params.workspace_path.join(".workspace");
     let marker = WorkspaceMarker {
         workspace_version: "1".to_string(),
         created_at: std::time::SystemTime::now()
@@ -1795,15 +1808,15 @@ fn create_workspace_marker(
             .unwrap()
             .as_secs()
             .to_string(),
-        config_file: config_name.to_string(),
+        config_file: params.config_name.to_string(),
         target: target_name.to_string(),
-        target_version: target_version.unwrap_or("latest").to_string(),
+        target_version: params.target_version.unwrap_or("latest").to_string(),
         config_sha256,
-        mirror_path: mirror_path.to_string_lossy().to_string(),
+        mirror_path: params.mirror_path.to_string_lossy().to_string(),
         cim_version: version_info.version,
         cim_sha256: version_info.sha256,
         cim_commit: version_info.commit,
-        no_mirror: if skip_mirror { Some(true) } else { None },
+        no_mirror: if params.skip_mirror { Some(true) } else { None },
         config_source_dir,
     };
 
@@ -1813,6 +1826,77 @@ fn create_workspace_marker(
         marker_path.display()
     ));
     Ok(())
+}
+
+/// Resolve the config_source_dir from the workspace marker
+///
+/// If the config_source_dir is a URL, re-clones the repo into a fresh TempDir
+/// Returns the directory path and the TempDir (if created) to keep it alive
+fn resolve_config_source_dir_from_marker(
+    workspace_path: &Path,
+    config_path: &Path,
+) -> (PathBuf, Option<tempfile::TempDir>) {
+    let marker_path = workspace_path.join(".workspace");
+    if !marker_path.exists() {
+        return (workspace_path.to_path_buf(), None);
+    }
+
+    let content = match fs::read_to_string(&marker_path) {
+        Ok(c) => c,
+        Err(_) => return (workspace_path.to_path_buf(), None),
+    };
+
+    let marker = match serde_yaml::from_str::<WorkspaceMarker>(&content) {
+        Ok(m) => m,
+        Err(_) => return (workspace_path.to_path_buf(), None),
+    };
+
+    if let Some(ref source_dir_str) = marker.config_source_dir {
+        if is_url(source_dir_str) {
+            // Remote git source: re-clone to a fresh temp dir
+            let temp_dir = match tempfile::tempdir() {
+                Ok(d) => d,
+                Err(_) => return (workspace_path.to_path_buf(), None),
+            };
+            let version = if marker.target_version == "latest" {
+                None
+            } else {
+                Some(marker.target_version.as_str())
+            };
+            match resolve_target_config_from_git(
+                source_dir_str,
+                &marker.target,
+                version,
+                Some(temp_dir.path()),
+            ) {
+                Ok(config_file_path) => {
+                    let dir = config_file_path
+                        .parent()
+                        .unwrap_or(temp_dir.path())
+                        .to_path_buf();
+                    return (dir, Some(temp_dir));
+                }
+                Err(e) => {
+                    messages::error(&format!("Failed to fetch remote source for sync: {}", e));
+                    return (workspace_path.to_path_buf(), None);
+                }
+            }
+        } else {
+            // Local path: use if it exists
+            let p = PathBuf::from(source_dir_str);
+            if p.exists() {
+                return (p, None);
+            }
+        }
+    }
+
+    // Fall back to canonicalized config path parent
+    config_path
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .map(|p| (p, None))
+        .unwrap_or_else(|| (workspace_path.to_path_buf(), None))
 }
 
 /// Get workspace root and validate it's a proper workspace
@@ -4240,15 +4324,20 @@ fn handle_init_command(config: InitConfig) {
 
     // Create workspace marker file
     // Always use target name as original identifier for both URL-based and local targets
-    if let Err(e) = create_workspace_marker(
-        &workspace_path,
-        "sdk.yml",
-        &config_path,
-        &sdk_config.mirror,
-        Some(&config.target),
-        config.version.as_deref(),
+    if let Err(e) = create_workspace_marker(CreateWorkspaceMarkerParams {
+        workspace_path: &workspace_path,
+        config_name: "sdk.yml",
+        original_config_path: &config_path,
+        mirror_path: &sdk_config.mirror,
+        original_identifier: Some(&config.target),
+        target_version: config.version.as_deref(),
         skip_mirror,
-    ) {
+        source_url: if is_remote_git_source {
+            Some(&source_path)
+        } else {
+            None
+        },
+    }) {
         messages::error(&format!("Error creating workspace marker: {}", e));
         return;
     }
@@ -7365,30 +7454,12 @@ fn handle_copy_files_hash_command(file_filter: Option<&str>, dry_run: bool, verb
     let mirror_path = expand_config_mirror_path(&sdk_config);
 
     // Determine the base directory for resolving relative source paths in copy_files.
-    // Priority:
-    // 1. Use config_source_dir from .workspace marker (set during cim init)
-    // 2. Fall back to canonicalized config path (for symlinks)
-    // 3. Finally fall back to workspace path
-    let marker_path = workspace_path.join(".workspace");
-    let config_source_dir = if marker_path.exists() {
-        match fs::read_to_string(&marker_path) {
-            Ok(content) => serde_yaml::from_str::<WorkspaceMarker>(&content)
-                .ok()
-                .and_then(|m| m.config_source_dir)
-                .map(PathBuf::from)
-                .filter(|p| p.exists()),
-            Err(_) => None,
-        }
-        .or_else(|| {
-            config_path
-                .canonicalize()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        })
-        .unwrap_or_else(|| workspace_path.clone())
-    } else {
-        workspace_path.clone()
+    // If config_source_dir is a remote URL, re-clone the repo to a fresh temp directory.
+    let (_temp_clone_dir, config_source_dir) = {
+        let (dir, temp) = resolve_config_source_dir_from_marker(&workspace_path, &config_path);
+        (temp, dir)
     };
+    // _temp_clone_dir must stay alive for the duration of the function
 
     messages::status("Computing SHA256 hashes for copy_files entries...");
     messages::verbose(&format!("Mirror path: {}", mirror_path.display()));
@@ -7573,30 +7644,12 @@ fn handle_sync_files_hash_command(
     let mirror_path = expand_config_mirror_path(&sdk_config);
 
     // Determine the base directory for resolving relative source paths in copy_files.
-    // Priority:
-    // 1. Use config_source_dir from .workspace marker (set during cim init)
-    // 2. Fall back to canonicalized config path (for symlinks)
-    // 3. Finally fall back to workspace path
-    let marker_path = workspace_path.join(".workspace");
-    let config_source_dir = if marker_path.exists() {
-        match fs::read_to_string(&marker_path) {
-            Ok(content) => serde_yaml::from_str::<WorkspaceMarker>(&content)
-                .ok()
-                .and_then(|m| m.config_source_dir)
-                .map(PathBuf::from)
-                .filter(|p| p.exists()),
-            Err(_) => None,
-        }
-        .or_else(|| {
-            config_path
-                .canonicalize()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        })
-        .unwrap_or_else(|| workspace_path.clone())
-    } else {
-        workspace_path.clone()
+    // If config_source_dir is a remote URL, re-clone the repo to a fresh temp directory.
+    let (_temp_clone_dir, config_source_dir) = {
+        let (dir, temp) = resolve_config_source_dir_from_marker(&workspace_path, &config_path);
+        (temp, dir)
     };
+    // _temp_clone_dir must stay alive for the duration of the function
 
     // Filter files if a specific filter is provided
     let files_to_process: Vec<_> = if let Some(filter) = file_filter {
@@ -8014,15 +8067,16 @@ gits:
         let config_name = "sdk.yml";
         let mirror_path = Path::new("/tmp/test-mirror");
 
-        let result = create_workspace_marker(
-            &workspace_path,
+        let result = create_workspace_marker(CreateWorkspaceMarkerParams {
+            workspace_path: &workspace_path,
             config_name,
-            &original_config_path,
+            original_config_path: &original_config_path,
             mirror_path,
-            None,
-            None,
-            false, // skip_mirror
-        );
+            original_identifier: None,
+            target_version: None,
+            skip_mirror: false,
+            source_url: None,
+        });
         assert!(result.is_ok());
 
         let marker_path = workspace_path.join(".workspace");
