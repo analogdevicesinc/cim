@@ -87,6 +87,10 @@ fn main() {
     // Make the git hash available as an environment variable during compilation
     println!("cargo:rustc-env=GIT_HASH={}", git_hash);
 
+    // Embed the target triple so the binary knows which platform archive to download for self-update
+    let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
+    println!("cargo:rustc-env=BUILD_TARGET={}", target);
+
     // Rebuild if the git HEAD or index changes (to detect dirty state)
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/refs/heads");
