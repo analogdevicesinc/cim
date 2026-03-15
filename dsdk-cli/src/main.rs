@@ -8180,10 +8180,8 @@ fn handle_utils_update_command() {
     }
 
     messages::success(&format!(
-        "Successfully updated cim from v{} to v{}. Old binary saved as {}",
-        current_version,
-        latest_version,
-        old_path.display()
+        "Successfully updated cim from v{} to v{}",
+        current_version, latest_version,
     ));
 }
 
@@ -8223,8 +8221,9 @@ fn main() {
     let command = match &cli.command {
         Some(cmd) => cmd,
         None => {
-            // Show help when no command is provided
+            // Show help and check for updates when no command is provided
             Cli::command().print_help().unwrap();
+            print_update_notice(spawn_version_check());
             return;
         }
     };
