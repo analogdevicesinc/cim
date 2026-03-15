@@ -385,6 +385,12 @@ enum Commands {
         #[arg(short = 'v', long = "validate")]
         validate: bool,
     },
+
+    /// Utility commands for workspace maintenance
+    Utils {
+        #[command(subcommand)]
+        utils_command: UtilsCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -596,6 +602,24 @@ enum InstallCommand {
             help = "Force reinstallation by removing sentinel file before running"
         )]
         force: bool,
+    },
+}
+#[derive(Debug, Subcommand)]
+enum UtilsCommand {
+    /// Compute and update SHA256 hashes for copy_files entries
+    HashCopyFiles {
+        /// Only compute hash for specific file (by dest path or source URL)
+        #[arg(
+            value_name = "FILE",
+            help = "Specific file to update hash for (optional)"
+        )]
+        file: Option<String>,
+        /// Show what would be changed without modifying sdk.yml
+        #[arg(long, help = "Show proposed changes without updating files")]
+        dry_run: bool,
+        /// Enable verbose output
+        #[arg(short, long, help = "Show detailed progress information")]
+        verbose: bool,
     },
 }
 
@@ -7127,6 +7151,372 @@ fn generate_release_config(
     Ok(())
 }
 
+fn ensure_file_in_mirror(
+    copy_file: &config::CopyFileConfig,
+    config_source_dir: &Path,
+    mirror_path: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Check if source is URL or local path
+    if is_url(&copy_file.source) {
+        // For URLs, use generate_cache_path to determine where it will be downloaded
+        let cache_path = generate_cache_path(&copy_file.source, mirror_path);
+
+        download_file_with_cache(DownloadConfig {
+            url: &copy_file.source,
+            dest_path: &cache_path,
+            mirror_path,
+            use_cache: copy_file.cache.unwrap_or(false),
+            expected_sha256: None, // Don't verify during hash computation
+            post_data: copy_file.post_data.as_deref(),
+            multi_progress: None,
+            use_symlink: false, // No symlink for hash computation
+        })?;
+
+        Ok(cache_path)
+    } else {
+        // Local file - compute path from config_source_dir
+        let expanded_source = expand_env_vars(&copy_file.source);
+        let source_path = if Path::new(&expanded_source).is_absolute() {
+            PathBuf::from(&expanded_source)
+        } else {
+            config_source_dir.join(&expanded_source)
+        };
+
+        // Check if local file exists
+        if !source_path.exists() {
+            messages::info(&format!(
+                "Local file {} does not exist, skipping",
+                copy_file.source
+            ));
+            return Err(format!("File not found: {}", copy_file.source).into());
+        }
+
+        Ok(source_path)
+    }
+}
+
+/// Update sdk.yml with computed SHA256 hash for a specific copy_files entry
+fn update_sdk_yaml_hash(
+    config_path: &Path,
+    dest_or_source: &str,
+    new_hash: &str,
+    dry_run: bool,
+) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+    let mut content = fs::read_to_string(config_path)?;
+
+    // Find the copy_files entry matching the destination or source
+    let lines: Vec<&str> = content.lines().collect();
+    let mut found_entry = false;
+    let mut updated_line_idx = None;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("- source:")
+            || trimmed.starts_with("- url:")
+            || trimmed == "source:"
+            || trimmed == "url:"
+        {
+            // Check next few lines for matching dest or source
+            for j in idx..std::cmp::min(idx + 5, lines.len()) {
+                let check_line = lines[j];
+                if check_line.contains(&format!("dest: {}", dest_or_source))
+                    || (check_line.contains("source:") && check_line.contains(dest_or_source))
+                {
+                    // Found the entry - mark as found
+                    found_entry = true;
+
+                    // Now find sha256 line within this entry
+                    for (k, sha_line) in lines
+                        .iter()
+                        .enumerate()
+                        .take(std::cmp::min(j + 10, lines.len()))
+                        .skip(j)
+                    {
+                        if sha_line.trim().starts_with("sha256:") {
+                            updated_line_idx = Some(k);
+                            break;
+                        }
+                    }
+                    // Break inner loop once we've found the matching entry
+                    break;
+                }
+            }
+        }
+    }
+
+    if !found_entry {
+        return Err(format!("Could not find copy_files entry for: {}", dest_or_source).into());
+    }
+
+    if let Some(line_idx) = updated_line_idx {
+        // Extract current hash value from the line
+        let current_line = lines[line_idx];
+        let current_hash_in_file = current_line
+            .trim()
+            .strip_prefix("sha256:")
+            .map(|s| s.trim())
+            .unwrap_or("");
+
+        // Check if hash has actually changed
+        if current_hash_in_file == new_hash {
+            // Hash unchanged, no need to update
+            return Ok(Some(false));
+        }
+
+        if dry_run {
+            messages::status(&format!(
+                "Would update line {} from '{}' to 'sha256: {}'",
+                line_idx + 1,
+                lines[line_idx],
+                new_hash
+            ));
+        } else {
+            // Update the sha256 value while preserving formatting
+            let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
+            let current_line = &updated_lines[line_idx];
+
+            // Extract indentation from the line
+            let indent: String = current_line
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+
+            updated_lines[line_idx] = format!("{}sha256: {}", indent, new_hash);
+
+            content = updated_lines.join("\n");
+            fs::write(config_path, &content)?;
+            messages::status(&format!(
+                "Updated sha256 for {}: {}",
+                dest_or_source, new_hash
+            ));
+        }
+
+        return Ok(Some(true));
+    }
+
+    // File doesn't have an existing sha256 field - skip it (this is OK for local files)
+    messages::info(&format!(
+        "Skipping {}: no sha256 field in entry",
+        dest_or_source
+    ));
+    Ok(None) // Return Ok(false) to indicate we processed but didn't update anything
+}
+
+/// Handle the copy-files-hash command
+fn handle_copy_files_hash_command(file_filter: Option<&str>, dry_run: bool, verbose: bool) {
+    // Set verbose mode for this command
+    messages::set_verbose(verbose);
+
+    // Must be run from within a workspace
+    let workspace_path = match get_current_workspace() {
+        Ok(path) => path,
+        Err(e) => {
+            messages::error(&format!("Error: {}", e));
+            return;
+        }
+    };
+
+    // Use sdk.yml from workspace root (ignore user overrides for hash computation)
+    let config_path = workspace_path.join("sdk.yml");
+    if !config_path.exists() {
+        messages::error(&format!(
+            "sdk.yml not found in workspace root: {}",
+            workspace_path.display()
+        ));
+        return;
+    }
+
+    // Load SDK config (without user overrides)
+    let sdk_config = match config::load_config(&config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            messages::error(&format!("Error loading config: {}", e));
+            return;
+        }
+    };
+
+    // Get copy_files configuration (direct field access)
+    let Some(copy_files) = &sdk_config.copy_files else {
+        messages::status("No copy_files section found in sdk.yml");
+        return;
+    };
+
+    if copy_files.is_empty() {
+        messages::status("copy_files section is empty");
+        return;
+    }
+
+    // Expand mirror path (always use base config, not user overrides)
+    let mirror_path = expand_config_mirror_path(&sdk_config);
+
+    // Determine the base directory for resolving relative source paths in copy_files.
+    // Priority:
+    // 1. Use config_source_dir from .workspace marker (set during cim init)
+    // 2. Fall back to canonicalized config path (for symlinks)
+    // 3. Finally fall back to workspace path
+    let marker_path = workspace_path.join(".workspace");
+    let config_source_dir = if marker_path.exists() {
+        match fs::read_to_string(&marker_path) {
+            Ok(content) => serde_yaml::from_str::<WorkspaceMarker>(&content)
+                .ok()
+                .and_then(|m| m.config_source_dir)
+                .map(PathBuf::from)
+                .filter(|p| p.exists()),
+            Err(_) => None,
+        }
+        .or_else(|| {
+            config_path
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        })
+        .unwrap_or_else(|| workspace_path.clone())
+    } else {
+        workspace_path.clone()
+    };
+
+    messages::status("Computing SHA256 hashes for copy_files entries...");
+    messages::verbose(&format!("Mirror path: {}", mirror_path.display()));
+
+    let mut processed_count = 0;
+    let mut updated_count = 0;
+    let mut skipped_count = 0;
+
+    for copy_file in copy_files {
+        // Check if this file matches the filter (if provided)
+        if let Some(filter) = file_filter {
+            let matches_dest = copy_file.dest.contains(filter);
+            let matches_source = copy_file.source.contains(filter);
+
+            if !matches_dest && !matches_source {
+                continue;
+            }
+        }
+
+        processed_count += 1;
+
+        messages::status(&format!(
+            "Processing: {} -> {}",
+            copy_file.source, copy_file.dest
+        ));
+
+        // Compute the current hash (if sha256 exists)
+        let current_hash = copy_file.sha256.clone().unwrap_or_else(|| {
+            messages::verbose("No existing hash found");
+            String::new()
+        });
+
+        // Ensure file is available (download if needed)
+        let file_path = match ensure_file_in_mirror(copy_file, &config_source_dir, &mirror_path) {
+            Ok(path) => path,
+            Err(e) => {
+                messages::error(&format!("Error processing {}: {}", copy_file.dest, e));
+                skipped_count += 1;
+                continue; // Continue with next file instead of failing entire command
+            }
+        };
+
+        // Compute SHA256 hash
+        let computed_hash = match compute_file_sha256(&file_path) {
+            Ok(hash) => hash,
+            Err(e) => {
+                messages::error(&format!(
+                    "Failed to compute hash for {}: {}",
+                    copy_file.dest, e
+                ));
+                skipped_count += 1;
+                continue; // Continue with next file instead of failing entire command
+            }
+        };
+
+        // Check if hash changed
+        let hash_changed = current_hash != computed_hash && !current_hash.is_empty();
+        let has_sha256_field = !current_hash.is_empty();
+
+        if dry_run {
+            messages::status(&format!("File: {}", copy_file.dest));
+            messages::verbose(&format!(
+                "  Current hash:  {}\n  New hash:      {}",
+                if current_hash.is_empty() {
+                    "<none>"
+                } else {
+                    &current_hash
+                },
+                computed_hash
+            ));
+
+            if has_sha256_field && !hash_changed {
+                messages::status("  Status: Hash unchanged (no update needed)");
+            } else if !has_sha256_field {
+                messages::status("  Status: No sha256 field in entry (would be skipped)");
+                skipped_count += 1;
+            } else {
+                messages::status("  Status: Hash would be updated");
+                updated_count += 1;
+            }
+        } else {
+            // Update sdk.yml with new hash
+            match update_sdk_yaml_hash(&config_path, &copy_file.dest, &computed_hash, dry_run) {
+                Ok(Some(true)) => {
+                    // Successfully updated
+                    updated_count += 1;
+                }
+                Ok(None) => {
+                    // No sha256 field exists, count as skipped
+                    skipped_count += 1;
+                }
+                Ok(Some(false)) => {
+                    // Hash unchanged, no update needed
+                }
+                Err(e) => {
+                    messages::error(&format!(
+                        "Failed to update sdk.yml for {}: {}",
+                        copy_file.dest, e
+                    ));
+                    skipped_count += 1;
+                }
+            }
+        }
+
+        if verbose {
+            messages::verbose(&format!(
+                "Computed hash: {}\nFile size: {} bytes",
+                computed_hash,
+                fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
+            ));
+        }
+    }
+
+    // Print summary
+    messages::status("\n=== Summary ===");
+    messages::status(&format!("Processed: {}", processed_count));
+    if dry_run {
+        messages::status(&format!("Would update: {}", updated_count));
+        messages::status(&format!("Would skip:   {}", skipped_count));
+        messages::status("(Dry run mode - no changes were made)");
+    } else {
+        messages::status(&format!("Updated:   {}", updated_count));
+        messages::status(&format!("Skipped:   {}", skipped_count));
+    }
+
+    if processed_count == 0 {
+        messages::info("No files matched the filter or no copy_files entries found");
+    }
+}
+
+
+/// Handle utility commands for workspace maintenance
+fn handle_utils_command(utils_command: &UtilsCommand) {
+    match utils_command {
+        UtilsCommand::HashCopyFiles {
+            file,
+            dry_run,
+            verbose,
+        } => {
+            handle_copy_files_hash_command(file.as_deref(), *dry_run, *verbose);
+        }
+    }
+}
 fn main() {
     let cli = Cli::parse();
 
@@ -7251,6 +7641,9 @@ fn main() {
                 edit: *edit,
                 validate: *validate,
             });
+        }
+        Commands::Utils { utils_command } => {
+            handle_utils_command(utils_command);
         }
     }
 }
