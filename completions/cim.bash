@@ -34,6 +34,8 @@
 #   - release: --tag (-t), --genconfig, --include, --exclude, --dry-run
 #   - config: --list (-l), --get (-g), --path (-p), --template (-t), --create (-c),
 #             --force (-f), --edit (-e), --validate (-v)
+#   - utils hash-copy-files: --dry-run, --verbose (-v)
+#   - utils sync-copy-files: --dry-run, --verbose (-v), --force (-f)
 
 _cim_completions() {
     local cur prev opts subcommands
@@ -42,7 +44,7 @@ _cim_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Main commands
-    local main_commands="list-targets init update foreach makefile add install docs docker release config help"
+    local main_commands="list-targets init update foreach makefile add install docs docker release config utils help"
 
     # Global options
     local global_opts="--help --version -v"
@@ -427,6 +429,34 @@ _cim_completions() {
                     return 0
                     ;;
             esac
+            ;;
+
+        utils)
+            if [ $COMP_CWORD -eq 2 ]; then
+                # Utils subcommands
+                COMPREPLY=( $(compgen -W "hash-copy-files sync-copy-files --help" -- "${cur}") )
+                return 0
+            elif [ $COMP_CWORD -gt 2 ]; then
+                # Handle utils subcommand completion
+                case "${COMP_WORDS[2]}" in
+                    hash-copy-files)
+                        case "${prev}" in
+                            *)
+                                COMPREPLY=( $(compgen -W "--dry-run --verbose -v --help" -- "${cur}") )
+                                return 0
+                                ;;
+                        esac
+                        ;;
+                    sync-copy-files)
+                        case "${prev}" in
+                            *)
+                                COMPREPLY=( $(compgen -W "--dry-run --verbose -v --force -f --help" -- "${cur}") )
+                                return 0
+                                ;;
+                        esac
+                        ;;
+                esac
+            fi
             ;;
 
         help)
