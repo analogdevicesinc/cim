@@ -158,6 +158,113 @@ fn print_version_info() {
     messages::status(&format!("  Commit: {}", version_info.commit));
 }
 
+/// Compare two semver version strings (e.g. "1.2.3"). Returns true if `latest` is newer than `current`.
+fn is_newer_version(current: &str, latest: &str) -> bool {
+    fn parse(v: &str) -> Option<(u64, u64, u64)> {
+        let v = v.trim_start_matches('v');
+        let parts: Vec<&str> = v.splitn(3, '.').collect();
+        if parts.len() < 3 {
+            return None;
+        }
+        let major = parts[0].parse::<u64>().ok()?;
+        let minor = parts[1].parse::<u64>().ok()?;
+        let patch = parts[2].split('-').next()?.parse::<u64>().ok()?;
+        Some((major, minor, patch))
+    }
+    match (parse(current), parse(latest)) {
+        (Some(c), Some(l)) => l > c,
+        _ => false,
+    }
+}
+
+/// Build the archive filename for the given version and the current platform.
+/// Returns None if the current platform is not a recognised release target.
+fn platform_archive_name(version: &str) -> Option<String> {
+    let target = env!("BUILD_TARGET");
+    let ext = if cfg!(target_os = "windows") {
+        "zip"
+    } else {
+        "tar.gz"
+    };
+    // Only produce a name for the targets we actually ship
+    match target {
+        "x86_64-unknown-linux-gnu"
+        | "x86_64-unknown-linux-musl"
+        | "aarch64-unknown-linux-gnu"
+        | "x86_64-apple-darwin"
+        | "aarch64-apple-darwin"
+        | "x86_64-pc-windows-msvc" => Some(format!("cim-suite-v{}-{}.{}", version, target, ext)),
+        _ => None,
+    }
+}
+
+/// Query the GitHub releases API and return the latest version tag (without leading 'v').
+/// Returns None on any network or parse error – callers should treat None as "no update info".
+fn fetch_latest_release_version() -> Option<String> {
+    let url = "https://api.github.com/repos/analogdevicesinc/cim/releases/latest";
+    let version = env!("CARGO_PKG_VERSION");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent(format!("cim/{}", version))
+        .build()
+        .ok()?;
+
+    let body = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .ok()?
+        .text()
+        .ok()?;
+
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let tag = json["tag_name"].as_str()?;
+    Some(tag.trim_start_matches('v').to_string())
+}
+
+/// Find the `cim` binary that is first on PATH — i.e. the one the user actually
+/// invokes — so the self-update replaces the installed binary rather than whatever
+/// binary happens to be running (which could be a dev/debug build).
+fn find_cim_in_path() -> Option<PathBuf> {
+    let exe_name = if cfg!(target_os = "windows") {
+        "cim.exe"
+    } else {
+        "cim"
+    };
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(exe_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Spawn a background thread that checks for a newer cim release.
+/// The caller should join the handle when it is ready to display the result.
+fn spawn_version_check() -> thread::JoinHandle<Option<String>> {
+    thread::spawn(|| {
+        let latest = fetch_latest_release_version()?;
+        let current = env!("CARGO_PKG_VERSION");
+        if is_newer_version(current, &latest) {
+            Some(latest)
+        } else {
+            None
+        }
+    })
+}
+
+/// If the version-check thread found a newer release, print an update notice.
+fn print_update_notice(handle: thread::JoinHandle<Option<String>>) {
+    if let Ok(Some(latest)) = handle.join() {
+        messages::status(&format!(
+            "\nNote: A newer version of cim is available (v{}). Run 'cim utils update' to upgrade.",
+            latest
+        ));
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "cim")]
 #[command(disable_version_flag = true)]
@@ -636,6 +743,8 @@ enum UtilsCommand {
         #[arg(short, long, help = "Overwrite existing files")]
         force: bool,
     },
+    /// Update cim to the latest release from GitHub
+    Update,
 }
 
 /// Copy YAML configuration files to workspace root
@@ -4000,6 +4109,9 @@ struct InitConfig<'a> {
 
 /// Initialize a new workspace
 fn handle_init_command(config: InitConfig) {
+    // Start background version check so it runs concurrently with the rest of init
+    let version_check = spawn_version_check();
+
     // Set verbose mode for this command
     messages::set_verbose(config.verbose);
 
@@ -4561,6 +4673,9 @@ fn handle_init_command(config: InitConfig) {
             }
         }
     }
+
+    // Print any available update notice after the main work is done
+    print_update_notice(version_check);
 }
 
 /// Temporary struct to hold filtered git configurations for operations
@@ -5082,6 +5197,9 @@ fn handle_update_command(
     verbose: bool,
     _cert_validation: Option<&str>,
 ) {
+    // Start background version check so it runs concurrently with the update
+    let version_check = spawn_version_check();
+
     // Set verbose mode for this command
     messages::set_verbose(verbose);
 
@@ -5204,6 +5322,9 @@ fn handle_update_command(
         // Update workspace repositories (single-threaded to avoid conflicts)
         update_workspace_repos(&filtered_config, &workspace_path, false);
     }
+
+    // Print any available update notice after the main work is done
+    print_update_notice(version_check);
 }
 
 /// Update mirror repositories in parallel
@@ -7838,6 +7959,234 @@ fn handle_sync_files_hash_command(
     }
 }
 
+/// Update the cim binary to the latest release from GitHub.
+///
+/// Downloads the platform-appropriate archive, extracts the new binary, renames the
+/// current binary to `cim.old`, then places the new binary in its location.
+fn handle_utils_update_command() {
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    // Locate the installed cim binary by searching PATH, so we update the one the
+    // user actually invokes rather than the binary that happens to be running right now
+    // (e.g. a dev build in target/debug/).  Fall back to current_exe() if PATH lookup
+    // yields nothing.
+    let exe_path = find_cim_in_path().or_else(|| std::env::current_exe().ok());
+    let exe_path = match exe_path {
+        Some(p) => p,
+        None => {
+            messages::error("Cannot locate the installed cim binary in PATH.");
+            return;
+        }
+    };
+    messages::status(&format!("Updating: {}", exe_path.display()));
+
+    messages::status(&format!("Current cim version: v{}", current_version));
+
+    // Fetch latest version from GitHub
+    let latest_version = match fetch_latest_release_version() {
+        Some(v) => v,
+        None => return, // silently ignore — no internet, no error
+    };
+
+    if !is_newer_version(current_version, &latest_version) {
+        messages::success(&format!("cim is already up to date (v{})", current_version));
+        return;
+    }
+
+    messages::status(&format!(
+        "New version available: v{} → v{}",
+        current_version, latest_version
+    ));
+
+    // Build the archive name for this platform
+    let archive_name = match platform_archive_name(&latest_version) {
+        Some(n) => n,
+        None => {
+            messages::error(&format!(
+                "No prebuilt release for platform '{}'. Please build from source.",
+                env!("BUILD_TARGET")
+            ));
+            return;
+        }
+    };
+
+    let download_url = format!(
+        "https://github.com/analogdevicesinc/cim/releases/latest/download/{}",
+        archive_name
+    );
+
+    messages::status(&format!("Downloading {}...", archive_name));
+
+    // Download into a temporary directory
+    let tmp_dir = match tempfile::tempdir() {
+        Ok(d) => d,
+        Err(e) => {
+            messages::error(&format!("Failed to create temporary directory: {}", e));
+            return;
+        }
+    };
+
+    let archive_path = tmp_dir.path().join(&archive_name);
+
+    // Use the same robust client pattern as the rest of the codebase
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .user_agent(format!("cim/{}", current_version))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            messages::error(&format!("Failed to build HTTP client: {}", e));
+            return;
+        }
+    };
+
+    let response = match client.get(&download_url).send() {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            messages::error(&format!(
+                "HTTP {} downloading {}: {}",
+                r.status().as_u16(),
+                archive_name,
+                r.status().canonical_reason().unwrap_or("error")
+            ));
+            return;
+        }
+        Err(e) => {
+            messages::error(&format!("Download failed: {}", e));
+            return;
+        }
+    };
+
+    let archive_bytes = match response.bytes() {
+        Ok(b) => b,
+        Err(e) => {
+            messages::error(&format!("Failed to read download: {}", e));
+            return;
+        }
+    };
+
+    if let Err(e) = std::fs::write(&archive_path, &archive_bytes) {
+        messages::error(&format!("Failed to save archive: {}", e));
+        return;
+    }
+
+    messages::status("Extracting cim binary...");
+
+    // Extract the `cim` binary from the archive
+    #[cfg(not(target_os = "windows"))]
+    let new_binary_path = {
+        use flate2::read::GzDecoder;
+        use tar::Archive;
+
+        let archive_file = match std::fs::File::open(&archive_path) {
+            Ok(f) => f,
+            Err(e) => {
+                messages::error(&format!("Failed to open archive: {}", e));
+                return;
+            }
+        };
+
+        let gz = GzDecoder::new(archive_file);
+        let mut tar = Archive::new(gz);
+
+        let extract_path = tmp_dir.path().join("cim");
+        let mut found = false;
+
+        let entries = match tar.entries() {
+            Ok(e) => e,
+            Err(e) => {
+                messages::error(&format!("Failed to read archive entries: {}", e));
+                return;
+            }
+        };
+
+        for entry in entries {
+            let mut entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    messages::error(&format!("Failed to read archive entry: {}", e));
+                    return;
+                }
+            };
+
+            let entry_path = match entry.path() {
+                Ok(p) => p.to_path_buf(),
+                Err(_) => continue,
+            };
+
+            // Match any entry whose filename is exactly "cim"
+            if entry_path.file_name().map(|n| n == "cim").unwrap_or(false) {
+                if let Err(e) = entry.unpack(&extract_path) {
+                    messages::error(&format!("Failed to extract cim binary: {}", e));
+                    return;
+                }
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            messages::error("Archive does not contain a 'cim' binary.");
+            return;
+        }
+
+        extract_path
+    };
+
+    #[cfg(target_os = "windows")]
+    let new_binary_path = {
+        messages::error(
+            "Self-update via 'cim utils update' is not supported on Windows. \
+             Please download and install manually from: \
+             https://github.com/analogdevicesinc/cim/releases/latest",
+        );
+        return;
+    };
+
+    // Set executable bit on the new binary (Unix only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(&new_binary_path, std::fs::Permissions::from_mode(0o755))
+        {
+            messages::error(&format!("Failed to set executable permissions: {}", e));
+            return;
+        }
+    }
+
+    // Rename the old binary to cim.old, then copy the new one into place
+    let old_path = exe_path.with_file_name("cim.old");
+
+    if let Err(e) = std::fs::rename(&exe_path, &old_path) {
+        messages::error(&format!(
+            "Failed to rename current binary to cim.old: {}",
+            e
+        ));
+        return;
+    }
+
+    if let Err(e) = std::fs::copy(&new_binary_path, &exe_path) {
+        messages::error(&format!(
+            "Failed to copy new binary: {}. Old binary preserved at {}",
+            e,
+            old_path.display()
+        ));
+        // Attempt to restore the old binary
+        let _ = std::fs::rename(&old_path, &exe_path);
+        return;
+    }
+
+    messages::success(&format!(
+        "Successfully updated cim from v{} to v{}. Old binary saved as {}",
+        current_version,
+        latest_version,
+        old_path.display()
+    ));
+}
+
 /// Handle utility commands for workspace maintenance
 fn handle_utils_command(utils_command: &UtilsCommand) {
     match utils_command {
@@ -7855,6 +8204,9 @@ fn handle_utils_command(utils_command: &UtilsCommand) {
             force,
         } => {
             handle_sync_files_hash_command(file.as_deref(), *dry_run, *verbose, *force);
+        }
+        UtilsCommand::Update => {
+            handle_utils_update_command();
         }
     }
 }

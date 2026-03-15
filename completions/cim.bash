@@ -36,6 +36,7 @@
 #             --force (-f), --edit (-e), --validate (-v)
 #   - utils hash-copy-files: --dry-run, --verbose (-v)
 #   - utils sync-copy-files: --dry-run, --verbose (-v), --force (-f)
+#   - utils update: (no options)
 
 _cim_completions() {
     local cur prev opts subcommands
@@ -434,7 +435,7 @@ _cim_completions() {
         utils)
             if [ $COMP_CWORD -eq 2 ]; then
                 # Utils subcommands
-                COMPREPLY=( $(compgen -W "hash-copy-files sync-copy-files --help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "hash-copy-files sync-copy-files update --help" -- "${cur}") )
                 return 0
             elif [ $COMP_CWORD -gt 2 ]; then
                 # Handle utils subcommand completion
@@ -454,6 +455,10 @@ _cim_completions() {
                                 return 0
                                 ;;
                         esac
+                        ;;
+                    update)
+                        COMPREPLY=( $(compgen -W "--help" -- "${cur}") )
+                        return 0
                         ;;
                 esac
             fi
