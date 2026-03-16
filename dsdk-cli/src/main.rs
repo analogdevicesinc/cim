@@ -1522,8 +1522,21 @@ fn download_file_with_cache(config: DownloadConfig) -> Result<(), Box<dyn std::e
                 }
             }
 
-            // Either symlink or copy from cache to destination
-            if use_symlink {
+            // Check if destination already resolves to the same file as cache
+            // (e.g., dest_path == cache_path, or dest is a symlink to cache).
+            // Copying a file onto itself truncates it to 0 bytes.
+            let is_same_file = if dest_path.exists() {
+                match (fs::canonicalize(&cache_path), fs::canonicalize(dest_path)) {
+                    (Ok(src), Ok(dst)) => src == dst,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+
+            if is_same_file {
+                messages::verbose("Destination already points to cached file, skipping copy");
+            } else if use_symlink {
                 // Remove destination if it exists (needed for symlink creation)
                 if dest_path.exists() {
                     fs::remove_file(dest_path)?;
@@ -1566,8 +1579,19 @@ fn download_file_with_cache(config: DownloadConfig) -> Result<(), Box<dyn std::e
                 }
             }
 
-            // Either symlink or copy from cache to destination
-            if use_symlink {
+            // Check if destination already resolves to the same file as cache
+            let is_same_file = if dest_path.exists() {
+                match (fs::canonicalize(&cache_path), fs::canonicalize(dest_path)) {
+                    (Ok(src), Ok(dst)) => src == dst,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+
+            if is_same_file {
+                messages::verbose("Destination already points to cached file, skipping copy");
+            } else if use_symlink {
                 // Remove destination if it exists (needed for symlink creation)
                 if dest_path.exists() {
                     fs::remove_file(dest_path)?;
