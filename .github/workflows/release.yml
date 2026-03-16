@@ -74,6 +74,14 @@ jobs:
           cd ..
           echo "VSIX_FILE=${{ env.VSIX_FILE }}"
 
+      - name: Restore clean git state
+        shell: bash
+        run: |
+          # The "Update extension version" step modified dsdk-vscode/package.json
+          # which is a tracked file. Without restoring, build.rs detects uncommitted
+          # changes via `git diff-index` and marks the binary as "-dirty".
+          git checkout -- .
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9  # stable
         with:
