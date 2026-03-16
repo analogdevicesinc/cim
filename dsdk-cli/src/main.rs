@@ -8098,9 +8098,20 @@ fn handle_utils_update_command() {
 
     messages::status("Extracting cim binary...");
 
-    // Extract the `cim` binary from the archive
+    // Self-update is not supported on Windows
+    #[cfg(target_os = "windows")]
+    {
+        messages::error(
+            "Self-update via 'cim utils update' is not supported on Windows. \
+             Please download and install manually from: \
+             https://github.com/analogdevicesinc/cim/releases/latest",
+        );
+        return;
+    }
+
+    // Extract the `cim` binary from the archive and replace the current binary
     #[cfg(not(target_os = "windows"))]
-    let new_binary_path = {
+    {
         use flate2::read::GzDecoder;
         use tar::Archive;
 
@@ -8156,57 +8167,46 @@ fn handle_utils_update_command() {
             return;
         }
 
-        extract_path
-    };
+        let new_binary_path = extract_path;
 
-    #[cfg(target_os = "windows")]
-    let new_binary_path = {
-        messages::error(
-            "Self-update via 'cim utils update' is not supported on Windows. \
-             Please download and install manually from: \
-             https://github.com/analogdevicesinc/cim/releases/latest",
-        );
-        return;
-    };
-
-    // Set executable bit on the new binary (Unix only)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) =
-            std::fs::set_permissions(&new_binary_path, std::fs::Permissions::from_mode(0o755))
+        // Set executable bit on the new binary
         {
-            messages::error(&format!("Failed to set executable permissions: {}", e));
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) =
+                std::fs::set_permissions(&new_binary_path, std::fs::Permissions::from_mode(0o755))
+            {
+                messages::error(&format!("Failed to set executable permissions: {}", e));
+                return;
+            }
+        }
+
+        // Rename the old binary to cim.old, then copy the new one into place
+        let old_path = exe_path.with_file_name("cim.old");
+
+        if let Err(e) = std::fs::rename(&exe_path, &old_path) {
+            messages::error(&format!(
+                "Failed to rename current binary to cim.old: {}",
+                e
+            ));
             return;
         }
-    }
 
-    // Rename the old binary to cim.old, then copy the new one into place
-    let old_path = exe_path.with_file_name("cim.old");
+        if let Err(e) = std::fs::copy(&new_binary_path, &exe_path) {
+            messages::error(&format!(
+                "Failed to copy new binary: {}. Old binary preserved at {}",
+                e,
+                old_path.display()
+            ));
+            // Attempt to restore the old binary
+            let _ = std::fs::rename(&old_path, &exe_path);
+            return;
+        }
 
-    if let Err(e) = std::fs::rename(&exe_path, &old_path) {
-        messages::error(&format!(
-            "Failed to rename current binary to cim.old: {}",
-            e
+        messages::success(&format!(
+            "Successfully updated cim from v{} to v{}",
+            current_version, latest_version,
         ));
-        return;
     }
-
-    if let Err(e) = std::fs::copy(&new_binary_path, &exe_path) {
-        messages::error(&format!(
-            "Failed to copy new binary: {}. Old binary preserved at {}",
-            e,
-            old_path.display()
-        ));
-        // Attempt to restore the old binary
-        let _ = std::fs::rename(&old_path, &exe_path);
-        return;
-    }
-
-    messages::success(&format!(
-        "Successfully updated cim from v{} to v{}",
-        current_version, latest_version,
-    ));
 }
 
 /// Handle utility commands for workspace maintenance
