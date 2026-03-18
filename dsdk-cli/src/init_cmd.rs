@@ -14,9 +14,10 @@ use crate::install_cmd::{
     ensure_docs_dependencies, install_prerequisites, install_python_packages_from_file,
     is_container_environment,
 };
+use crate::makefile::generate_makefile_content;
 use crate::version::spawn_version_check;
 use crate::{
-    generate_makefile_content, update_mirror_repos, update_workspace_repos_no_mirror_with_result,
+    update_mirror_repos, update_workspace_repos_no_mirror_with_result,
     update_workspace_repos_with_result,
 };
 use dsdk_cli::config::SdkConfigCore;
