@@ -15,11 +15,11 @@ use crate::install_cmd::{
     is_container_environment,
 };
 use crate::makefile::generate_makefile_content;
-use crate::version::spawn_version_check;
-use crate::{
+use crate::update_cmd::{
     update_mirror_repos, update_workspace_repos_no_mirror_with_result,
     update_workspace_repos_with_result,
 };
+use crate::version::spawn_version_check;
 use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::download::{copy_yaml_files_to_workspace, process_copy_files};
 use dsdk_cli::workspace::{
