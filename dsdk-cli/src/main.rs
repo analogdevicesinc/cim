@@ -356,6 +356,12 @@ enum Commands {
             help = "Install OS dependencies, toolchains, pip packages, and install targets"
         )]
         full: bool,
+        /// Skip using sudo for package installation (for root users or special configurations)
+        #[arg(
+            long = "no-sudo",
+            help = "Skip using sudo when running package manager commands"
+        )]
+        no_sudo: bool,
         /// Use symlinks for toolchains and pip packages (requires mirror)
         #[arg(
             long,
@@ -3958,6 +3964,7 @@ fn resolve_target_config_from_git(
 fn install_os_deps_if_available(
     workspace_path: &Path,
     skip_prompt: bool,
+    no_sudo: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Check if os-dependencies.yml exists
     let os_deps_path = workspace_path.join("os-dependencies.yml");
@@ -3982,7 +3989,7 @@ fn install_os_deps_if_available(
 
     // Call install_prerequisites which will display package list and prompt for confirmation
     // unless skip_prompt is true (from --yes flag)
-    install_prerequisites(&os_deps, skip_prompt, false);
+    install_prerequisites(&os_deps, skip_prompt, no_sudo);
 
     Ok(())
 }
@@ -4126,6 +4133,7 @@ struct InitConfig<'a> {
     verbose: bool,
     install: bool,
     full: bool,
+    no_sudo: bool,
     symlink: bool,
     yes: bool,
     _cert_validation: Option<&'a str>,
@@ -4571,7 +4579,9 @@ fn handle_init_command(config: InitConfig) {
                 messages::status("Setting up SDK components with --full...");
 
                 // Step 0: Install OS dependencies if --full is specified
-                if let Err(e) = install_os_deps_if_available(&workspace_path, config.yes) {
+                if let Err(e) =
+                    install_os_deps_if_available(&workspace_path, config.yes, config.no_sudo)
+                {
                     messages::info(&format!(
                         "Note: OS dependencies installation encountered an issue: {}",
                         e
@@ -8267,6 +8277,7 @@ fn main() {
             verbose,
             install,
             full,
+            no_sudo,
             symlink,
             yes,
             cert_validation,
@@ -8292,6 +8303,7 @@ fn main() {
                 verbose: *verbose,
                 install: *install,
                 full: *full,
+                no_sudo: *no_sudo,
                 symlink: *symlink,
                 yes: *yes,
                 _cert_validation: cert_validation.as_deref(),
@@ -9884,6 +9896,7 @@ gits:
                 verbose: _,
                 install: _,
                 full: _,
+                no_sudo: _,
                 symlink: _,
                 yes: _,
                 cert_validation: _,
