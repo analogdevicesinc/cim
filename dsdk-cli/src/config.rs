@@ -10,7 +10,7 @@
 // limitations under the License.
 
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -206,8 +206,14 @@ pub struct GitConfig {
     pub url: String,
     #[serde(deserialize_with = "deserialize_commit")]
     pub commit: String,
+    /// Build ordering dependencies for Makefile generation.
+    /// Accepts the legacy field name `depends_on` for backward compatibility.
+    #[serde(default, alias = "depends_on")]
+    pub build_depends_on: Option<Vec<String>>,
+    /// Clone ordering dependencies. Repositories listed here will be cloned
+    /// before this one, which is needed when repos are nested inside each other.
     #[serde(default)]
-    pub depends_on: Option<Vec<String>>,
+    pub git_depends_on: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub build: Option<Vec<String>>,
     /// Custom documentation directory within the git repository
@@ -1174,6 +1180,107 @@ pub fn get_cert_validation_mode(cli_override: Option<&str>) -> (String, bool) {
     ("strict".to_string(), false)
 }
 
+/// Resolve the clone order for git repositories based on their
+/// `git_depends_on` fields. Returns a vector of tiers, where each tier is
+/// a vector of `GitConfig` entries that can be cloned in parallel. Tiers
+/// must be processed sequentially: tier 0 first, then tier 1, etc.
+///
+/// Uses Kahn's algorithm (BFS-based topological sort) to compute the order.
+/// Returns an error if a circular dependency is detected or if a
+/// `git_depends_on` entry references a repository name not in the gits list.
+pub fn resolve_clone_order(gits: &[GitConfig]) -> Result<Vec<Vec<GitConfig>>, String> {
+    if gits.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Build a name → index lookup
+    let name_to_index: HashMap<&str, usize> = gits
+        .iter()
+        .enumerate()
+        .map(|(i, g)| (g.name.as_str(), i))
+        .collect();
+
+    // Validate all git_depends_on references exist in the gits list
+    for git_cfg in gits {
+        if let Some(deps) = &git_cfg.git_depends_on {
+            for dep in deps {
+                if !name_to_index.contains_key(dep.as_str()) {
+                    return Err(format!(
+                        "Repository '{}' has git_depends_on '{}', \
+                         which is not defined in the gits list",
+                        git_cfg.name, dep
+                    ));
+                }
+            }
+        }
+    }
+
+    // Build adjacency list and compute in-degrees for Kahn's algorithm
+    let n = gits.len();
+    let mut in_degree = vec![0usize; n];
+    let mut dependents: Vec<Vec<usize>> = vec![vec![]; n];
+
+    for (i, git_cfg) in gits.iter().enumerate() {
+        if let Some(deps) = &git_cfg.git_depends_on {
+            let unique_deps: HashSet<&str> = deps.iter().map(|s| s.as_str()).collect();
+            in_degree[i] = unique_deps.len();
+            for dep in &unique_deps {
+                let dep_idx = name_to_index[dep];
+                dependents[dep_idx].push(i);
+            }
+        }
+    }
+
+    // BFS: process nodes tier by tier
+    let mut tiers: Vec<Vec<GitConfig>> = Vec::new();
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    let mut processed = 0usize;
+
+    // Seed with all repos that have no dependencies (in_degree == 0)
+    for (i, &deg) in in_degree.iter().enumerate() {
+        if deg == 0 {
+            queue.push_back(i);
+        }
+    }
+
+    while !queue.is_empty() {
+        // Drain the current queue into a tier
+        let tier_indices: Vec<usize> = queue.drain(..).collect();
+        let mut tier = Vec::with_capacity(tier_indices.len());
+
+        for &idx in &tier_indices {
+            processed += 1;
+            tier.push(gits[idx].clone());
+
+            // Reduce in-degree for dependents and enqueue those that become ready
+            for &dep_idx in &dependents[idx] {
+                in_degree[dep_idx] -= 1;
+                if in_degree[dep_idx] == 0 {
+                    queue.push_back(dep_idx);
+                }
+            }
+        }
+
+        tiers.push(tier);
+    }
+
+    if processed != n {
+        // Some repos were never processed — there's a cycle
+        let unprocessed: Vec<&str> = in_degree
+            .iter()
+            .enumerate()
+            .filter(|(_, &deg)| deg > 0)
+            .map(|(i, _)| gits[i].name.as_str())
+            .collect();
+        return Err(format!(
+            "Circular dependency detected among repositories: {}",
+            unprocessed.join(", ")
+        ));
+    }
+
+    Ok(tiers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1206,7 +1313,7 @@ gits:
         assert_eq!(config.gits.len(), 2);
         assert_eq!(config.gits[0].name, "git");
         assert_eq!(
-            config.gits[1].depends_on.as_ref().unwrap(),
+            config.gits[1].build_depends_on.as_ref().unwrap(),
             &vec!["git".to_string()]
         );
     }
@@ -1429,5 +1536,132 @@ mirror = "/only/mirror/set"
         assert!(config.default_workspace.is_none());
         assert!(config.default_source.is_none());
         assert!(config.copy_files.is_none());
+    }
+
+    /// Helper to create a GitConfig for testing resolve_clone_order
+    fn make_git(name: &str, git_depends_on: Option<Vec<&str>>) -> GitConfig {
+        GitConfig {
+            name: name.to_string(),
+            url: format!("https://example.com/{}.git", name),
+            commit: "main".to_string(),
+            build_depends_on: None,
+            git_depends_on: git_depends_on.map(|v| v.into_iter().map(String::from).collect()),
+            build: None,
+            documentation_dir: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_clone_order_empty() {
+        let result = resolve_clone_order(&[]);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_resolve_clone_order_no_dependencies() {
+        let gits = vec![
+            make_git("repo-a", None),
+            make_git("repo-b", None),
+            make_git("repo-c", None),
+        ];
+        let tiers = resolve_clone_order(&gits).unwrap();
+        // All repos should be in a single tier since none have dependencies
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0].len(), 3);
+    }
+
+    #[test]
+    fn test_resolve_clone_order_linear_chain() {
+        // c depends on b, b depends on a
+        let gits = vec![
+            make_git("a", None),
+            make_git("b", Some(vec!["a"])),
+            make_git("c", Some(vec!["b"])),
+        ];
+        let tiers = resolve_clone_order(&gits).unwrap();
+        assert_eq!(tiers.len(), 3);
+        assert_eq!(tiers[0].len(), 1);
+        assert_eq!(tiers[0][0].name, "a");
+        assert_eq!(tiers[1].len(), 1);
+        assert_eq!(tiers[1][0].name, "b");
+        assert_eq!(tiers[2].len(), 1);
+        assert_eq!(tiers[2][0].name, "c");
+    }
+
+    #[test]
+    fn test_resolve_clone_order_fan_out() {
+        // b, c, d all depend on a (the nested repo pattern)
+        let gits = vec![
+            make_git("parent", None),
+            make_git("parent/child1", Some(vec!["parent"])),
+            make_git("parent/child2", Some(vec!["parent"])),
+            make_git("parent/child3", Some(vec!["parent"])),
+        ];
+        let tiers = resolve_clone_order(&gits).unwrap();
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].len(), 1);
+        assert_eq!(tiers[0][0].name, "parent");
+        assert_eq!(tiers[1].len(), 3);
+        let tier1_names: HashSet<String> = tiers[1].iter().map(|g| g.name.clone()).collect();
+        assert!(tier1_names.contains("parent/child1"));
+        assert!(tier1_names.contains("parent/child2"));
+        assert!(tier1_names.contains("parent/child3"));
+    }
+
+    #[test]
+    fn test_resolve_clone_order_circular_dependency() {
+        let gits = vec![
+            make_git("a", Some(vec!["b"])),
+            make_git("b", Some(vec!["a"])),
+        ];
+        let result = resolve_clone_order(&gits);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Circular dependency"));
+    }
+
+    #[test]
+    fn test_resolve_clone_order_missing_dependency() {
+        let gits = vec![make_git("a", Some(vec!["nonexistent"]))];
+        let result = resolve_clone_order(&gits);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("nonexistent"));
+        assert!(err.contains("not defined"));
+    }
+
+    #[test]
+    fn test_resolve_clone_order_ignores_build_depends_on() {
+        // build_depends_on references non-git targets — should not affect clone order
+        let gits = vec![GitConfig {
+            name: "my-repo".to_string(),
+            url: "https://example.com/my-repo.git".to_string(),
+            commit: "main".to_string(),
+            build_depends_on: Some(vec!["sdk-envsetup".to_string()]),
+            git_depends_on: None,
+            build: None,
+            documentation_dir: None,
+        }];
+        let tiers = resolve_clone_order(&gits).unwrap();
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0][0].name, "my-repo");
+    }
+
+    #[test]
+    fn test_resolve_clone_order_multiple_dependencies() {
+        // d depends on both b and c; b and c depend on a
+        let gits = vec![
+            make_git("a", None),
+            make_git("b", Some(vec!["a"])),
+            make_git("c", Some(vec!["a"])),
+            make_git("d", Some(vec!["b", "c"])),
+        ];
+        let tiers = resolve_clone_order(&gits).unwrap();
+        assert_eq!(tiers.len(), 3);
+        assert_eq!(tiers[0][0].name, "a");
+        assert_eq!(tiers[1].len(), 2);
+        assert_eq!(tiers[2].len(), 1);
+        assert_eq!(tiers[2][0].name, "d");
     }
 }

@@ -5495,30 +5495,40 @@ fn update_workspace_repos<T: config::SdkConfigCore>(
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
 
-    let pool = ThreadPool::new(4);
+    let tiers = match config::resolve_clone_order(sdk_config.gits()) {
+        Ok(t) => t,
+        Err(e) => {
+            messages::error(&format!("Dependency resolution failed: {}", e));
+            return;
+        }
+    };
 
-    for git_cfg in sdk_config.gits() {
-        let git_cfg = git_cfg.clone();
-        let workspace_path = workspace_path.to_path_buf();
-        let mirror_path = sdk_config.mirror().clone();
+    for tier in &tiers {
+        let pool = ThreadPool::new(4);
 
-        pool.execute(move || {
-            let repo_workspace_path = workspace_path.join(&git_cfg.name);
+        for git_cfg in tier {
+            let git_cfg = git_cfg.clone();
+            let workspace_path = workspace_path.to_path_buf();
+            let mirror_path = sdk_config.mirror().clone();
 
-            let success = if repo_workspace_path.exists() {
-                handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, &mirror_path)
-            } else {
-                clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path)
-            };
+            pool.execute(move || {
+                let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
-            // Print result immediately
-            if !success {
-                messages::error(&format!("{} (failed)", git_cfg.name));
-            }
-        });
+                let success = if repo_workspace_path.join(".git").is_dir() {
+                    handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, &mirror_path)
+                } else {
+                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path)
+                };
+
+                // Print result immediately
+                if !success {
+                    messages::error(&format!("{} (failed)", git_cfg.name));
+                }
+            });
+        }
+
+        pool.join();
     }
-
-    pool.join();
 }
 
 /// Update workspace repositories in parallel, returns true if any failed
@@ -5530,33 +5540,44 @@ fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
 
-    let pool = ThreadPool::new(4);
+    let tiers = match config::resolve_clone_order(sdk_config.gits()) {
+        Ok(t) => t,
+        Err(e) => {
+            messages::error(&format!("Dependency resolution failed: {}", e));
+            return true;
+        }
+    };
+
     let any_failed = Arc::new(AtomicBool::new(false));
 
-    for git_cfg in sdk_config.gits() {
-        let git_cfg = git_cfg.clone();
-        let workspace_path = workspace_path.to_path_buf();
-        let mirror_path = sdk_config.mirror().clone();
-        let any_failed = Arc::clone(&any_failed);
+    for tier in &tiers {
+        let pool = ThreadPool::new(4);
 
-        pool.execute(move || {
-            let repo_workspace_path = workspace_path.join(&git_cfg.name);
+        for git_cfg in tier {
+            let git_cfg = git_cfg.clone();
+            let workspace_path = workspace_path.to_path_buf();
+            let mirror_path = sdk_config.mirror().clone();
+            let any_failed = Arc::clone(&any_failed);
 
-            let success = if repo_workspace_path.exists() {
-                handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, &mirror_path)
-            } else {
-                clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path)
-            };
+            pool.execute(move || {
+                let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
-            // Print result immediately and track failures
-            if !success {
-                messages::error(&format!("{} (failed)", git_cfg.name));
-                any_failed.store(true, Ordering::Relaxed);
-            }
-        });
+                let success = if repo_workspace_path.join(".git").is_dir() {
+                    handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, &mirror_path)
+                } else {
+                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path)
+                };
+
+                // Print result immediately and track failures
+                if !success {
+                    messages::error(&format!("{} (failed)", git_cfg.name));
+                    any_failed.store(true, Ordering::Relaxed);
+                }
+            });
+        }
+
+        pool.join();
     }
-
-    pool.join();
 
     any_failed.load(Ordering::Relaxed)
 }
@@ -5573,29 +5594,39 @@ fn update_workspace_repos_no_mirror<T: config::SdkConfigCore>(
         action
     ));
 
-    let pool = ThreadPool::new(4);
+    let tiers = match config::resolve_clone_order(sdk_config.gits()) {
+        Ok(t) => t,
+        Err(e) => {
+            messages::error(&format!("Dependency resolution failed: {}", e));
+            return;
+        }
+    };
 
-    for git_cfg in sdk_config.gits() {
-        let git_cfg = git_cfg.clone();
-        let workspace_path = workspace_path.to_path_buf();
+    for tier in &tiers {
+        let pool = ThreadPool::new(4);
 
-        pool.execute(move || {
-            let repo_workspace_path = workspace_path.join(&git_cfg.name);
+        for git_cfg in tier {
+            let git_cfg = git_cfg.clone();
+            let workspace_path = workspace_path.to_path_buf();
 
-            let success = if repo_workspace_path.exists() {
-                handle_existing_workspace_repo_no_mirror(&git_cfg, &repo_workspace_path)
-            } else {
-                clone_repo_to_workspace_no_mirror(&git_cfg, &repo_workspace_path)
-            };
+            pool.execute(move || {
+                let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
-            // Print result immediately
-            if !success {
-                messages::error(&format!("{} (failed)", git_cfg.name));
-            }
-        });
+                let success = if repo_workspace_path.join(".git").is_dir() {
+                    handle_existing_workspace_repo_no_mirror(&git_cfg, &repo_workspace_path)
+                } else {
+                    clone_repo_to_workspace_no_mirror(&git_cfg, &repo_workspace_path)
+                };
+
+                // Print result immediately
+                if !success {
+                    messages::error(&format!("{} (failed)", git_cfg.name));
+                }
+            });
+        }
+
+        pool.join();
     }
-
-    pool.join();
 }
 
 /// Update workspace repositories directly from remote URLs (no mirror), returns true if any failed
@@ -5610,32 +5641,43 @@ fn update_workspace_repos_no_mirror_with_result<T: config::SdkConfigCore>(
         action
     ));
 
-    let pool = ThreadPool::new(4);
+    let tiers = match config::resolve_clone_order(sdk_config.gits()) {
+        Ok(t) => t,
+        Err(e) => {
+            messages::error(&format!("Dependency resolution failed: {}", e));
+            return true;
+        }
+    };
+
     let any_failed = Arc::new(AtomicBool::new(false));
 
-    for git_cfg in sdk_config.gits() {
-        let git_cfg = git_cfg.clone();
-        let workspace_path = workspace_path.to_path_buf();
-        let any_failed = Arc::clone(&any_failed);
+    for tier in &tiers {
+        let pool = ThreadPool::new(4);
 
-        pool.execute(move || {
-            let repo_workspace_path = workspace_path.join(&git_cfg.name);
+        for git_cfg in tier {
+            let git_cfg = git_cfg.clone();
+            let workspace_path = workspace_path.to_path_buf();
+            let any_failed = Arc::clone(&any_failed);
 
-            let success = if repo_workspace_path.exists() {
-                handle_existing_workspace_repo_no_mirror(&git_cfg, &repo_workspace_path)
-            } else {
-                clone_repo_to_workspace_no_mirror(&git_cfg, &repo_workspace_path)
-            };
+            pool.execute(move || {
+                let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
-            // Print result immediately and track failures
-            if !success {
-                messages::error(&format!("{} (failed)", git_cfg.name));
-                any_failed.store(true, Ordering::Relaxed);
-            }
-        });
+                let success = if repo_workspace_path.join(".git").is_dir() {
+                    handle_existing_workspace_repo_no_mirror(&git_cfg, &repo_workspace_path)
+                } else {
+                    clone_repo_to_workspace_no_mirror(&git_cfg, &repo_workspace_path)
+                };
+
+                // Print result immediately and track failures
+                if !success {
+                    messages::error(&format!("{} (failed)", git_cfg.name));
+                    any_failed.store(true, Ordering::Relaxed);
+                }
+            });
+        }
+
+        pool.join();
     }
-
-    pool.join();
 
     any_failed.load(Ordering::Relaxed)
 }
@@ -5778,6 +5820,18 @@ fn clone_repo_to_workspace(
     repo_path: &Path,
     mirror_path: &Path,
 ) -> bool {
+    // Remove directory if it exists but is not a git repo (e.g., created by
+    // a parent repo clone in a previous tier)
+    if repo_path.exists() && !repo_path.join(".git").is_dir() {
+        if let Err(e) = std::fs::remove_dir_all(repo_path) {
+            messages::error(&format!(
+                "{} (failed to remove non-git directory: {})",
+                git_cfg.name, e
+            ));
+            return false;
+        }
+    }
+
     messages::progress(&git_cfg.name, "cloning repository");
 
     let mirror_repo_path =
@@ -6082,6 +6136,18 @@ fn handle_existing_workspace_repo_no_mirror(git_cfg: &config::GitConfig, repo_pa
 
 /// Clone a repository to the workspace (no mirror mode)
 fn clone_repo_to_workspace_no_mirror(git_cfg: &config::GitConfig, repo_path: &Path) -> bool {
+    // Remove directory if it exists but is not a git repo (e.g., created by
+    // a parent repo clone in a previous tier)
+    if repo_path.exists() && !repo_path.join(".git").is_dir() {
+        if let Err(e) = std::fs::remove_dir_all(repo_path) {
+            messages::error(&format!(
+                "{} (failed to remove non-git directory: {})",
+                git_cfg.name, e
+            ));
+            return false;
+        }
+    }
+
     let should_timeout = git_cfg.url.starts_with("git@") || git_cfg.url.starts_with("ssh://");
 
     if should_timeout {
@@ -6296,7 +6362,7 @@ fn add_makefile_target(makefile: &mut String, git: &config::GitConfig) {
     makefile.push_str(&format!(".PHONY: {}\n", git.name));
 
     // Add target with dependencies
-    let dep_str = if let Some(deps) = &git.depends_on {
+    let dep_str = if let Some(deps) = &git.build_depends_on {
         deps.join(" ")
     } else {
         String::new()
@@ -8638,7 +8704,8 @@ profiles:
             name: "test-repo".to_string(),
             url: "https://github.com/test/repo.git".to_string(),
             commit: "main".to_string(),
-            depends_on: None,
+            build_depends_on: None,
+            git_depends_on: None,
             build: Some(vec!["make".to_string(), "make install".to_string()]),
             documentation_dir: None,
         };
@@ -8671,7 +8738,8 @@ profiles:
             name: "base-repo".to_string(),
             url: "https://github.com/test/base.git".to_string(),
             commit: "main".to_string(),
-            depends_on: None,
+            build_depends_on: None,
+            git_depends_on: None,
             build: Some(vec!["@echo Building base".to_string()]),
             documentation_dir: None,
         };
@@ -8680,7 +8748,8 @@ profiles:
             name: "dep-repo".to_string(),
             url: "https://github.com/test/dep.git".to_string(),
             commit: "main".to_string(),
-            depends_on: Some(vec!["base-repo".to_string()]),
+            build_depends_on: Some(vec!["base-repo".to_string()]),
+            git_depends_on: None,
             build: Some(vec!["# This is a comment".to_string(), "make".to_string()]),
             documentation_dir: None,
         };
@@ -8715,7 +8784,8 @@ profiles:
             name: "simple-repo".to_string(),
             url: "https://github.com/test/simple.git".to_string(),
             commit: "main".to_string(),
-            depends_on: None,
+            build_depends_on: None,
+            git_depends_on: None,
             build: None,
             documentation_dir: None,
         };
@@ -8733,7 +8803,8 @@ profiles:
             name: "commented-repo".to_string(),
             url: "https://github.com/test/commented.git".to_string(),
             commit: "main".to_string(),
-            depends_on: None,
+            build_depends_on: None,
+            git_depends_on: None,
             build: Some(vec![
                 "# Configure the build".to_string(),
                 "./configure".to_string(),
@@ -8763,7 +8834,8 @@ profiles:
             name: "test-repo".to_string(),
             url: "https://github.com/test/repo.git".to_string(),
             commit: "main".to_string(),
-            depends_on: None,
+            build_depends_on: None,
+            git_depends_on: None,
             build: None,
             documentation_dir: None,
         };
@@ -8825,7 +8897,8 @@ profiles:
             name: "empty-build".to_string(),
             url: "https://github.com/test/empty.git".to_string(),
             commit: "main".to_string(),
-            depends_on: None,
+            build_depends_on: None,
+            git_depends_on: None,
             build: Some(vec![]),
             documentation_dir: None,
         };
@@ -8852,11 +8925,12 @@ profiles:
             name: "many-deps".to_string(),
             url: "https://github.com/test/many.git".to_string(),
             commit: "main".to_string(),
-            depends_on: Some(vec![
+            build_depends_on: Some(vec![
                 "dep1".to_string(),
                 "dep2".to_string(),
                 "dep3".to_string(),
             ]),
+            git_depends_on: None,
             build: Some(vec!["echo hello".to_string()]),
             documentation_dir: None,
         };

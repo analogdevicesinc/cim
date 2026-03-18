@@ -50,7 +50,8 @@ fn create_git_config(name: &str, documentation_dir: Option<String>) -> GitConfig
         name: name.to_string(),
         url: format!("https://example.com/{}.git", name),
         commit: "main".to_string(),
-        depends_on: None,
+        build_depends_on: None,
+        git_depends_on: None,
         build: None,
         documentation_dir,
     }

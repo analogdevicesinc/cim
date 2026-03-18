@@ -422,8 +422,12 @@ install:
 # name: encourge to use a single name to keep the git in the workspace root, but
 # it can be nested if needed.
 # build: will generate a Makefile target for this git repository.
-# depends_on: will ensure the dependent repository is built before this one.
-#             It's possible to depends on multiple targets.
+# build_depends_on: ensures the dependent repository is built before this one
+#             in the generated Makefile (also accepts legacy name "depends_on").
+#             It's possible to depend on multiple targets.
+# git_depends_on: controls clone ordering. Repositories listed here will be
+#             cloned before this one. Useful for nested repos where a child
+#             path lives inside a parent repo's directory tree.
 # commit: can be a branch, tag, or specific commit hash.
 ################################################################################
 gits:
@@ -436,14 +440,32 @@ gits:
   - name: optee_os
     url: https://github.com/OP-TEE/optee_os.git
     commit: master
-    depends_on:
+    build_depends_on:
       - build
 
   - name: optee_client
     url: https://github.com/OP-TEE/optee_client.git
     commit: master
-    depends_on:
+    build_depends_on:
       - optee_os
+
+  # Example: nested repositories - the parent must be cloned first so that
+  # children can be placed inside its directory tree.
+  - name: platform
+    url: https://github.com/example/platform.git
+    commit: main
+
+  - name: platform/drivers
+    url: https://github.com/example/drivers.git
+    commit: main
+    git_depends_on:
+      - platform
+
+  - name: platform/libs
+    url: https://github.com/example/libs.git
+    commit: main
+    git_depends_on:
+      - platform
 ```
 
 #### os-dependencies.yml

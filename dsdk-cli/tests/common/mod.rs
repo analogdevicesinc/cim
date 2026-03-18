@@ -167,7 +167,8 @@ pub fn create_basic_sdk_config(mirror_path: &Path, repo_url: &str) -> SdkConfig 
             name: "test-repo".to_string(),
             url: repo_url.to_string(),
             commit: "main".to_string(),
-            depends_on: None,
+            build_depends_on: None,
+            git_depends_on: None,
             build: Some(vec!["make".to_string()]),
             documentation_dir: None,
         }],
@@ -192,7 +193,8 @@ pub fn create_complex_sdk_config(mirror_path: &Path) -> SdkConfig {
                 name: "base-lib".to_string(),
                 url: "https://github.com/example/base-lib.git".to_string(),
                 commit: "v1.0.0".to_string(),
-                depends_on: None,
+                build_depends_on: None,
+                git_depends_on: None,
                 build: Some(vec!["make base".to_string()]),
                 documentation_dir: None,
             },
@@ -200,7 +202,8 @@ pub fn create_complex_sdk_config(mirror_path: &Path) -> SdkConfig {
                 name: "middleware".to_string(),
                 url: "https://github.com/example/middleware.git".to_string(),
                 commit: "main".to_string(),
-                depends_on: Some(vec!["base-lib".to_string()]),
+                build_depends_on: Some(vec!["base-lib".to_string()]),
+                git_depends_on: None,
                 build: Some(vec!["make middleware".to_string()]),
                 documentation_dir: None,
             },
@@ -208,7 +211,8 @@ pub fn create_complex_sdk_config(mirror_path: &Path) -> SdkConfig {
                 name: "application".to_string(),
                 url: "https://github.com/example/application.git".to_string(),
                 commit: "develop".to_string(),
-                depends_on: Some(vec!["base-lib".to_string(), "middleware".to_string()]),
+                build_depends_on: Some(vec!["base-lib".to_string(), "middleware".to_string()]),
+                git_depends_on: None,
                 build: Some(vec!["make app".to_string()]),
                 documentation_dir: None,
             },
@@ -311,8 +315,8 @@ mod tests {
         let config = create_complex_sdk_config(fixture.path());
         assert_eq!(config.gits.len(), 3);
         assert_eq!(config.gits[0].name, "base-lib");
-        assert!(config.gits[0].depends_on.is_none());
-        assert_eq!(config.gits[1].depends_on.as_ref().unwrap().len(), 1);
-        assert_eq!(config.gits[2].depends_on.as_ref().unwrap().len(), 2);
+        assert!(config.gits[0].build_depends_on.is_none());
+        assert_eq!(config.gits[1].build_depends_on.as_ref().unwrap().len(), 1);
+        assert_eq!(config.gits[2].build_depends_on.as_ref().unwrap().len(), 2);
     }
 }

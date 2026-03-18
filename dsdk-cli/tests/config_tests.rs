@@ -43,7 +43,8 @@ fn test_load_config_with_repositories() {
             name: "repo1".to_string(),
             url: "https://github.com/example/repo1.git".to_string(),
             commit: "v1.0.0".to_string(),
-            depends_on: None,
+            build_depends_on: None,
+            git_depends_on: None,
             build: Some(vec!["make".to_string()]),
             documentation_dir: None,
         },
@@ -51,7 +52,8 @@ fn test_load_config_with_repositories() {
             name: "repo2".to_string(),
             url: "https://github.com/example/repo2.git".to_string(),
             commit: "main".to_string(),
-            depends_on: Some(vec!["repo1".to_string()]),
+            build_depends_on: Some(vec!["repo1".to_string()]),
+            git_depends_on: None,
             build: None,
             documentation_dir: None,
         },
@@ -63,7 +65,7 @@ fn test_load_config_with_repositories() {
     assert_eq!(loaded.gits.len(), 2);
     assert_eq!(loaded.gits[0].name, "repo1");
     assert_eq!(loaded.gits[1].name, "repo2");
-    assert!(loaded.gits[1].depends_on.is_some());
+    assert!(loaded.gits[1].build_depends_on.is_some());
 }
 
 #[test]
@@ -127,9 +129,9 @@ fn test_load_config_with_dependencies() {
     assert_eq!(loaded.gits.len(), 3);
 
     // Verify dependency chain
-    assert!(loaded.gits[0].depends_on.is_none());
-    assert_eq!(loaded.gits[1].depends_on.as_ref().unwrap().len(), 1);
-    assert_eq!(loaded.gits[2].depends_on.as_ref().unwrap().len(), 2);
+    assert!(loaded.gits[0].build_depends_on.is_none());
+    assert_eq!(loaded.gits[1].build_depends_on.as_ref().unwrap().len(), 1);
+    assert_eq!(loaded.gits[2].build_depends_on.as_ref().unwrap().len(), 2);
 }
 
 #[test]
@@ -296,7 +298,7 @@ fn test_config_serialization_roundtrip() {
         assert_eq!(loaded_git.name, original_git.name);
         assert_eq!(loaded_git.url, original_git.url);
         assert_eq!(loaded_git.commit, original_git.commit);
-        assert_eq!(loaded_git.depends_on, original_git.depends_on);
+        assert_eq!(loaded_git.build_depends_on, original_git.build_depends_on);
         assert_eq!(loaded_git.build, original_git.build);
     }
 }
@@ -917,7 +919,8 @@ fn test_user_config_mirror_override_priority() {
         name: "test-repo".to_string(),
         url: "https://github.com/example/test.git".to_string(),
         commit: "main".to_string(),
-        depends_on: None,
+        build_depends_on: None,
+        git_depends_on: None,
         build: None,
         documentation_dir: None,
     }];
