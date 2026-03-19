@@ -34,7 +34,7 @@
 #   - release: --tag (-t), --genconfig, --include, --exclude, --dry-run
 #   - config: --list (-l), --get (-g), --path (-p), --template (-t), --create (-c),
 #             --force (-f), --edit (-e), --validate (-v)
-#   - utils hash-copy-files: --dry-run, --verbose (-v)
+#   - utils hash-copy-files: --dry-run, --verbose (-v), --add-missing
 #   - utils sync-copy-files: --dry-run, --verbose (-v), --force (-f)
 #   - utils update: (no options)
 
@@ -443,7 +443,7 @@ _cim_completions() {
                     hash-copy-files)
                         case "${prev}" in
                             *)
-                                COMPREPLY=( $(compgen -W "--dry-run --verbose -v --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--dry-run --verbose -v --add-missing --help" -- "${cur}") )
                                 return 0
                                 ;;
                         esac

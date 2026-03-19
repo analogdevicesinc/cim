@@ -481,6 +481,12 @@ pub enum UtilsCommand {
         /// Enable verbose output
         #[arg(short, long, help = "Show detailed progress information")]
         verbose: bool,
+        /// Automatically add missing sha256 fields instead of skipping entries
+        #[arg(
+            long,
+            help = "Add sha256 field to entries that are missing it, then compute and set the hash"
+        )]
+        add_missing: bool,
     },
     /// Re-run copy_files operation to sync files to workspace
     SyncCopyFiles {

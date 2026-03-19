@@ -484,6 +484,7 @@ pub(crate) fn update_sdk_yaml_hash(
     dest_or_source: &str,
     new_hash: &str,
     dry_run: bool,
+    add_missing: bool,
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
     let mut content = fs::read_to_string(config_path)?;
 
@@ -491,13 +492,16 @@ pub(crate) fn update_sdk_yaml_hash(
     let lines: Vec<&str> = content.lines().collect();
     let mut found_entry = false;
     let mut updated_line_idx = None;
+    // Track the start of the matched entry block for --add-missing insertion
+    let mut entry_start_idx: Option<usize> = None;
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed.starts_with("- source:")
-            || trimmed.starts_with("- url:")
-            || trimmed == "source:"
-            || trimmed == "url:"
+        if !found_entry
+            && (trimmed.starts_with("- source:")
+                || trimmed.starts_with("- url:")
+                || trimmed == "source:"
+                || trimmed == "url:")
         {
             // Check next few lines for matching dest or source
             for j in idx..std::cmp::min(idx + 5, lines.len()) {
@@ -507,6 +511,7 @@ pub(crate) fn update_sdk_yaml_hash(
                 {
                     // Found the entry - mark as found
                     found_entry = true;
+                    entry_start_idx = Some(idx);
 
                     // Now find sha256 line within this entry
                     for (k, sha_line) in lines
@@ -577,12 +582,65 @@ pub(crate) fn update_sdk_yaml_hash(
         return Ok(Some(true));
     }
 
-    // File doesn't have an existing sha256 field - skip it (this is OK for local files)
+    // File doesn't have an existing sha256 field
+    if add_missing {
+        // Insert a new sha256 field at the end of the entry block
+        let entry_start = entry_start_idx.unwrap_or(0);
+
+        // Determine field indentation from the line immediately after the entry marker
+        let field_indent = if entry_start + 1 < lines.len() {
+            lines[entry_start + 1]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect::<String>()
+        } else {
+            "    ".to_string()
+        };
+
+        // Find the last line that belongs to this entry by scanning forward
+        // while lines remain at least as indented as the field level
+        let field_indent_len = field_indent.len();
+        let mut last_entry_line = entry_start;
+        for (scan_idx, scan_line) in lines.iter().enumerate().skip(entry_start + 1) {
+            if scan_line.trim().is_empty() {
+                break;
+            }
+            let scan_indent_len = scan_line.chars().take_while(|c| c.is_whitespace()).count();
+            if scan_indent_len >= field_indent_len {
+                last_entry_line = scan_idx;
+            } else {
+                break;
+            }
+        }
+
+        if dry_run {
+            messages::status(&format!(
+                "Would add sha256 for {}: {}",
+                dest_or_source, new_hash
+            ));
+        } else {
+            let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
+            updated_lines.insert(
+                last_entry_line + 1,
+                format!("{field_indent}sha256: {new_hash}"),
+            );
+            content = updated_lines.join("\n");
+            fs::write(config_path, &content)?;
+            messages::status(&format!(
+                "Added sha256 for {}: {}",
+                dest_or_source, new_hash
+            ));
+        }
+
+        return Ok(Some(true));
+    }
+
+    // No sha256 field and --add-missing not requested - skip this entry
     messages::info(&format!(
         "Skipping {}: no sha256 field in entry",
         dest_or_source
     ));
-    Ok(None) // Return Ok(false) to indicate we processed but didn't update anything
+    Ok(None) // Return Ok(None) to indicate skipped
 }
 
 /// Handle the copy-files-hash command
@@ -590,6 +648,7 @@ pub(crate) fn handle_copy_files_hash_command(
     file_filter: Option<&str>,
     dry_run: bool,
     verbose: bool,
+    add_missing: bool,
 ) {
     // Set verbose mode for this command
     messages::set_verbose(verbose);
@@ -727,16 +786,25 @@ pub(crate) fn handle_copy_files_hash_command(
 
             if has_sha256_field && !hash_changed {
                 messages::status("  Status: Hash unchanged (no update needed)");
-            } else if !has_sha256_field {
+            } else if !has_sha256_field && !add_missing {
                 messages::status("  Status: No sha256 field in entry (would be skipped)");
                 skipped_count += 1;
+            } else if !has_sha256_field && add_missing {
+                messages::status("  Status: sha256 field would be added");
+                updated_count += 1;
             } else {
                 messages::status("  Status: Hash would be updated");
                 updated_count += 1;
             }
         } else {
             // Update sdk.yml with new hash
-            match update_sdk_yaml_hash(&config_path, &copy_file.dest, &computed_hash, dry_run) {
+            match update_sdk_yaml_hash(
+                &config_path,
+                &copy_file.dest,
+                &computed_hash,
+                dry_run,
+                add_missing,
+            ) {
                 Ok(Some(true)) => {
                     // Successfully updated
                     updated_count += 1;
@@ -1490,6 +1558,87 @@ gits:
             result.is_err(),
             "ensure_file_in_mirror must return an error when source contains an unexpanded \
              manifest variable"
+        );
+    }
+
+    /// Verify that update_sdk_yaml_hash inserts a sha256 field when the entry
+    /// has none and add_missing is true, and skips when add_missing is false.
+    #[test]
+    fn test_update_sdk_yaml_hash_add_missing() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // A minimal sdk.yml with a copy_files entry that has no sha256 field
+        let yaml = "\
+copy_files:\n\
+  - source: /home/user/.bashrc\n\
+    dest: .bashrc\n";
+
+        let config_path = temp_dir.path().join("sdk.yml");
+        fs::write(&config_path, yaml).expect("Failed to write sdk.yml");
+
+        let fake_hash = "abc123def456";
+
+        // Without --add-missing the function should skip and return Ok(None)
+        let result =
+            update_sdk_yaml_hash(&config_path, ".bashrc", fake_hash, false, false).unwrap();
+        assert_eq!(result, None, "should return None when add_missing is false");
+
+        // The file must be unchanged
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            !content.contains("sha256:"),
+            "sha256 must not be inserted when add_missing is false"
+        );
+
+        // With --add-missing the function should insert the sha256 line and return Ok(Some(true))
+        let result = update_sdk_yaml_hash(&config_path, ".bashrc", fake_hash, false, true).unwrap();
+        assert_eq!(
+            result,
+            Some(true),
+            "should return Some(true) when sha256 is inserted"
+        );
+
+        let updated = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            updated.contains(&format!("sha256: {}", fake_hash)),
+            "sha256 field must be present after add_missing insertion"
+        );
+
+        // A second call with the same hash should report no change (Some(false))
+        let result2 =
+            update_sdk_yaml_hash(&config_path, ".bashrc", fake_hash, false, true).unwrap();
+        assert_eq!(
+            result2,
+            Some(false),
+            "second call with same hash should report no change"
+        );
+    }
+
+    /// Verify that --add-missing in dry_run mode does not modify the file.
+    #[test]
+    fn test_update_sdk_yaml_hash_add_missing_dry_run() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        let yaml = "\
+copy_files:\n\
+  - source: /home/user/.bashrc\n\
+    dest: .bashrc\n";
+
+        let config_path = temp_dir.path().join("sdk.yml");
+        fs::write(&config_path, yaml).expect("Failed to write sdk.yml");
+
+        let result = update_sdk_yaml_hash(&config_path, ".bashrc", "deadbeef", true, true).unwrap();
+        assert_eq!(
+            result,
+            Some(true),
+            "dry_run + add_missing should return Some(true)"
+        );
+
+        // File must remain unchanged in dry_run mode
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            !content.contains("sha256:"),
+            "sha256 must not be inserted in dry_run mode"
         );
     }
 }

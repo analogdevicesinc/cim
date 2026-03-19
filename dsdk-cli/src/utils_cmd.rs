@@ -250,8 +250,9 @@ pub(crate) fn handle_utils_command(utils_command: &UtilsCommand) {
             file,
             dry_run,
             verbose,
+            add_missing,
         } => {
-            handle_copy_files_hash_command(file.as_deref(), *dry_run, *verbose);
+            handle_copy_files_hash_command(file.as_deref(), *dry_run, *verbose, *add_missing);
         }
         UtilsCommand::SyncCopyFiles {
             file,
