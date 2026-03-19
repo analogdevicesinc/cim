@@ -857,6 +857,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
             toolchains: None,
             install: None,
             copy_files: None,

@@ -751,6 +751,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let doc_manager = DocManager::new(workspace_path.to_path_buf());

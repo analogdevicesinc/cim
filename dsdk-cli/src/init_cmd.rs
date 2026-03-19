@@ -1285,6 +1285,10 @@ impl config::SdkConfigCore for FilteredSdkConfig {
     fn flash(&self) -> &Option<config::SdkTarget> {
         &None
     }
+
+    fn variables(&self) -> &Option<std::collections::HashMap<String, String>> {
+        &None
+    }
 }
 
 /// Filter git configurations based on regex pattern

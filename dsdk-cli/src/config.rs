@@ -198,6 +198,7 @@ pub trait SdkConfigCore {
     fn clean(&self) -> &Option<SdkTarget>;
     fn build(&self) -> &Option<SdkTarget>;
     fn flash(&self) -> &Option<SdkTarget>;
+    fn variables(&self) -> &Option<HashMap<String, String>>;
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -485,6 +486,11 @@ pub struct SdkConfig {
     pub build: Option<SdkTarget>,
     #[serde(default, deserialize_with = "deserialize_sdk_target")]
     pub flash: Option<SdkTarget>,
+    /// Optional manifest-level variables. Values may reference host env vars
+    /// using `$VAR` syntax, which are resolved at cim invocation time.
+    /// In YAML commands, use `${{ VAR }}` to reference these variables.
+    #[serde(default)]
+    pub variables: Option<HashMap<String, String>>,
 }
 
 impl SdkConfigCore for SdkConfig {
@@ -522,6 +528,10 @@ impl SdkConfigCore for SdkConfig {
 
     fn flash(&self) -> &Option<SdkTarget> {
         &self.flash
+    }
+
+    fn variables(&self) -> &Option<HashMap<String, String>> {
+        &self.variables
     }
 }
 

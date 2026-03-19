@@ -1498,6 +1498,7 @@ pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
                     clean: full_sdk_config.clean.clone(),
                     build: full_sdk_config.build.clone(),
                     flash: full_sdk_config.flash.clone(),
+                    variables: full_sdk_config.variables.clone(),
                 }
             } else {
                 // No filtering, use original config

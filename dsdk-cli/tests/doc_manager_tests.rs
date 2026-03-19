@@ -77,6 +77,7 @@ fn test_discover_with_default_docs_directory() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -109,6 +110,7 @@ fn test_discover_with_doc_directory() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -141,6 +143,7 @@ fn test_discover_with_documentation_directory() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -173,6 +176,7 @@ fn test_discover_with_documents_directory() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -205,6 +209,7 @@ fn test_discover_with_root_directory() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -237,6 +242,7 @@ fn test_discover_with_user_config_directories() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let user_config = UserConfig {
@@ -274,6 +280,7 @@ fn test_discover_with_per_git_custom_directory() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -313,6 +320,7 @@ fn test_discover_first_match_wins() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -351,6 +359,7 @@ fn test_discover_combined_search_list() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let user_config = UserConfig {
@@ -401,6 +410,7 @@ fn test_discover_empty_strings_skipped() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let user_config = UserConfig {
@@ -437,6 +447,7 @@ fn test_discover_deduplication() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let user_config = UserConfig {
@@ -474,6 +485,7 @@ fn test_discover_no_documentation_found() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -503,6 +515,7 @@ fn test_discover_without_user_config() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -538,6 +551,7 @@ fn test_discover_with_comma_separated_user_dirs() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     // Test comma-separated list with various whitespace patterns
@@ -574,6 +588,7 @@ fn test_discover_with_empty_entries_in_comma_list() {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     };
 
     // Test with empty entries and whitespace-only entries

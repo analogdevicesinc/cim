@@ -155,6 +155,7 @@ pub fn create_minimal_sdk_config(mirror_path: &Path) -> SdkConfig {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     }
 }
 
@@ -181,6 +182,7 @@ pub fn create_basic_sdk_config(mirror_path: &Path, repo_url: &str) -> SdkConfig 
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     }
 }
 
@@ -226,6 +228,7 @@ pub fn create_complex_sdk_config(mirror_path: &Path) -> SdkConfig {
         clean: None,
         build: None,
         flash: None,
+        variables: None,
     }
 }
 

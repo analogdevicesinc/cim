@@ -604,6 +604,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -635,6 +636,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -679,6 +681,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -761,6 +764,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -804,6 +808,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -839,6 +844,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -870,6 +876,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -894,6 +901,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -943,6 +951,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -981,6 +990,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -1012,6 +1022,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -1036,6 +1047,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
@@ -1084,6 +1096,7 @@ mod tests {
             clean: None,
             build: None,
             flash: None,
+            variables: None,
         };
 
         let makefile = generate_makefile_content(&config);
