@@ -287,7 +287,10 @@ Use `relaxed` mode only in trusted networks. It disables certificate validation 
 
 ## Manifest
 
-The `sdk.yml` manifest defines repositories, build targets, and toolchains for an SDK target. The `os-dependencies.yml` defines the host OS packages and the python-dependencies.yml defines the Python packages needed (if any).
+The `sdk.yml` manifest defines repositories, build targets, toolchains, and
+variables for an SDK target. The `os-dependencies.yml` defines the host OS
+packages and the python-dependencies.yml defines the Python packages needed
+(if any).
 
 ### Example
 
@@ -300,6 +303,32 @@ Note that this example, isn't a complete manifest, but rather a demonstration of
 # Possible to opt-out of mirroring with --no-mirror or disable in user config.
 ################################################################################
 mirror: $HOME/tmp/mirror
+
+
+################################################################################
+# Manifest variables — optional key-value pairs that can be reused across
+# the manifest with ${{ VAR }} syntax.
+#
+# Values may reference host environment variables using the standard $VAR
+# syntax; these are resolved when cim loads the manifest.
+#
+# Affected fields: git URLs, toolchain name/url/destination, and
+# copy_files source/destination.
+#
+# Variables are also emitted in the generated Makefile as "VAR ?= value"
+# (weak assignments), so host environment variables or command-line
+# overrides ("make VAR=other") always take precedence.
+#
+# In build/test/clean and per-repo build commands, ${{ VAR }} is rewritten
+# to $(VAR), so Make expands the variable at recipe time rather than at
+# manifest load time.
+#
+# Unresolved ${{ VAR }} references are left unchanged and a warning is
+# printed, making mistakes visible rather than silently ignored.
+################################################################################
+variables:
+  SDK_BASE_URL: https://artifacts.example.com/sdk  # literal base URL
+  SDK_ARCH: $HOST_ARCH                             # resolved from host env var
 
 
 ################################################################################
@@ -357,8 +386,11 @@ toolchains:
 ################################################################################
 # Environment setup commands, these will typically run before the build and
 # test commands.
+# ${{ VAR }} references in commands become $(VAR) in the generated Makefile,
+# so Make expands them at recipe time and they remain overridable.
 envsetup:
   - ln -sf qemu_v8.mk build/Makefile
+  - echo "Building for arch: ${{ SDK_ARCH }}"
 
 # Build commands
 build:
@@ -451,18 +483,21 @@ gits:
 
   # Example: nested repositories - the parent must be cloned first so that
   # children can be placed inside its directory tree.
+  # The URLs here use ${{ SDK_BASE_URL }} defined in the variables section
+  # above. The generated Makefile will expose SDK_BASE_URL as a ?= variable,
+  # so callers can override it without editing the manifest.
   - name: platform
-    url: https://github.com/example/platform.git
+    url: ${{ SDK_BASE_URL }}/platform.git
     commit: main
 
   - name: platform/drivers
-    url: https://github.com/example/drivers.git
+    url: ${{ SDK_BASE_URL }}/drivers.git
     commit: main
     git_depends_on:
       - platform
 
   - name: platform/libs
-    url: https://github.com/example/libs.git
+    url: ${{ SDK_BASE_URL }}/libs.git
     commit: main
     git_depends_on:
       - platform
