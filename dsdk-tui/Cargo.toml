@@ -1,0 +1,15 @@
+[package]
+name = "dsdk-tui"
+version = "1.1.2"
+edition = "2021"
+
+[[bin]]
+name = "cim-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { version = "1", features = ["rt-multi-thread", "process", "sync", "macros", "io-util"] }
+anyhow = "1.0"
+dirs = "6.0"
