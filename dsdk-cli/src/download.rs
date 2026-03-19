@@ -937,7 +937,7 @@ pub fn process_copy_files(
 
         for copy_file in &url_files {
             let url = copy_file.source.clone();
-            let dest = copy_file.dest.clone();
+            let dest = expand_env_vars(&copy_file.dest);
             let dest_path = workspace_path.join(&dest);
             let use_cache = copy_file.cache.unwrap_or(false);
             let use_symlink = copy_file.symlink.unwrap_or(false) && use_cache;
@@ -997,6 +997,7 @@ pub fn process_copy_files(
 
     // Process local files sequentially (fast, no need for parallelization)
     for copy_file in local_files {
+        let expanded_dest = expand_env_vars(&copy_file.dest);
         // Check if source contains wildcards
         if has_wildcards(&copy_file.source) {
             // Wildcard pattern - expand and copy all matches
@@ -1016,7 +1017,7 @@ pub fn process_copy_files(
                     ));
 
                     // Ensure destination is treated as a directory
-                    let dest_base = workspace_path.join(&copy_file.dest);
+                    let dest_base = workspace_path.join(&expanded_dest);
 
                     for (source_path, relative_path) in matches {
                         let dest_path = dest_base.join(&relative_path);
@@ -1025,7 +1026,7 @@ pub fn process_copy_files(
                             &source_path,
                             &dest_path,
                             &format!("{}/{}", copy_file.source, relative_path.display()),
-                            &format!("{}/{}", copy_file.dest, relative_path.display()),
+                            &format!("{}/{}", expanded_dest, relative_path.display()),
                         ) {
                             messages::info(&format!(
                                 "Failed to copy {}: {}",
@@ -1074,10 +1075,10 @@ pub fn process_copy_files(
                 // Source is a directory - copy recursively
                 messages::verbose(&format!(
                     "Copying directory: {} -> {}",
-                    copy_file.source, copy_file.dest
+                    copy_file.source, expanded_dest
                 ));
 
-                let dest_base = workspace_path.join(&copy_file.dest);
+                let dest_base = workspace_path.join(&expanded_dest);
 
                 // Recursively walk the source directory
                 fn copy_dir_contents(
@@ -1132,10 +1133,10 @@ pub fn process_copy_files(
                 }
             } else {
                 // Source is a file - copy single file as before
-                let dest_path = workspace_path.join(&copy_file.dest);
+                let dest_path = workspace_path.join(&expanded_dest);
 
                 if let Err(e) =
-                    copy_single_file(&source_path, &dest_path, &copy_file.source, &copy_file.dest)
+                    copy_single_file(&source_path, &dest_path, &copy_file.source, &expanded_dest)
                 {
                     messages::info(&format!("Failed to copy {}: {}", copy_file.source, e));
                 }

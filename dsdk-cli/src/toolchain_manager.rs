@@ -10,6 +10,7 @@
 // limitations under the License.
 
 use crate::config::{self, ToolchainConfig};
+use crate::workspace::expand_env_vars;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -533,7 +534,9 @@ impl ToolchainManager {
         cert_validation: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Determine destination path
-        let dest_path = self.workspace_path.join(&toolchain.destination);
+        let dest_path = self
+            .workspace_path
+            .join(expand_env_vars(&toolchain.destination));
 
         // Check if destination already exists
         if dest_path.exists() {
@@ -582,7 +585,9 @@ impl ToolchainManager {
         force: bool,
         cert_validation: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let workspace_dest_path = self.workspace_path.join(&toolchain.destination);
+        let workspace_dest_path = self
+            .workspace_path
+            .join(expand_env_vars(&toolchain.destination));
 
         // Determine mirror destination path:
         // - If mirror_destination is explicitly specified, use it (backward compatible)
@@ -803,7 +808,8 @@ impl ToolchainManager {
 
         // Download archive if not already in mirror
         if !archive_path.exists() {
-            let download_url = self.construct_download_url(&toolchain.url, &toolchain.get_name());
+            let expanded_url = expand_env_vars(&toolchain.url);
+            let download_url = self.construct_download_url(&expanded_url, &toolchain.get_name());
             messages::status(&format!(
                 "Downloading {} from {}...",
                 toolchain.get_name(),

@@ -875,7 +875,8 @@ pub(crate) fn handle_sync_files_hash_command(
             continue;
         }
 
-        let dest_path = workspace_path.join(&copy_file.dest);
+        let expanded_dest = expand_env_vars(&copy_file.dest);
+        let dest_path = workspace_path.join(&expanded_dest);
         let use_cache = copy_file.cache.unwrap_or(false);
         let use_symlink = copy_file.symlink.unwrap_or(false) && use_cache;
         let expected_sha256 = copy_file.sha256.clone();
@@ -944,7 +945,8 @@ pub(crate) fn handle_sync_files_hash_command(
             config_source_dir.join(&expanded_source)
         };
 
-        let dest_path = workspace_path.join(&copy_file.dest);
+        let expanded_dest = expand_env_vars(&copy_file.dest);
+        let dest_path = workspace_path.join(&expanded_dest);
 
         messages::status(&format!(
             "{}Processing: {} -> {}",
