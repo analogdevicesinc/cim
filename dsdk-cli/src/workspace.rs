@@ -554,6 +554,85 @@ pub fn expand_env_vars(path: &str) -> String {
     chars.into_iter().collect()
 }
 
+/// Resolve manifest variable values by expanding host env vars within them.
+///
+/// Each value in the raw map is passed through [`expand_env_vars`]. If a value
+/// still contains a `$` character after expansion, the referenced host env var
+/// was not set — a warning is logged so the user knows the variable is unresolved.
+///
+/// # Example
+///
+/// ```text
+/// variables:
+///   DOCKER_DEFAULT_PLATFORM: $HOST_DEFAULT_PLATFORM   # resolved from env
+///   SDK_BASE_URL: https://example.com/sdk              # literal
+/// ```
+pub fn resolve_variables(
+    raw: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    raw.iter()
+        .map(|(key, value)| {
+            let resolved = expand_env_vars(value);
+            if resolved.contains('$') {
+                messages::info(&format!(
+                    "Warning: manifest variable '{}' has an unresolved reference in value: '{}'",
+                    key, resolved
+                ));
+            }
+            (key.clone(), resolved)
+        })
+        .collect()
+}
+
+/// Expand `${{ VAR }}` manifest variable references in a string.
+///
+/// Looks up each `VAR` in the provided resolved variables map.  Unknown
+/// variables are left as-is so that the caller can detect them or pass them
+/// through to a later stage.
+///
+/// # Example
+///
+/// ```
+/// use std::collections::HashMap;
+/// use dsdk_cli::workspace::expand_manifest_vars;
+///
+/// let mut vars = HashMap::new();
+/// vars.insert("PLATFORM".to_string(), "linux/amd64".to_string());
+///
+/// let result = expand_manifest_vars("DOCKER_DEFAULT_PLATFORM=${{ PLATFORM }}", &vars);
+/// assert_eq!(result, "DOCKER_DEFAULT_PLATFORM=linux/amd64");
+///
+/// // Unknown variables are left unchanged
+/// let result = expand_manifest_vars("path/${{ UNKNOWN }}/file", &vars);
+/// assert_eq!(result, "path/${{ UNKNOWN }}/file");
+/// ```
+pub fn expand_manifest_vars(s: &str, vars: &std::collections::HashMap<String, String>) -> String {
+    let mut result = s.to_string();
+    // Repeatedly scan for ${{ ... }} patterns
+    let mut search_start = 0;
+    while let Some(open) = result[search_start..].find("${{") {
+        let open_abs = search_start + open;
+        let after_open = open_abs + 3; // skip "${{"
+        if let Some(close_rel) = result[after_open..].find("}}") {
+            let close_abs = after_open + close_rel;
+            let var_name = result[after_open..close_abs].trim();
+            if let Some(value) = vars.get(var_name) {
+                // Substitute the entire "${{ VAR }}" token with the value
+                let token_end = close_abs + 2; // skip "}}"
+                result.replace_range(open_abs..token_end, value);
+                // Next search from the insertion point so chained vars work
+                search_start = open_abs + value.len();
+            } else {
+                // Unknown variable — skip past this token to avoid infinite loop
+                search_start = after_open;
+            }
+        } else {
+            break; // No closing "}}", stop searching
+        }
+    }
+    result
+}
+
 /// Load SDK config from a path and apply user config overrides if available
 ///
 /// This function encapsulates the common pattern of:
@@ -615,6 +694,49 @@ pub fn load_config_with_user_overrides(
         ));
     }
     sdk_config.mirror = expanded_mirror;
+
+    // Expand environment variables in git repository URLs
+    for git in &mut sdk_config.gits {
+        let expanded = expand_env_vars(&git.url);
+        if expanded != git.url {
+            if verbose {
+                messages::verbose(&format!("Expanded git URL: {} -> {}", git.url, expanded));
+            }
+            git.url = expanded;
+        }
+    }
+
+    // Expand manifest ${{ VAR }} variables in path/URL fields
+    if let Some(raw_vars) = sdk_config.variables.clone() {
+        let vars = resolve_variables(&raw_vars);
+
+        // Expand in git URLs
+        for git in &mut sdk_config.gits {
+            git.url = expand_manifest_vars(&git.url, &vars);
+        }
+
+        // Expand in toolchain URL and destination
+        if let Some(ref mut toolchains) = sdk_config.toolchains {
+            for tc in toolchains.iter_mut() {
+                if let Some(ref name) = tc.name.clone() {
+                    tc.name = Some(expand_manifest_vars(name, &vars));
+                }
+                tc.url = expand_manifest_vars(&tc.url.clone(), &vars);
+                tc.destination = expand_manifest_vars(&tc.destination.clone(), &vars);
+                if let Some(ref md) = tc.mirror_destination.clone() {
+                    tc.mirror_destination = Some(expand_manifest_vars(md, &vars));
+                }
+            }
+        }
+
+        // Expand in copy_files source and dest
+        if let Some(ref mut copy_files) = sdk_config.copy_files {
+            for cf in copy_files.iter_mut() {
+                cf.source = expand_manifest_vars(&cf.source.clone(), &vars);
+                cf.dest = expand_manifest_vars(&cf.dest.clone(), &vars);
+            }
+        }
+    }
 
     Ok(sdk_config)
 }
@@ -870,6 +992,76 @@ mod tests {
 
         // Cleanup
         std::env::remove_var("TEST_MIRROR_VAR");
+    }
+
+    #[test]
+    fn test_expand_manifest_vars_known_var() {
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("PLATFORM".to_string(), "linux/amd64".to_string());
+        vars.insert("BASE_URL".to_string(), "https://example.com".to_string());
+
+        // Basic substitution
+        assert_eq!(
+            expand_manifest_vars("DOCKER_DEFAULT_PLATFORM=${{ PLATFORM }}", &vars),
+            "DOCKER_DEFAULT_PLATFORM=linux/amd64"
+        );
+
+        // Substitution inside a URL
+        assert_eq!(
+            expand_manifest_vars("${{ BASE_URL }}/tool.tar.gz", &vars),
+            "https://example.com/tool.tar.gz"
+        );
+
+        // Multiple vars in one string
+        assert_eq!(
+            expand_manifest_vars("${{ BASE_URL }}/${{ PLATFORM }}/file", &vars),
+            "https://example.com/linux/amd64/file"
+        );
+    }
+
+    #[test]
+    fn test_expand_manifest_vars_unknown_var_unchanged() {
+        let vars = std::collections::HashMap::new();
+
+        // Unknown vars are left as-is
+        assert_eq!(
+            expand_manifest_vars("path/${{ UNKNOWN }}/file", &vars),
+            "path/${{ UNKNOWN }}/file"
+        );
+    }
+
+    #[test]
+    fn test_resolve_variables_literal() {
+        let mut raw = std::collections::HashMap::new();
+        raw.insert(
+            "SDK_BASE_URL".to_string(),
+            "https://example.com/sdk".to_string(),
+        );
+
+        let resolved = resolve_variables(&raw);
+        assert_eq!(
+            resolved.get("SDK_BASE_URL").map(String::as_str),
+            Some("https://example.com/sdk")
+        );
+    }
+
+    #[test]
+    fn test_resolve_variables_from_host_env() {
+        std::env::set_var("TEST_HOST_PLATFORM", "linux/arm64");
+
+        let mut raw = std::collections::HashMap::new();
+        raw.insert(
+            "DOCKER_DEFAULT_PLATFORM".to_string(),
+            "$TEST_HOST_PLATFORM".to_string(),
+        );
+
+        let resolved = resolve_variables(&raw);
+        assert_eq!(
+            resolved.get("DOCKER_DEFAULT_PLATFORM").map(String::as_str),
+            Some("linux/arm64")
+        );
+
+        std::env::remove_var("TEST_HOST_PLATFORM");
     }
 
     #[test]

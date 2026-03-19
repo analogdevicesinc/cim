@@ -14,8 +14,8 @@ use dsdk_cli::download::{
     DownloadConfig,
 };
 use dsdk_cli::workspace::{
-    copy_dir_recursive, expand_config_mirror_path, expand_env_vars, get_current_workspace, is_url,
-    resolve_config_source_dir_from_marker,
+    copy_dir_recursive, expand_config_mirror_path, expand_env_vars, expand_manifest_vars,
+    get_current_workspace, is_url, resolve_config_source_dir_from_marker, resolve_variables,
 };
 use dsdk_cli::{config, git_operations, messages};
 use regex::Regex;
@@ -614,13 +614,24 @@ pub(crate) fn handle_copy_files_hash_command(
     }
 
     // Load SDK config (without user overrides)
-    let sdk_config = match config::load_config(&config_path) {
+    let mut sdk_config = match config::load_config(&config_path) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Error loading config: {}", e));
             return;
         }
     };
+
+    // Expand manifest ${{ VAR }} variables in copy_files source and dest
+    if let Some(raw_vars) = sdk_config.variables.clone() {
+        let vars = resolve_variables(&raw_vars);
+        if let Some(ref mut copy_files) = sdk_config.copy_files {
+            for cf in copy_files.iter_mut() {
+                cf.source = expand_manifest_vars(&cf.source.clone(), &vars);
+                cf.dest = expand_manifest_vars(&cf.dest.clone(), &vars);
+            }
+        }
+    }
 
     // Get copy_files configuration (direct field access)
     let Some(copy_files) = &sdk_config.copy_files else {
@@ -805,13 +816,24 @@ pub(crate) fn handle_sync_files_hash_command(
     }
 
     // Load SDK config (without user overrides for sync operation)
-    let sdk_config = match config::load_config(&config_path) {
+    let mut sdk_config = match config::load_config(&config_path) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Error loading config: {}", e));
             return;
         }
     };
+
+    // Expand manifest ${{ VAR }} variables in copy_files source and dest
+    if let Some(raw_vars) = sdk_config.variables.clone() {
+        let vars = resolve_variables(&raw_vars);
+        if let Some(ref mut copy_files) = sdk_config.copy_files {
+            for cf in copy_files.iter_mut() {
+                cf.source = expand_manifest_vars(&cf.source.clone(), &vars);
+                cf.dest = expand_manifest_vars(&cf.dest.clone(), &vars);
+            }
+        }
+    }
 
     // Get copy_files configuration
     let Some(copy_files) = &sdk_config.copy_files else {
@@ -1329,5 +1351,145 @@ gits:
             let result = Regex::new(pattern);
             assert!(result.is_err(), "Pattern '{}' should be invalid", pattern);
         }
+    }
+
+    /// Verify that manifest variables are resolved in copy_files entries before
+    /// sync-copy-files processes them, so ${{ VAR }} paths reach the file system
+    /// layer already expanded.
+    #[test]
+    fn test_sync_copy_files_manifest_var_expansion() {
+        use dsdk_cli::workspace::{expand_manifest_vars, resolve_variables};
+        use std::collections::HashMap;
+
+        // Simulate the variables section of an sdk.yml
+        let mut raw_vars: HashMap<String, String> = HashMap::new();
+        raw_vars.insert("HOME_FOLDER".to_string(), "/home/testuser".to_string());
+        raw_vars.insert("PLATFORM".to_string(), "linux/amd64".to_string());
+
+        let vars = resolve_variables(&raw_vars);
+
+        // copy_files source containing a manifest variable
+        let source = "${{ HOME_FOLDER }}/.bashrc".to_string();
+        let dest = "configs/${{ PLATFORM }}/init.sh".to_string();
+
+        let expanded_source = expand_manifest_vars(&source, &vars);
+        let expanded_dest = expand_manifest_vars(&dest, &vars);
+
+        assert_eq!(
+            expanded_source, "/home/testuser/.bashrc",
+            "source path must have ${{{{ HOME_FOLDER }}}} expanded"
+        );
+        assert_eq!(
+            expanded_dest, "configs/linux/amd64/init.sh",
+            "dest path must have ${{{{ PLATFORM }}}} expanded"
+        );
+
+        // An unreferenced variable must be left unchanged (not silently swallowed)
+        let unknown = "${{ UNKNOWN_VAR }}/file".to_string();
+        assert_eq!(
+            expand_manifest_vars(&unknown, &vars),
+            "${{ UNKNOWN_VAR }}/file",
+            "unknown variables must remain unchanged"
+        );
+    }
+
+    /// Verify that manifest variables are resolved in copy_files entries before
+    /// hash-copy-files processes them, so ${{ VAR }} paths reach ensure_file_in_mirror
+    /// already expanded.
+    #[test]
+    fn test_hash_copy_files_manifest_var_expansion() {
+        use dsdk_cli::workspace::{expand_manifest_vars, resolve_variables};
+        use std::collections::HashMap;
+
+        let mut raw_vars: HashMap<String, String> = HashMap::new();
+        raw_vars.insert("HOME_FOLDER".to_string(), "/home/testuser".to_string());
+        raw_vars.insert(
+            "ARTIFACTS".to_string(),
+            "https://example.com/files".to_string(),
+        );
+
+        let vars = resolve_variables(&raw_vars);
+
+        // Local path with manifest variable
+        let source = "${{ HOME_FOLDER }}/.bashrc".to_string();
+        assert_eq!(
+            expand_manifest_vars(&source, &vars),
+            "/home/testuser/.bashrc",
+            "local source must have ${{{{ HOME_FOLDER }}}} expanded before path resolution"
+        );
+
+        // URL with manifest variable
+        let url_source = "${{ ARTIFACTS }}/tool.tar.gz".to_string();
+        assert_eq!(
+            expand_manifest_vars(&url_source, &vars),
+            "https://example.com/files/tool.tar.gz",
+            "URL source must have manifest variable expanded"
+        );
+
+        // Unknown variable must remain unchanged, not silently become empty
+        let unknown = "${{ NOT_DEFINED }}/config".to_string();
+        assert_eq!(
+            expand_manifest_vars(&unknown, &vars),
+            "${{ NOT_DEFINED }}/config",
+            "unresolved variables must be left as-is"
+        );
+    }
+
+    /// Verify that ensure_file_in_mirror returns the source path successfully
+    /// when given a pre-expanded absolute path to an existing file.
+    #[test]
+    fn test_ensure_file_in_mirror_expanded_source() {
+        use dsdk_cli::config::CopyFileConfig;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let mirror_dir = TempDir::new().expect("Failed to create mirror dir");
+
+        // Create a real source file
+        let source_file = temp_dir.path().join("test_source.txt");
+        fs::write(&source_file, "hello").expect("Failed to write test file");
+
+        let copy_file = CopyFileConfig {
+            source: source_file.to_string_lossy().to_string(),
+            dest: "output.txt".to_string(),
+            cache: None,
+            symlink: None,
+            sha256: None,
+            post_data: None,
+        };
+
+        let result = ensure_file_in_mirror(&copy_file, temp_dir.path(), mirror_dir.path());
+        assert!(
+            result.is_ok(),
+            "ensure_file_in_mirror must succeed for an existing absolute path: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), source_file);
+    }
+
+    /// Verify that ensure_file_in_mirror returns an error for an unexpanded
+    /// manifest variable token, confirming that calling code must expand variables
+    /// before passing CopyFileConfig entries to this helper.
+    #[test]
+    fn test_ensure_file_in_mirror_unexpanded_var_returns_error() {
+        use dsdk_cli::config::CopyFileConfig;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let mirror_dir = TempDir::new().expect("Failed to create mirror dir");
+
+        let copy_file = CopyFileConfig {
+            source: "${{ HOME_FOLDER }}/.bashrc".to_string(),
+            dest: ".bashrc".to_string(),
+            cache: None,
+            symlink: None,
+            sha256: None,
+            post_data: None,
+        };
+
+        let result = ensure_file_in_mirror(&copy_file, temp_dir.path(), mirror_dir.path());
+        assert!(
+            result.is_err(),
+            "ensure_file_in_mirror must return an error when source contains an unexpanded \
+             manifest variable"
+        );
     }
 }

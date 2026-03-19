@@ -24,8 +24,9 @@ use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::download::{copy_yaml_files_to_workspace, process_copy_files};
 use dsdk_cli::workspace::{
     create_workspace_marker, download_config_from_url, expand_config_mirror_path, expand_env_vars,
-    get_current_workspace, get_default_source, is_url, load_config_with_user_overrides,
-    resolve_target_config_from_git, CreateWorkspaceMarkerParams,
+    expand_manifest_vars, get_current_workspace, get_default_source, is_url,
+    load_config_with_user_overrides, resolve_target_config_from_git, resolve_variables,
+    CreateWorkspaceMarkerParams,
 };
 use dsdk_cli::{
     config, doc_manager, git_operations, messages, toolchain_manager, vscode_tasks_manager,
@@ -873,6 +874,44 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         messages::verbose(&format!("Mirror: {}", expanded_mirror.display()));
     }
     sdk_config.mirror = expanded_mirror;
+
+    // Expand environment variables in git repository URLs
+    for git in &mut sdk_config.gits {
+        let expanded = expand_env_vars(&git.url);
+        if expanded != git.url {
+            messages::verbose(&format!("Expanded git URL: {} -> {}", git.url, expanded));
+            git.url = expanded;
+        }
+    }
+
+    // Expand manifest ${{ VAR }} variables in path/URL fields
+    if let Some(raw_vars) = sdk_config.variables.clone() {
+        let vars = resolve_variables(&raw_vars);
+
+        for git in &mut sdk_config.gits {
+            git.url = expand_manifest_vars(&git.url, &vars);
+        }
+
+        if let Some(ref mut toolchains) = sdk_config.toolchains {
+            for tc in toolchains.iter_mut() {
+                if let Some(ref name) = tc.name.clone() {
+                    tc.name = Some(expand_manifest_vars(name, &vars));
+                }
+                tc.url = expand_manifest_vars(&tc.url.clone(), &vars);
+                tc.destination = expand_manifest_vars(&tc.destination.clone(), &vars);
+                if let Some(ref md) = tc.mirror_destination.clone() {
+                    tc.mirror_destination = Some(expand_manifest_vars(md, &vars));
+                }
+            }
+        }
+
+        if let Some(ref mut copy_files) = sdk_config.copy_files {
+            for cf in copy_files.iter_mut() {
+                cf.source = expand_manifest_vars(&cf.source.clone(), &vars);
+                cf.dest = expand_manifest_vars(&cf.dest.clone(), &vars);
+            }
+        }
+    }
 
     // Compile regex pattern if provided
     let match_regex = if let Some(pattern) = config.match_pattern {
