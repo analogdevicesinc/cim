@@ -82,6 +82,26 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T
         }
     }
 
+    // Emit manifest variables as Make ?= assignments so host env vars override them
+    let vars: std::collections::HashMap<String, String> =
+        if let Some(raw_vars) = sdk_config.variables() {
+            dsdk_cli::workspace::resolve_variables(raw_vars)
+        } else {
+            std::collections::HashMap::new()
+        };
+
+    if !vars.is_empty() {
+        makefile
+            .push_str("# Manifest variables — override with host env vars before invoking make\n");
+        // Sort for deterministic output
+        let mut sorted: Vec<_> = vars.iter().collect();
+        sorted.sort_by_key(|(k, _)| k.as_str());
+        for (key, value) in sorted {
+            makefile.push_str(&format!("{} ?= {}\n", key, value));
+        }
+        makefile.push('\n');
+    }
+
     // Add .PHONY declarations
     let mut phony_targets = vec!["all"];
 
@@ -182,6 +202,31 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T
     makefile
 }
 
+/// Render a command string for inclusion in a Makefile recipe.
+///
+/// Converts manifest variable references `${{ VAR }}` to Make variable
+/// references `$(VAR)`.  Other content (e.g. existing `$(MAKE)`) is left
+/// unchanged.
+pub(crate) fn render_command_for_makefile(cmd: &str) -> String {
+    let mut result = cmd.to_string();
+    let mut search_start = 0;
+    while let Some(open) = result[search_start..].find("${{") {
+        let open_abs = search_start + open;
+        let after_open = open_abs + 3;
+        if let Some(close_rel) = result[after_open..].find("}}") {
+            let close_abs = after_open + close_rel;
+            let var_name = result[after_open..close_abs].trim();
+            let make_ref = format!("$({})", var_name);
+            let token_end = close_abs + 2;
+            result.replace_range(open_abs..token_end, &make_ref);
+            search_start = open_abs + make_ref.len();
+        } else {
+            break;
+        }
+    }
+    result
+}
+
 /// Add a single target to the Makefile
 pub(crate) fn add_makefile_target(makefile: &mut String, git: &config::GitConfig) {
     // Add .PHONY declaration for this target
@@ -203,7 +248,8 @@ pub(crate) fn add_makefile_target(makefile: &mut String, git: &config::GitConfig
     // Add build commands
     if let Some(build_cmds) = &git.build {
         for cmd in build_cmds {
-            let trimmed = cmd.trim();
+            let rendered = render_command_for_makefile(cmd);
+            let trimmed = rendered.trim();
             if trimmed.starts_with('#') {
                 // Write as a Makefile comment (with tab like other commands)
                 makefile.push_str(&format!(
@@ -211,7 +257,7 @@ pub(crate) fn add_makefile_target(makefile: &mut String, git: &config::GitConfig
                     trimmed.strip_prefix('#').unwrap().trim_start()
                 ));
             } else {
-                makefile.push_str(&format!("\t{}\n", cmd));
+                makefile.push_str(&format!("\t{}\n", rendered));
             }
         }
     } else {
@@ -230,7 +276,8 @@ pub(crate) fn add_envsetup_target(makefile: &mut String, envsetup_target: &confi
     }
 
     for command in envsetup_target.commands() {
-        let trimmed = command.trim();
+        let rendered = render_command_for_makefile(command);
+        let trimmed = rendered.trim();
 
         // Skip comment lines (starting with #)
         if trimmed.starts_with('#') {
@@ -250,7 +297,7 @@ pub(crate) fn add_envsetup_target(makefile: &mut String, envsetup_target: &confi
         }
 
         // Add regular command
-        makefile.push_str(&format!("\t{}\n", command));
+        makefile.push_str(&format!("\t{}\n", rendered));
     }
 
     makefile.push('\n');
@@ -266,7 +313,8 @@ pub(crate) fn add_test_target(makefile: &mut String, test_target: &config::SdkTa
     }
 
     for command in test_target.commands() {
-        let trimmed = command.trim();
+        let rendered = render_command_for_makefile(command);
+        let trimmed = rendered.trim();
 
         // Skip comment lines (starting with #)
         if trimmed.starts_with('#') {
@@ -286,7 +334,7 @@ pub(crate) fn add_test_target(makefile: &mut String, test_target: &config::SdkTa
         }
 
         // Add regular command
-        makefile.push_str(&format!("\t{}\n", command));
+        makefile.push_str(&format!("\t{}\n", rendered));
     }
 
     makefile.push('\n');
@@ -302,7 +350,8 @@ pub(crate) fn add_clean_target(makefile: &mut String, clean_target: &config::Sdk
     }
 
     for command in clean_target.commands() {
-        let trimmed = command.trim();
+        let rendered = render_command_for_makefile(command);
+        let trimmed = rendered.trim();
 
         // Skip comment lines (starting with #)
         if trimmed.starts_with('#') {
@@ -322,7 +371,7 @@ pub(crate) fn add_clean_target(makefile: &mut String, clean_target: &config::Sdk
         }
 
         // Add regular command
-        makefile.push_str(&format!("\t{}\n", command));
+        makefile.push_str(&format!("\t{}\n", rendered));
     }
 
     makefile.push('\n');
@@ -338,7 +387,8 @@ pub(crate) fn add_build_target(makefile: &mut String, build_target: &config::Sdk
     }
 
     for command in build_target.commands() {
-        let trimmed = command.trim();
+        let rendered = render_command_for_makefile(command);
+        let trimmed = rendered.trim();
 
         // Skip comment lines (starting with #)
         if trimmed.starts_with('#') {
@@ -358,7 +408,7 @@ pub(crate) fn add_build_target(makefile: &mut String, build_target: &config::Sdk
         }
 
         // Add regular command
-        makefile.push_str(&format!("\t{}\n", command));
+        makefile.push_str(&format!("\t{}\n", rendered));
     }
 
     makefile.push('\n');
@@ -374,7 +424,8 @@ pub(crate) fn add_flash_target(makefile: &mut String, flash_target: &config::Sdk
     }
 
     for command in flash_target.commands() {
-        let trimmed = command.trim();
+        let rendered = render_command_for_makefile(command);
+        let trimmed = rendered.trim();
 
         // Skip comment lines (starting with #)
         if trimmed.starts_with('#') {
@@ -394,7 +445,7 @@ pub(crate) fn add_flash_target(makefile: &mut String, flash_target: &config::Sdk
         }
 
         // Add regular command
-        makefile.push_str(&format!("\t{}\n", command));
+        makefile.push_str(&format!("\t{}\n", rendered));
     }
 
     makefile.push('\n');
@@ -505,15 +556,16 @@ pub(crate) fn add_install_target(makefile: &mut String, install: &config::Instal
                 makefile.push_str("\t  ( \\\n");
 
                 for cmd in build_cmds {
-                    let trimmed = cmd.trim();
+                    let rendered = render_command_for_makefile(cmd);
+                    let trimmed = rendered.trim();
                     if !trimmed.is_empty() && !trimmed.starts_with('#') {
                         // Check if this is a complete single-line control structure
                         if contains_complete_control_structure(trimmed) {
                             // Single-line if/then/else/fi or while/for - add semicolon at end
                             if !trimmed.ends_with(';') {
-                                makefile.push_str(&format!("\t    {}; \\\n", cmd));
+                                makefile.push_str(&format!("\t    {}; \\\n", rendered));
                             } else {
-                                makefile.push_str(&format!("\t    {} \\\n", cmd));
+                                makefile.push_str(&format!("\t    {} \\\n", rendered));
                             }
                         } else {
                             // Multi-line control structure or regular command
@@ -524,9 +576,9 @@ pub(crate) fn add_install_target(makefile: &mut String, install: &config::Instal
                                 && !trimmed.ends_with('\\');
 
                             if needs_semicolon {
-                                makefile.push_str(&format!("\t    {}; \\\n", cmd));
+                                makefile.push_str(&format!("\t    {}; \\\n", rendered));
                             } else {
-                                makefile.push_str(&format!("\t    {} \\\n", cmd));
+                                makefile.push_str(&format!("\t    {} \\\n", rendered));
                             }
                         }
                     }
@@ -536,13 +588,14 @@ pub(crate) fn add_install_target(makefile: &mut String, install: &config::Instal
             } else {
                 // No control structures - use original && logic
                 for cmd in build_cmds {
-                    let trimmed = cmd.trim();
+                    let rendered = render_command_for_makefile(cmd);
+                    let trimmed = rendered.trim();
                     if !trimmed.is_empty() && !trimmed.starts_with('#') {
                         // Wrap commands containing 'cd' in subshells to avoid affecting subsequent commands
                         if trimmed.contains(" cd ") || trimmed.starts_with("cd ") {
-                            makefile.push_str(&format!("\t  ({}) && \\\n", cmd));
+                            makefile.push_str(&format!("\t  ({}) && \\\n", rendered));
                         } else {
-                            makefile.push_str(&format!("\t  {} && \\\n", cmd));
+                            makefile.push_str(&format!("\t  {} && \\\n", rendered));
                         }
                     }
                 }
@@ -570,14 +623,15 @@ pub(crate) fn add_install_target(makefile: &mut String, install: &config::Instal
         // No sentinel, just run commands
         if let Some(build_cmds) = &install.commands {
             for cmd in build_cmds {
-                let trimmed = cmd.trim();
+                let rendered = render_command_for_makefile(cmd);
+                let trimmed = rendered.trim();
                 if trimmed.starts_with('#') {
                     makefile.push_str(&format!(
                         "\t#{}\n",
                         trimmed.strip_prefix('#').unwrap().trim_start()
                     ));
                 } else {
-                    makefile.push_str(&format!("\t{}\n", cmd));
+                    makefile.push_str(&format!("\t{}\n", rendered));
                 }
             }
         }
@@ -1114,5 +1168,91 @@ mod tests {
         // Check that commands are properly formatted
         assert!(makefile.contains("\tmake configure"));
         assert!(makefile.contains("\tmake test"));
+    }
+
+    #[test]
+    fn test_render_command_for_makefile_substitution() {
+        // ${{ VAR }} becomes $(VAR)
+        assert_eq!(
+            render_command_for_makefile("DOCKER_DEFAULT_PLATFORM=${{ PLATFORM }} ./run.sh"),
+            "DOCKER_DEFAULT_PLATFORM=$(PLATFORM) ./run.sh"
+        );
+
+        // Multiple vars in one command
+        assert_eq!(
+            render_command_for_makefile("${{ CMD }} --platform ${{ PLATFORM }}"),
+            "$(CMD) --platform $(PLATFORM)"
+        );
+
+        // Existing Make variable references are preserved
+        assert_eq!(
+            render_command_for_makefile("$(MAKE) -C build all $(MAKEFLAGS)"),
+            "$(MAKE) -C build all $(MAKEFLAGS)"
+        );
+
+        // Command without any variables is unchanged
+        assert_eq!(
+            render_command_for_makefile("cd repo && ./build.sh"),
+            "cd repo && ./build.sh"
+        );
+
+        // Unclosed ${{ is left unchanged
+        assert_eq!(
+            render_command_for_makefile("echo ${{ NOCLOSE"),
+            "echo ${{ NOCLOSE"
+        );
+    }
+
+    #[test]
+    fn test_generate_makefile_with_variables() {
+        let mut vars = std::collections::HashMap::new();
+        vars.insert(
+            "DOCKER_DEFAULT_PLATFORM".to_string(),
+            "linux/amd64".to_string(),
+        );
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: Some(vec![config::InstallConfig {
+                name: "devcontainer".to_string(),
+                depends_on: None,
+                sentinel: Some("opt/.devcontainer-installed".to_string()),
+                commands: Some(vec![
+                    "cd repo && DOCKER_DEFAULT_PLATFORM=${{ DOCKER_DEFAULT_PLATFORM }} ./run.sh --new".to_string(),
+                ]),
+            }]),
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![],
+            copy_files: None,
+            makefile_include: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(vars),
+        };
+
+        let makefile = generate_makefile_content(&config);
+
+        // ?= assignment emitted for the manifest variable
+        assert!(
+            makefile.contains("DOCKER_DEFAULT_PLATFORM ?= linux/amd64"),
+            "Expected ?= assignment in Makefile, got:\n{}",
+            makefile
+        );
+
+        // ${{ VAR }} in install command becomes $(VAR)
+        assert!(
+            makefile.contains("$(DOCKER_DEFAULT_PLATFORM)"),
+            "Expected Make variable reference in command, got:\n{}",
+            makefile
+        );
+
+        // The raw ${{ }} syntax should NOT appear in the output
+        assert!(
+            !makefile.contains("${{"),
+            "Raw manifest variable syntax should not appear in Makefile"
+        );
     }
 }
