@@ -73,6 +73,7 @@ pub fn fetch_versions(source: &str, target: &str) -> Result<Vec<String>> {
 }
 
 /// Build and execute the cim init command
+#[allow(clippy::too_many_arguments)]
 pub fn run_init(
     target: &str,
     source: &str,

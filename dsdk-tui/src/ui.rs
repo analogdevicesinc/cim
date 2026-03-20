@@ -2,6 +2,9 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -11,8 +14,8 @@
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
-    style::{Color, Modifier, Style, Stylize},
-    text::{Line, Text},
+    style::Style,
+    text::{Line, Span, Text},
     widgets::{
         Block, Borders, Clear, HighlightSpacing, List, ListItem, Paragraph, Scrollbar,
         ScrollbarOrientation, Wrap,
@@ -21,9 +24,13 @@ use ratatui::{
 };
 
 use crate::app::{App, Focus, InitPopupState, PopupFocus};
+use crate::theme::{spinner, symbols, theme, Theme};
+use ratatui::prelude::Stylize;
+use ratatui::style::Modifier;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    let _theme = theme();
 
     // Main layout
     // - Source: 5 rows (with padding)
@@ -55,68 +62,109 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Draw popup if open (borrow popup separately to avoid borrow issues)
     let popup_ref = app.init_popup.as_ref();
     if let Some(popup) = popup_ref {
+        // Draw overlay to create depth
+        draw_popup_overlay(frame, area);
         draw_init_popup(frame, area, popup);
     }
 }
 
 fn draw_source_input(frame: &mut Frame, area: Rect, app: &App) {
-    let input_style = if app.focus == Focus::SourceInput {
-        Style::default().fg(Color::Yellow)
+    let theme = theme();
+    let is_focused = app.focus == Focus::SourceInput;
+
+    let border_style = if is_focused {
+        theme.focus_border()
     } else {
-        Style::default()
+        theme.unfocus_border()
     };
 
+    let title = format!(" {} Source ", symbols::icons::SOURCE);
+
     let block = Block::default()
-        .title(" Source ")
+        .title(title)
+        .title_style(theme.title())
         .borders(Borders::ALL)
-        .border_style(input_style)
+        .border_type(Theme::BORDER_TYPE)
+        .border_style(border_style)
         .padding(ratatui::widgets::Padding::new(1, 1, 1, 1));
 
-    let input_text = if app.focus == Focus::SourceInput {
-        format!("{}_", app.source_input)
+    let input_text = if is_focused {
+        format!("{}▌", app.source_input)
     } else {
         app.source_input.clone()
     };
 
-    let paragraph = Paragraph::new(input_text).block(block);
+    let style = if is_focused {
+        theme.input(true)
+    } else {
+        theme.input(false)
+    };
+
+    let paragraph = Paragraph::new(input_text).block(block).style(style);
     frame.render_widget(paragraph, area);
 }
 
 fn draw_target_list(frame: &mut Frame, area: Rect, app: &App) {
-    let list_style = if app.focus == Focus::TargetList {
-        Style::default().fg(Color::Yellow)
+    let theme = theme();
+    let is_focused = app.focus == Focus::TargetList;
+
+    let border_style = if is_focused {
+        theme.focus_border()
     } else {
-        Style::default()
+        theme.unfocus_border()
+    };
+
+    let target_count = app.targets.len();
+    let title = if target_count > 0 {
+        format!(
+            " {} Available Targets [{}] ",
+            symbols::icons::TARGET,
+            target_count
+        )
+    } else {
+        format!(" {} Available Targets ", symbols::icons::TARGET)
     };
 
     let block = Block::default()
-        .title(" Available Targets ")
+        .title(title)
+        .title_style(theme.title())
         .borders(Borders::ALL)
-        .border_style(list_style)
-        .padding(ratatui::widgets::Padding::new(1, 1, 1, 1)); // left, right, top, bottom padding
+        .border_type(Theme::BORDER_TYPE)
+        .border_style(border_style)
+        .padding(ratatui::widgets::Padding::new(1, 1, 1, 1));
 
     // Show error message if there is one
     if let Some(ref error) = app.error_message {
-        let error_text = format!("Error: {}\n\nPress 'r' to retry.", error);
+        let error_text = format!(
+            "{} Error:\n\n{}\n\nPress [{}] to retry.",
+            symbols::icons::ERROR,
+            error,
+            "r"
+        );
         let error_para = Paragraph::new(error_text)
             .block(block)
-            .style(Style::default().fg(Color::Red))
+            .style(theme.error())
             .alignment(Alignment::Center);
         frame.render_widget(error_para, area);
         return;
     }
 
     if app.is_loading {
-        let loading = Paragraph::new("Loading targets...")
+        let spinner = spinner(app.status_message.as_ref().map(|s| s.len()).unwrap_or(0));
+        let loading_text = format!("{} Loading targets...", spinner);
+        let loading = Paragraph::new(loading_text)
             .block(block)
+            .style(theme.loading())
             .alignment(Alignment::Center);
         frame.render_widget(loading, area);
         return;
     }
 
     if app.targets.is_empty() {
-        let empty = Paragraph::new("No targets found. Press 'r' to refresh.")
+        let empty_text = format!("No targets found.\n\nPress [{}] to refresh.", "r");
+        let empty = Paragraph::new(empty_text)
             .block(block)
+            .style(theme.muted())
             .alignment(Alignment::Center);
         frame.render_widget(empty, area);
         return;
@@ -129,7 +177,7 @@ fn draw_target_list(frame: &mut Frame, area: Rect, app: &App) {
         .target_scroll_offset
         .min(total_targets.saturating_sub(visible_count));
 
-    // Create visible items with scrollbar indicators
+    // Create visible items with modern styling
     let items: Vec<ListItem> = app
         .targets
         .iter()
@@ -137,28 +185,30 @@ fn draw_target_list(frame: &mut Frame, area: Rect, app: &App) {
         .skip(scroll_offset)
         .take(visible_count)
         .map(|(i, target)| {
-            let style = if i == app.selected_target {
-                Style::default()
-                    .bg(Color::Blue)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
+            let is_selected = i == app.selected_target;
+            let style = if is_selected {
+                theme.selected()
             } else {
-                Style::default()
+                theme.text()
             };
 
             // Add scroll indicators if needed
             let display_text = if total_targets > visible_count {
                 if i == scroll_offset && scroll_offset > 0 {
-                    format!("↑ {}", target)
+                    format!("{} {} {}", symbols::SCROLL_UP, symbols::SELECTION, target)
                 } else if i == scroll_offset + visible_count - 1
                     && scroll_offset + visible_count < total_targets
                 {
-                    format!("{} ↓", target)
+                    format!("{} {} {}", symbols::SELECTION, target, symbols::SCROLL_DOWN)
+                } else if is_selected {
+                    format!("{} {}", symbols::SELECTION, target)
                 } else {
-                    target.clone()
+                    format!("  {}", target)
                 }
+            } else if is_selected {
+                format!("{} {}", symbols::SELECTION, target)
             } else {
-                target.clone()
+                format!("  {}", target)
             };
 
             ListItem::new(display_text).style(style)
@@ -173,41 +223,89 @@ fn draw_target_list(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_status_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let help_text = if let Some(ref msg) = app.status_message {
-        msg.clone()
+    let theme = theme();
+
+    // Split status bar into left (keys) and right (status)
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(20), Constraint::Length(30)])
+        .split(area);
+
+    // Status message takes priority
+    let left_content: Line = if let Some(ref msg) = app.status_message {
+        Line::from(vec![Span::styled(msg.clone(), theme.status_bar())])
     } else {
-        match app.focus {
-            Focus::Output => {
-                "↑/↓: scroll | PgUp/PgDown: page | Home/End: top/bottom | Tab: next | q: quit"
-                    .to_string()
-            }
-            _ => "Tab: switch focus | Enter: initialize | r: refresh | q: quit".to_string(),
-        }
+        // Create key badges based on current focus
+        let badges = match app.focus {
+            Focus::Output => vec![
+                Span::styled("[↑/↓]", theme.key_badge()),
+                Span::styled(" scroll ", theme.muted()),
+                Span::styled("[PgUp/PgDn]", theme.key_badge()),
+                Span::styled(" page ", theme.muted()),
+                Span::styled("[tab]", theme.key_badge()),
+                Span::styled(" focus ", theme.muted()),
+                Span::styled("[q]", theme.key_badge()),
+                Span::styled(" quit", theme.muted()),
+            ],
+            _ => vec![
+                Span::styled("[tab]", theme.key_badge()),
+                Span::styled(" focus ", theme.muted()),
+                Span::styled("[enter]", theme.key_badge()),
+                Span::styled(" init ", theme.muted()),
+                Span::styled("[r]", theme.key_badge()),
+                Span::styled(" refresh ", theme.muted()),
+                Span::styled("[q]", theme.key_badge()),
+                Span::styled(" quit", theme.muted()),
+            ],
+        };
+        Line::from(badges)
     };
 
-    let status = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(status, area);
+    let left = Paragraph::new(left_content);
+    frame.render_widget(left, chunks[0]);
+
+    // Right side: target count or hint
+    let right_text = if !app.targets.is_empty() {
+        format!("{} targets ", app.targets.len())
+    } else {
+        String::new()
+    };
+    let right = Paragraph::new(right_text)
+        .style(theme.muted())
+        .alignment(Alignment::Right);
+    frame.render_widget(right, chunks[1]);
 }
 
 fn draw_output_pane(frame: &mut Frame, area: Rect, app: &mut App) {
+    let theme = theme();
+
     // Update the pane height and width for auto-scroll calculations
     app.output_pane_height = area.height;
     app.output_pane_width = area.width.saturating_sub(4); // 2 borders + 2 padding
 
-    let output_style = if app.focus == Focus::Output {
-        Style::default().fg(Color::Yellow)
+    let is_focused = app.focus == Focus::Output;
+
+    let border_style = if is_focused {
+        theme.focus_border()
     } else {
-        Style::default()
+        theme.unfocus_border()
     };
 
+    let title = format!(" {} Output ", symbols::icons::OUTPUT);
+
     let block = Block::default()
-        .title(" Output ")
+        .title(title)
+        .title_style(theme.title())
         .borders(Borders::ALL)
-        .border_style(output_style)
+        .border_type(Theme::BORDER_TYPE)
+        .border_style(border_style)
         .padding(ratatui::widgets::Padding::new(1, 1, 0, 0));
 
     let text = if app.output_text.is_empty() {
-        Text::from("Output from cim commands will appear here...")
+        Text::styled(
+            "Output from cim commands will appear here...",
+            theme.placeholder(),
+        )
     } else {
         // Split into lines and apply color coding based on content (case-insensitive)
         let lines: Vec<Line> = app
@@ -215,14 +313,19 @@ fn draw_output_pane(frame: &mut Frame, area: Rect, app: &mut App) {
             .lines()
             .map(|line| {
                 let line_lower = line.to_lowercase();
-                let style = if line_lower.contains("error") {
-                    Style::default().fg(Color::Red)
-                } else if line_lower.contains("warning") {
-                    Style::default().fg(Color::Yellow)
-                } else if line_lower.contains("success") {
-                    Style::default().fg(Color::Green)
+                let style = if line_lower.contains("error") || line_lower.starts_with("error:") {
+                    theme.error()
+                } else if line_lower.contains("warning") || line_lower.starts_with("warning:") {
+                    theme.warning()
+                } else if line_lower.contains("success")
+                    || line_lower.contains("completed")
+                    || line_lower.contains("done")
+                {
+                    theme.success()
+                } else if line_lower.contains("info:") || line_lower.contains("[info]") {
+                    theme.info()
                 } else {
-                    Style::default()
+                    theme.text()
                 };
                 Line::from(line.to_string()).style(style)
             })
@@ -244,15 +347,26 @@ fn draw_output_pane(frame: &mut Frame, area: Rect, app: &mut App) {
     });
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("↑"))
-            .end_symbol(Some("↓")),
+            .begin_symbol(Some(symbols::SCROLL_UP))
+            .end_symbol(Some(symbols::SCROLL_DOWN))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█"),
         scrollbar_area,
         &mut app.output_scrollbar_state,
     );
 }
 
+fn draw_popup_overlay(frame: &mut Frame, area: Rect) {
+    let theme = theme();
+    // Create a dimmed overlay effect
+    let overlay = Paragraph::new("").style(theme.popup_overlay());
+    frame.render_widget(overlay, area);
+}
+
 fn draw_init_popup(frame: &mut Frame, area: Rect, popup: &InitPopupState) {
-    // Calculate popup area (centered, 70% width, 80% height)
+    let theme = theme();
+
+    // Calculate popup area (centered, 70% width, 85% height)
     let popup_width = (area.width as f32 * 0.7) as u16;
     let popup_height = (area.height as f32 * 0.85) as u16;
     let popup_x = (area.width - popup_width) / 2;
@@ -269,10 +383,18 @@ fn draw_init_popup(frame: &mut Frame, area: Rect, popup: &InitPopupState) {
         popup.targets[popup.selected_target].clone()
     };
 
+    let title = format!(
+        " {} Initialize Workspace - {} ",
+        symbols::icons::TARGET,
+        target_name
+    );
+
     let block = Block::default()
-        .title(format!(" Initialize Workspace - {} ", target_name))
+        .title(title)
+        .title_style(theme.popup_block())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_type(Theme::BORDER_TYPE)
+        .border_style(Style::default().fg(theme.palette.primary));
 
     frame.render_widget(block.clone(), popup_area);
 
@@ -416,10 +538,9 @@ fn draw_init_popup(frame: &mut Frame, area: Rect, popup: &InitPopupState) {
     let cert_dropdown_area = draw_cert_dropdown(frame, chunks[6], popup);
 
     // Help footer with keyboard shortcuts
-    let help_text =
-        "Shortcuts: n,f,b,i,u,s,l,y,v,a,c,esc | Press key to toggle checkbox or focus field";
+    let help_text = "Shortcuts: n,f,b,i,u,s,l,y,v,a,c,esc | Press key to toggle or focus";
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(theme.help_text())
         .alignment(Alignment::Center);
     let help_area = Rect::new(
         popup_area.x + 2,
@@ -435,25 +556,49 @@ fn draw_init_popup(frame: &mut Frame, area: Rect, popup: &InitPopupState) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[7]);
 
-    let cancel_style = if popup.focus == PopupFocus::CancelButton {
-        Style::default().bg(Color::Red).fg(Color::White)
+    // Cancel button
+    let cancel_focused = popup.focus == PopupFocus::CancelButton;
+    let cancel_style = theme.cancel_button(cancel_focused);
+    let cancel_text = if cancel_focused {
+        format!(
+            " {} Cancel (ESC) {} ",
+            symbols::ARROW_RIGHT,
+            symbols::ARROW_RIGHT
+        )
     } else {
-        Style::default()
+        " Cancel (ESC) ".to_string()
     };
-    let cancel_btn = Paragraph::new(" Cancel (ESC) ")
+    let cancel_btn = Paragraph::new(cancel_text)
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(Theme::BORDER_TYPE)
+                .border_style(cancel_style),
+        )
         .style(cancel_style);
     frame.render_widget(cancel_btn, button_row[0]);
 
-    let create_style = if popup.focus == PopupFocus::CreateButton {
-        Style::default().bg(Color::Green).fg(Color::White)
+    // Create button
+    let create_focused = popup.focus == PopupFocus::CreateButton;
+    let create_style = theme.primary_button(create_focused);
+    let create_text = if create_focused {
+        format!(
+            " {} Create (c) {} ",
+            symbols::ARROW_RIGHT,
+            symbols::ARROW_RIGHT
+        )
     } else {
-        Style::default()
+        " Create (c) ".to_string()
     };
-    let create_btn = Paragraph::new(" Create (c) ")
+    let create_btn = Paragraph::new(create_text)
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(Theme::BORDER_TYPE)
+                .border_style(create_style),
+        )
         .style(create_style);
     frame.render_widget(create_btn, button_row[1]);
 
@@ -468,15 +613,12 @@ fn draw_init_popup(frame: &mut Frame, area: Rect, popup: &InitPopupState) {
 
 // Returns the area where the dropdown overlay should be drawn (if open)
 fn draw_version_dropdown(frame: &mut Frame, area: Rect, popup: &InitPopupState) -> Option<Rect> {
-    let focus = popup.focus == PopupFocus::VersionDropdown;
-    let style = if focus {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
+    let theme = theme();
+    let is_focused = popup.focus == PopupFocus::VersionDropdown;
+    let style = theme.dropdown(is_focused);
 
     let version_text = if popup.is_loading_versions {
-        "Loading...".to_string()
+        format!("{} Loading...", spinner(0))
     } else if popup.versions.is_empty() {
         "Latest (no versions available)".to_string()
     } else if popup.selected_version == 0 {
@@ -485,22 +627,29 @@ fn draw_version_dropdown(frame: &mut Frame, area: Rect, popup: &InitPopupState) 
         popup.versions[popup.selected_version - 1].clone()
     };
 
-    let block = Block::default()
-        .title("[V]ersion")
-        .borders(Borders::ALL)
-        .border_style(style);
-
-    let text = if focus {
-        format!("{} ▼", version_text)
+    let display_text = if is_focused {
+        format!("{} {}", version_text, symbols::DROPDOWN_CLOSED)
     } else {
         version_text
     };
 
-    let paragraph = Paragraph::new(text).block(block);
+    let title = "[V]ersion".to_string();
+    let block = Block::default()
+        .title(title)
+        .title_style(if is_focused {
+            theme.title()
+        } else {
+            theme.muted()
+        })
+        .borders(Borders::ALL)
+        .border_type(Theme::BORDER_TYPE)
+        .border_style(style);
+
+    let paragraph = Paragraph::new(display_text).block(block).style(style);
     frame.render_widget(paragraph, area);
 
     // Return the overlay area if dropdown should be open
-    if popup.version_dropdown_open && focus && !popup.versions.is_empty() {
+    if popup.version_dropdown_open && is_focused && !popup.versions.is_empty() {
         let dropdown_height = (popup.versions.len() + 1).min(10) as u16 + 2;
         Some(Rect::new(
             area.x,
@@ -514,53 +663,60 @@ fn draw_version_dropdown(frame: &mut Frame, area: Rect, popup: &InitPopupState) 
 }
 
 fn draw_version_dropdown_overlay(frame: &mut Frame, area: Rect, popup: &InitPopupState) {
+    let theme = theme();
     frame.render_widget(Clear, area);
 
     let items: Vec<ListItem> = std::iter::once("Latest")
         .chain(popup.versions.iter().map(|v| v.as_str()))
         .enumerate()
         .map(|(i, v)| {
-            let style = if i == popup.selected_version {
-                Style::default().bg(Color::Blue).fg(Color::White)
-            } else {
-                Style::default()
-            };
+            let is_selected = i == popup.selected_version;
+            let style = theme.dropdown_item(is_selected);
             ListItem::new(v).style(style)
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).bg(Color::Black));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(Theme::BORDER_TYPE)
+            .bg(theme.palette.surface),
+    );
     frame.render_widget(list, area);
 }
 
 // Returns the area where the dropdown overlay should be drawn (if open)
 fn draw_cert_dropdown(frame: &mut Frame, area: Rect, popup: &InitPopupState) -> Option<Rect> {
-    let focus = popup.focus == PopupFocus::CertValidation;
-    let style = if focus {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
+    let theme = theme();
+    let is_focused = popup.focus == PopupFocus::CertValidation;
+    let style = theme.dropdown(is_focused);
 
     let cert_values = ["strict", "relaxed", "auto"];
     let cert_text = cert_values[popup.selected_cert.min(2)];
 
-    let block = Block::default()
-        .title("Cert V[a]lidation")
-        .borders(Borders::ALL)
-        .border_style(style);
-
-    let text = if focus {
-        format!("{} ▼", cert_text)
+    let display_text = if is_focused {
+        format!("{} {}", cert_text, symbols::DROPDOWN_CLOSED)
     } else {
         cert_text.to_string()
     };
 
-    let paragraph = Paragraph::new(text).block(block);
+    let title = "Cert V[a]lidation".to_string();
+    let block = Block::default()
+        .title(title)
+        .title_style(if is_focused {
+            theme.title()
+        } else {
+            theme.muted()
+        })
+        .borders(Borders::ALL)
+        .border_type(Theme::BORDER_TYPE)
+        .border_style(style);
+
+    let paragraph = Paragraph::new(display_text).block(block).style(style);
     frame.render_widget(paragraph, area);
 
     // Return the overlay area if dropdown should be open
-    if popup.cert_dropdown_open && focus {
+    if popup.cert_dropdown_open && is_focused {
         let dropdown_height = 5;
         Some(Rect::new(
             area.x,
@@ -574,6 +730,7 @@ fn draw_cert_dropdown(frame: &mut Frame, area: Rect, popup: &InitPopupState) -> 
 }
 
 fn draw_cert_dropdown_overlay(frame: &mut Frame, area: Rect, popup: &InitPopupState) {
+    let theme = theme();
     frame.render_widget(Clear, area);
 
     let cert_values = ["strict", "relaxed", "auto"];
@@ -582,62 +739,79 @@ fn draw_cert_dropdown_overlay(frame: &mut Frame, area: Rect, popup: &InitPopupSt
         .iter()
         .enumerate()
         .map(|(i, &v)| {
-            let style = if i == popup.selected_cert {
-                Style::default().bg(Color::Blue).fg(Color::White)
-            } else {
-                Style::default()
-            };
+            let is_selected = i == popup.selected_cert;
+            let style = theme.dropdown_item(is_selected);
             ListItem::new(v).style(style)
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).bg(Color::Black));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(Theme::BORDER_TYPE)
+            .bg(theme.palette.surface),
+    );
     frame.render_widget(list, area);
 }
 
-fn draw_popup_input(frame: &mut Frame, area: Rect, title: &str, value: &str, focus: bool) {
-    let style = if focus {
-        Style::default().fg(Color::Yellow)
+fn draw_popup_input(frame: &mut Frame, area: Rect, title: &str, value: &str, is_focused: bool) {
+    let theme = theme();
+    let style = theme.input(is_focused);
+
+    let title_style = if is_focused {
+        theme.title()
     } else {
-        Style::default()
+        theme.muted()
     };
 
     let block = Block::default()
         .title(title)
+        .title_style(title_style)
         .borders(Borders::ALL)
+        .border_type(Theme::BORDER_TYPE)
         .border_style(style);
 
-    let text = if focus {
-        format!("{}_", value)
+    let text = if is_focused {
+        format!("{}▌", value)
     } else {
         value.to_string()
     };
 
-    let paragraph = Paragraph::new(text).block(block);
+    let paragraph = Paragraph::new(text).block(block).style(style);
     frame.render_widget(paragraph, area);
 }
 
-fn draw_checkbox(frame: &mut Frame, area: Rect, label: &str, checked: bool, focus: bool) {
-    let checkbox = if checked { "[✓]" } else { "[ ]" };
-    let text = format!("{} {}", checkbox, label);
-
-    let style = if focus {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
-    } else if checked {
-        Style::default().fg(Color::Green)
+fn draw_checkbox(frame: &mut Frame, area: Rect, label: &str, checked: bool, is_focused: bool) {
+    let theme = theme();
+    let checkbox = if checked {
+        format!("[{}]", symbols::CHECKBOX_CHECKED)
     } else {
-        Style::default()
+        format!("[{}]", symbols::CHECKBOX_UNCHECKED)
     };
 
-    let paragraph = Paragraph::new(text).style(style);
+    let checkbox_style = theme.checkbox(checked, is_focused);
+    let label_style = if is_focused {
+        theme.text().add_modifier(Modifier::BOLD)
+    } else if checked {
+        theme.text()
+    } else {
+        theme.muted()
+    };
+
+    let spans = vec![
+        Span::styled(checkbox, checkbox_style),
+        Span::styled(" ", Style::default()),
+        Span::styled(label.to_string(), label_style),
+    ];
+
+    let paragraph = Paragraph::new(Line::from(spans));
     frame.render_widget(paragraph, area);
 }
 
 fn draw_separator(frame: &mut Frame, area: Rect) {
-    let separator = Paragraph::new("|")
-        .style(Style::default().fg(Color::DarkGray))
+    let theme = theme();
+    let separator = Paragraph::new(symbols::BULLET)
+        .style(theme.muted())
         .alignment(Alignment::Center);
     frame.render_widget(separator, area);
 }

@@ -9,7 +9,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use std::time::Duration;
 
 use crate::app::{App, Focus, PopupFocus};
@@ -33,11 +33,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> anyhow::Result<bool> {
     match key.code {
         KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(true),
         KeyCode::Char('r') | KeyCode::Char('R') => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                app.refresh_targets();
-            } else {
-                app.refresh_targets();
-            }
+            app.refresh_targets();
         }
         KeyCode::Tab => {
             app.focus = match app.focus {

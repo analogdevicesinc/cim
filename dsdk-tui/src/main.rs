@@ -21,12 +21,17 @@ mod app;
 mod cim;
 mod components;
 mod events;
+mod theme;
 mod ui;
 
 use app::App;
+use theme::init_theme;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize theme
+    init_theme();
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
