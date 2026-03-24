@@ -72,16 +72,6 @@ pub(crate) fn handle_makefile_command() {
 pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T) -> String {
     let mut makefile = String::new();
 
-    // Add makefile includes at the top if specified
-    if let Some(makefile_includes) = sdk_config.makefile_include() {
-        if !makefile_includes.is_empty() {
-            for include_line in makefile_includes {
-                makefile.push_str(&format!("-{}\n", include_line));
-            }
-            makefile.push('\n');
-        }
-    }
-
     // Emit manifest variables as Make ?= assignments so host env vars override them
     let vars: std::collections::HashMap<String, String> =
         if let Some(raw_vars) = sdk_config.variables() {
@@ -100,6 +90,16 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T
             makefile.push_str(&format!("{} ?= {}\n", key, value));
         }
         makefile.push('\n');
+    }
+
+    // Add makefile includes after variables so included files can reference them
+    if let Some(makefile_includes) = sdk_config.makefile_include() {
+        if !makefile_includes.is_empty() {
+            for include_line in makefile_includes {
+                makefile.push_str(&format!("-{}\n", include_line));
+            }
+            makefile.push('\n');
+        }
     }
 
     // Add .PHONY declarations
@@ -1253,6 +1253,37 @@ mod tests {
         assert!(
             !makefile.contains("${{"),
             "Raw manifest variable syntax should not appear in Makefile"
+        );
+    }
+
+    #[test]
+    fn test_variables_before_includes() {
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("PLATFORMS_ROOT".to_string(), "platforms".to_string());
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![],
+            copy_files: None,
+            makefile_include: Some(vec!["include build/extra.mk".to_string()]),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(vars),
+        };
+
+        let makefile = generate_makefile_content(&config);
+
+        let vars_pos = makefile.find("?=").expect("variables block missing");
+        let include_pos = makefile.find("-include").expect("include block missing");
+        assert!(
+            vars_pos < include_pos,
+            "Expected variables before -include, got:\n{}",
+            makefile
         );
     }
 }
