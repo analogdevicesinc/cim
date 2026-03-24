@@ -12,6 +12,8 @@
 use dsdk_cli::workspace::get_current_workspace;
 use dsdk_cli::{config, messages, vscode_tasks_manager};
 
+const WORKSPACE_VARIABLE: &str = "WORKSPACE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))";
+
 /// Generate a Makefile from the SDK configuration
 pub(crate) fn handle_makefile_command() {
     // Must be run from within a workspace
@@ -71,6 +73,9 @@ pub(crate) fn handle_makefile_command() {
 /// Generate the content of the Makefile from SDK configuration
 pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T) -> String {
     let mut makefile = String::new();
+
+    makefile.push_str(WORKSPACE_VARIABLE);
+    makefile.push_str("\n\n");
 
     // Emit manifest variables as Make ?= assignments so host env vars override them
     let vars: std::collections::HashMap<String, String> =
@@ -662,6 +667,11 @@ mod tests {
         };
 
         let makefile = generate_makefile_content(&config);
+        assert!(
+            makefile.starts_with(&format!("{}\n\n", WORKSPACE_VARIABLE)),
+            "Expected WORKSPACE variable first in Makefile, got:\n{}",
+            makefile
+        );
         assert!(makefile.contains(".PHONY: all"));
         assert!(makefile.contains("all:"));
     }
@@ -1234,6 +1244,19 @@ mod tests {
         };
 
         let makefile = generate_makefile_content(&config);
+
+        let workspace_index = makefile
+            .find(WORKSPACE_VARIABLE)
+            .expect("WORKSPACE variable should be emitted");
+        let manifest_var_index = makefile
+            .find("DOCKER_DEFAULT_PLATFORM ?= linux/amd64")
+            .expect("manifest variable should be emitted");
+
+        assert!(
+            workspace_index < manifest_var_index,
+            "WORKSPACE should be emitted before manifest variables, got:\n{}",
+            makefile
+        );
 
         // ?= assignment emitted for the manifest variable
         assert!(
