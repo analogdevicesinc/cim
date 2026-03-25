@@ -46,10 +46,16 @@ pub(crate) fn handle_makefile_command() {
         }
     };
 
+    // Resolve dividers preference from user config
+    let mut dividers = true;
+
     // Load and apply user config overrides if present
     match config::UserConfig::load() {
         Ok(Some(user_config)) => {
             user_config.apply_to_sdk_config(&mut sdk_config, false);
+            if let Some(true) = user_config.no_dividers {
+                dividers = false;
+            }
         }
         Ok(None) => {}
         Err(e) => {
@@ -57,7 +63,7 @@ pub(crate) fn handle_makefile_command() {
         }
     }
 
-    let makefile = generate_makefile_content(&sdk_config);
+    let makefile = generate_makefile_content(&sdk_config, dividers);
 
     match std::fs::write(&output_path, makefile) {
         Ok(_) => messages::success(&format!("Makefile written to {}", output_path.display())),
@@ -70,9 +76,26 @@ pub(crate) fn handle_makefile_command() {
     }
 }
 
+/// Generate a section divider comment banner for a Makefile
+fn makefile_divider(title: &str) -> String {
+    format!(
+        "################################################################################\n\
+         # {}\n\
+         ################################################################################\n",
+        title
+    )
+}
+
 /// Generate the content of the Makefile from SDK configuration
-pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T) -> String {
+pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
+    sdk_config: &T,
+    dividers: bool,
+) -> String {
     let mut makefile = String::new();
+
+    if dividers {
+        makefile.push_str(&makefile_divider("Workspace and manifest variables"));
+    }
 
     makefile.push_str(WORKSPACE_VARIABLE);
     makefile.push_str("\n\n");
@@ -100,11 +123,18 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T
     // Add makefile includes after variables so included files can reference them
     if let Some(makefile_includes) = sdk_config.makefile_include() {
         if !makefile_includes.is_empty() {
+            if dividers {
+                makefile.push_str(&makefile_divider("Makefile includes"));
+            }
             for include_line in makefile_includes {
                 makefile.push_str(&format!("-{}\n", include_line));
             }
             makefile.push('\n');
         }
+    }
+
+    if dividers {
+        makefile.push_str(&makefile_divider("High-level SDK targets"));
     }
 
     // Add .PHONY declarations
@@ -186,6 +216,15 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T
     }
 
     // Add install-all target if install section exists
+    let has_install = match sdk_config.install() {
+        Some(configs) => !configs.is_empty(),
+        None => false,
+    };
+
+    if has_install && dividers {
+        makefile.push_str(&makefile_divider("Installation targets"));
+    }
+
     if let Some(install_configs) = sdk_config.install() {
         if !install_configs.is_empty() {
             add_install_all_target(&mut makefile, install_configs);
@@ -200,6 +239,9 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(sdk_config: &T
     }
 
     // Add individual git targets
+    if !sdk_config.gits().is_empty() && dividers {
+        makefile.push_str(&makefile_divider("Git repository targets"));
+    }
     for git in sdk_config.gits() {
         add_makefile_target(&mut makefile, git);
     }
@@ -666,7 +708,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
         assert!(
             makefile.starts_with(&format!("{}\n\n", WORKSPACE_VARIABLE)),
             "Expected WORKSPACE variable first in Makefile, got:\n{}",
@@ -703,7 +745,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
         assert!(makefile.contains(".PHONY: all"));
         assert!(makefile.contains("all: sdk-build"));
         assert!(makefile.contains("test-repo:"));
@@ -748,7 +790,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
         assert!(makefile.contains("all: sdk-build"));
         assert!(makefile.contains("base-repo:"));
         assert!(makefile.contains("dep-repo: base-repo"));
@@ -831,7 +873,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
         assert!(makefile.contains("empty-build:"));
 
         // Test with multiple dependencies
@@ -875,7 +917,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Check that .PHONY includes sdk-envsetup
         assert!(makefile.contains(".PHONY: all sdk-envsetup"));
@@ -911,7 +953,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Check that comments are preserved
         assert!(makefile.contains("#Setup toolchain"));
@@ -943,7 +985,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Should not include sdk-envsetup in PHONY or create target
         assert!(makefile.contains(".PHONY: all"));
@@ -968,7 +1010,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Should not include sdk-envsetup
         assert!(makefile.contains(".PHONY: all"));
@@ -1018,7 +1060,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Check that .PHONY includes sdk-test
         assert!(makefile.contains(".PHONY: all sdk-test"));
@@ -1057,7 +1099,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Check that comments are preserved
         assert!(makefile.contains("#Run unit tests"));
@@ -1089,7 +1131,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Should not include sdk-test in PHONY or create target
         assert!(makefile.contains(".PHONY: all"));
@@ -1114,7 +1156,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Should not include sdk-test
         assert!(makefile.contains(".PHONY: all"));
@@ -1163,7 +1205,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         // Check that .PHONY includes both targets
         assert!(makefile.contains(".PHONY: all sdk-envsetup sdk-test"));
@@ -1243,7 +1285,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         let workspace_index = makefile
             .find(WORKSPACE_VARIABLE)
@@ -1299,7 +1341,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config);
+        let makefile = generate_makefile_content(&config, false);
 
         let vars_pos = makefile.find("?=").expect("variables block missing");
         let include_pos = makefile.find("-include").expect("include block missing");
@@ -1307,6 +1349,133 @@ mod tests {
             vars_pos < include_pos,
             "Expected variables before -include, got:\n{}",
             makefile
+        );
+    }
+
+    #[test]
+    fn test_generate_makefile_with_dividers() {
+        let git_config = config::GitConfig {
+            name: "test-repo".to_string(),
+            url: "https://github.com/test/repo.git".to_string(),
+            commit: "main".to_string(),
+            build_depends_on: None,
+            git_depends_on: None,
+            build: Some(vec!["make".to_string()]),
+            documentation_dir: None,
+        };
+
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("MY_VAR".to_string(), "value".to_string());
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: Some(vec![config::InstallConfig {
+                name: "my-tool".to_string(),
+                depends_on: None,
+                sentinel: Some("opt/.my-tool-installed".to_string()),
+                commands: Some(vec!["echo install".to_string()]),
+            }]),
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![git_config],
+            copy_files: None,
+            makefile_include: Some(vec!["include extra.mk".to_string()]),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(vars),
+        };
+
+        let makefile = generate_makefile_content(&config, true);
+
+        // Verify divider banners are present
+        assert!(
+            makefile.contains("# Workspace and manifest variables\n"),
+            "Expected 'Workspace and manifest variables' divider, got:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("# Makefile includes\n"),
+            "Expected 'Makefile includes' divider, got:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("# High-level SDK targets\n"),
+            "Expected 'High-level SDK targets' divider, got:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("# Installation targets\n"),
+            "Expected 'Installation targets' divider, got:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("# Git repository targets\n"),
+            "Expected 'Git repository targets' divider, got:\n{}",
+            makefile
+        );
+
+        // Verify the divider format uses 80-char # lines
+        assert!(
+            makefile.contains("################################################################################\n# Workspace and manifest variables\n################################################################################"),
+            "Expected full divider banner format"
+        );
+    }
+
+    #[test]
+    fn test_generate_makefile_without_dividers() {
+        let git_config = config::GitConfig {
+            name: "test-repo".to_string(),
+            url: "https://github.com/test/repo.git".to_string(),
+            commit: "main".to_string(),
+            build_depends_on: None,
+            git_depends_on: None,
+            build: Some(vec!["make".to_string()]),
+            documentation_dir: None,
+        };
+
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("MY_VAR".to_string(), "value".to_string());
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: Some(vec![config::InstallConfig {
+                name: "my-tool".to_string(),
+                depends_on: None,
+                sentinel: Some("opt/.my-tool-installed".to_string()),
+                commands: Some(vec!["echo install".to_string()]),
+            }]),
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![git_config],
+            copy_files: None,
+            makefile_include: Some(vec!["include extra.mk".to_string()]),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(vars),
+        };
+
+        let makefile = generate_makefile_content(&config, false);
+
+        // Verify no divider banners are present
+        assert!(
+            !makefile.contains("########"),
+            "Expected no divider banners when dividers=false, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_makefile_divider_format() {
+        let divider = makefile_divider("Test Section");
+        assert_eq!(
+            divider,
+            "################################################################################\n\
+             # Test Section\n\
+             ################################################################################\n"
         );
     }
 }

@@ -380,6 +380,7 @@ fn test_user_config_list_all_simple_fields() {
         shell_arg: Some("-c".to_string()),
         documentation_dirs: Some("docs,manuals".to_string()),
         cert_validation: None,
+        no_dividers: None,
     };
 
     let list = config.list_all();
@@ -947,6 +948,7 @@ fn test_user_config_mirror_override_priority() {
         shell_arg: None,
         documentation_dirs: None,
         cert_validation: None,
+        no_dividers: None,
     };
 
     // Apply user config overrides to SDK config
@@ -1001,6 +1003,7 @@ fn test_user_config_mirror_override_with_multiple_overrides() {
         shell_arg: None,
         documentation_dirs: None,
         cert_validation: None,
+        no_dividers: None,
     };
 
     // Apply user config overrides to SDK config

@@ -653,6 +653,11 @@ pub struct UserConfig {
     /// Use "relaxed" or "auto" only in corporate environments with SSL inspection
     #[serde(default)]
     pub cert_validation: Option<String>,
+
+    /// Skip section dividers in generated Makefiles
+    /// When true, `cim makefile` will not insert comment banners between sections
+    #[serde(default)]
+    pub no_dividers: Option<bool>,
 }
 
 impl UserConfig {
@@ -914,6 +919,26 @@ impl UserConfig {
 # cert_validation = "strict"     # Default: Maximum security, valid certs required
 # cert_validation = "relaxed"    # Corporate: Bypass all cert validation (INSECURE!)
 # cert_validation = "auto"       # Fallback: Try strict, use relaxed if fails (INSECURE!)
+
+# =============================================================================
+# Makefile Section Dividers
+# =============================================================================
+# Control whether section dividers (comment banners) are inserted between
+# sections in the generated Makefile. Dividers improve readability for large
+# Makefiles by visually separating variables, SDK targets, install targets,
+# and git repository targets.
+#
+# Default: false (dividers are included)
+# Use cases:
+#   - Set to true if you prefer minimal, compact Makefiles
+#   - Keep false (or omit) for readable Makefiles with section headers
+#
+# To temporarily override for a single command, use --no-dividers flag:
+#   cim makefile --no-dividers
+#
+# Examples:
+# no_dividers = true     # Never add dividers to generated Makefiles
+# no_dividers = false    # Always add dividers (default behavior)
 "#
         .to_string()
     }
@@ -1062,6 +1087,9 @@ impl UserConfig {
         if let Some(ref cert_val) = self.cert_validation {
             lines.push(format!("cert_validation={}", cert_val));
         }
+        if let Some(no_dividers) = self.no_dividers {
+            lines.push(format!("no_dividers={}", no_dividers));
+        }
 
         lines
     }
@@ -1086,6 +1114,7 @@ impl UserConfig {
             "shell_arg" => self.shell_arg.clone(),
             "documentation_dirs" => self.documentation_dirs.clone(),
             "cert_validation" => self.cert_validation.clone(),
+            "no_dividers" => self.no_dividers.map(|b| b.to_string()),
             _ => {
                 // Handle nested keys like copy_files.0.src
                 if key.starts_with("copy_files.") {
