@@ -15,7 +15,7 @@ use dsdk_cli::{config, messages, vscode_tasks_manager};
 const WORKSPACE_VARIABLE: &str = "WORKSPACE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))";
 
 /// Generate a Makefile from the SDK configuration
-pub(crate) fn handle_makefile_command() {
+pub(crate) fn handle_makefile_command(no_dividers: bool) {
     // Must be run from within a workspace
     let workspace_path = match get_current_workspace() {
         Ok(path) => path,
@@ -46,15 +46,15 @@ pub(crate) fn handle_makefile_command() {
         }
     };
 
-    // Resolve dividers preference from user config
-    let mut dividers = true;
+    // Resolve effective no_dividers: CLI flag overrides user config
+    let mut effective_no_dividers = false;
 
     // Load and apply user config overrides if present
     match config::UserConfig::load() {
         Ok(Some(user_config)) => {
             user_config.apply_to_sdk_config(&mut sdk_config, false);
-            if let Some(true) = user_config.no_dividers {
-                dividers = false;
+            if let Some(config_no_dividers) = user_config.no_dividers {
+                effective_no_dividers = config_no_dividers;
             }
         }
         Ok(None) => {}
@@ -63,6 +63,12 @@ pub(crate) fn handle_makefile_command() {
         }
     }
 
+    // CLI --no-dividers always wins
+    if no_dividers {
+        effective_no_dividers = true;
+    }
+
+    let dividers = !effective_no_dividers;
     let makefile = generate_makefile_content(&sdk_config, dividers);
 
     match std::fs::write(&output_path, makefile) {

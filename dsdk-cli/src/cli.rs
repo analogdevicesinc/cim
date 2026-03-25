@@ -154,7 +154,11 @@ pub enum Commands {
         r#match: Option<String>,
     },
     /// Generate a Makefile from configuration
-    Makefile,
+    Makefile {
+        /// Skip section dividers in the generated Makefile
+        #[arg(long, help = "Do not add section dividers to the generated Makefile")]
+        no_dividers: bool,
+    },
     /// Add a new git repository to configuration
     Add {
         /// Name of the repository
