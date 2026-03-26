@@ -852,6 +852,331 @@ pub(crate) fn handle_copy_files_hash_command(
     }
 }
 
+/// Update sdk.yml with computed SHA256 hash for a specific toolchain entry
+///
+/// Matches entries under the `toolchains:` section by the `name:` field.
+fn update_sdk_yaml_toolchain_hash(
+    config_path: &Path,
+    toolchain_name: &str,
+    new_hash: &str,
+    dry_run: bool,
+    add_missing: bool,
+) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+    let mut content = fs::read_to_string(config_path)?;
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut found_entry = false;
+    let mut updated_line_idx = None;
+    let mut entry_start_idx: Option<usize> = None;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        // Match toolchain entries by "- name:"
+        if !found_entry && trimmed.starts_with("- name:") {
+            let entry_name = trimmed
+                .strip_prefix("- name:")
+                .map(|s| s.trim())
+                .unwrap_or("");
+
+            if entry_name == toolchain_name {
+                found_entry = true;
+                entry_start_idx = Some(idx);
+
+                // Find sha256 line within this entry
+                for (k, sha_line) in lines
+                    .iter()
+                    .enumerate()
+                    .take(std::cmp::min(idx + 15, lines.len()))
+                    .skip(idx)
+                {
+                    if sha_line.trim().starts_with("sha256:") {
+                        updated_line_idx = Some(k);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if !found_entry {
+        return Err(format!("Could not find toolchain entry for: {}", toolchain_name).into());
+    }
+
+    let display_name = toolchain_name;
+
+    if let Some(line_idx) = updated_line_idx {
+        let current_line = lines[line_idx];
+        let current_hash_in_file = current_line
+            .trim()
+            .strip_prefix("sha256:")
+            .map(|s| s.trim())
+            .unwrap_or("");
+
+        if current_hash_in_file == new_hash {
+            return Ok(Some(false));
+        }
+
+        if dry_run {
+            messages::status(&format!(
+                "Would update line {} from '{}' to 'sha256: {}'",
+                line_idx + 1,
+                lines[line_idx],
+                new_hash
+            ));
+        } else {
+            let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
+            let current_line = &updated_lines[line_idx];
+            let indent: String = current_line
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+            updated_lines[line_idx] = format!("{}sha256: {}", indent, new_hash);
+            content = updated_lines.join("\n");
+            fs::write(config_path, &content)?;
+            messages::status(&format!(
+                "Updated sha256 for {}: {}",
+                display_name, new_hash
+            ));
+        }
+
+        return Ok(Some(true));
+    }
+
+    // No sha256 field exists
+    if add_missing {
+        let entry_start = entry_start_idx.unwrap_or(0);
+
+        let field_indent = if entry_start + 1 < lines.len() {
+            lines[entry_start + 1]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect::<String>()
+        } else {
+            "    ".to_string()
+        };
+
+        let field_indent_len = field_indent.len();
+        let mut last_entry_line = entry_start;
+        for (scan_idx, scan_line) in lines.iter().enumerate().skip(entry_start + 1) {
+            if scan_line.trim().is_empty() {
+                break;
+            }
+            let scan_indent_len = scan_line.chars().take_while(|c| c.is_whitespace()).count();
+            if scan_indent_len >= field_indent_len {
+                last_entry_line = scan_idx;
+            } else {
+                break;
+            }
+        }
+
+        if dry_run {
+            messages::status(&format!(
+                "Would add sha256 for {}: {}",
+                display_name, new_hash
+            ));
+        } else {
+            let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
+            updated_lines.insert(
+                last_entry_line + 1,
+                format!("{field_indent}sha256: {new_hash}"),
+            );
+            content = updated_lines.join("\n");
+            fs::write(config_path, &content)?;
+            messages::status(&format!("Added sha256 for {}: {}", display_name, new_hash));
+        }
+
+        return Ok(Some(true));
+    }
+
+    messages::info(&format!(
+        "Skipping {}: no sha256 field in entry",
+        display_name
+    ));
+    Ok(None)
+}
+
+/// Handle the hash-toolchains command
+pub(crate) fn handle_toolchains_hash_command(
+    file_filter: Option<&str>,
+    dry_run: bool,
+    verbose: bool,
+    add_missing: bool,
+) {
+    messages::set_verbose(verbose);
+
+    let workspace_path = match get_current_workspace() {
+        Ok(path) => path,
+        Err(e) => {
+            messages::error(&format!("Error: {}", e));
+            return;
+        }
+    };
+
+    let config_path = workspace_path.join("sdk.yml");
+    if !config_path.exists() {
+        messages::error(&format!(
+            "sdk.yml not found in workspace root: {}",
+            workspace_path.display()
+        ));
+        return;
+    }
+
+    let sdk_config = match config::load_config(&config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            messages::error(&format!("Error loading config: {}", e));
+            return;
+        }
+    };
+
+    let Some(toolchains) = &sdk_config.toolchains else {
+        messages::status("No toolchains section found in sdk.yml");
+        return;
+    };
+
+    if toolchains.is_empty() {
+        messages::status("toolchains section is empty");
+        return;
+    }
+
+    let mirror_path = expand_config_mirror_path(&sdk_config);
+
+    // Filter toolchains to only those applicable to this host
+    let host_info = dsdk_cli::toolchain_manager::detect_host_info();
+    let applicable: Vec<_> = toolchains
+        .iter()
+        .filter(|tc| dsdk_cli::toolchain_manager::is_toolchain_applicable(tc, &host_info))
+        .collect();
+
+    if applicable.is_empty() {
+        messages::status(&format!(
+            "No toolchains applicable for {} {}",
+            host_info.os, host_info.arch
+        ));
+        return;
+    }
+
+    messages::status("Computing SHA256 hashes for toolchain entries...");
+
+    let mut processed_count = 0;
+    let mut updated_count = 0;
+    let mut skipped_count = 0;
+
+    for toolchain in &applicable {
+        let name = toolchain.get_name();
+
+        // Apply filter if provided
+        if let Some(filter) = file_filter {
+            if !name.contains(filter) && !toolchain.url.contains(filter) {
+                continue;
+            }
+        }
+
+        processed_count += 1;
+        messages::status(&format!("Processing: {}", name));
+
+        // Only compute hashes for archives that already exist in the mirror.
+        // Downloading is the job of "cim install toolchains".
+        let archive_path = mirror_path.join(&name);
+        if !archive_path.exists() || fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0) == 0
+        {
+            messages::info(&format!(
+                "Archive not found in mirror: {}\n  Run 'cim install toolchains' to download it.",
+                name
+            ));
+            skipped_count += 1;
+            continue;
+        }
+
+        // Compute SHA256 hash
+        let computed_hash = match compute_file_sha256(&archive_path) {
+            Ok(hash) => hash,
+            Err(e) => {
+                messages::error(&format!("Failed to compute hash for {}: {}", name, e));
+                skipped_count += 1;
+                continue;
+            }
+        };
+
+        let current_hash = toolchain.sha256.clone().unwrap_or_default();
+        let has_sha256_field = toolchain.sha256.is_some();
+        let hash_changed = !current_hash.is_empty() && current_hash != computed_hash;
+
+        if dry_run {
+            messages::status(&format!("Toolchain: {}", name));
+            messages::verbose(&format!(
+                "  Current hash:  {}\n  New hash:      {}",
+                if current_hash.is_empty() {
+                    "<none>"
+                } else {
+                    &current_hash
+                },
+                computed_hash
+            ));
+
+            if has_sha256_field && !hash_changed {
+                messages::status("  Status: Hash unchanged (no update needed)");
+            } else if !has_sha256_field && !add_missing {
+                messages::status("  Status: No sha256 field in entry (would be skipped)");
+                skipped_count += 1;
+            } else if !has_sha256_field && add_missing {
+                messages::status("  Status: sha256 field would be added");
+                updated_count += 1;
+            } else {
+                messages::status("  Status: Hash would be updated");
+                updated_count += 1;
+            }
+        } else {
+            let tc_name = &name;
+            match update_sdk_yaml_toolchain_hash(
+                &config_path,
+                tc_name,
+                &computed_hash,
+                dry_run,
+                add_missing,
+            ) {
+                Ok(Some(true)) => {
+                    updated_count += 1;
+                }
+                Ok(None) => {
+                    skipped_count += 1;
+                }
+                Ok(Some(false)) => {
+                    // Hash unchanged
+                }
+                Err(e) => {
+                    messages::error(&format!("Failed to update sdk.yml for {}: {}", name, e));
+                    skipped_count += 1;
+                }
+            }
+        }
+
+        if verbose {
+            messages::verbose(&format!(
+                "Computed hash: {}\nFile size: {} bytes",
+                computed_hash,
+                fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0)
+            ));
+        }
+    }
+
+    // Print summary
+    messages::status("\n=== Summary ===");
+    messages::status(&format!("Processed: {}", processed_count));
+    if dry_run {
+        messages::status(&format!("Would update: {}", updated_count));
+        messages::status(&format!("Would skip:   {}", skipped_count));
+        messages::status("(Dry run mode - no changes were made)");
+    } else {
+        messages::status(&format!("Updated:   {}", updated_count));
+        messages::status(&format!("Skipped:   {}", skipped_count));
+    }
+
+    if processed_count == 0 {
+        messages::info("No toolchains matched the filter or no toolchain entries found");
+    }
+}
+
 /// Handle the sync-files command - re-run copy_files operation
 pub(crate) fn handle_sync_files_hash_command(
     file_filter: Option<&str>,

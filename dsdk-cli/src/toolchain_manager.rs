@@ -46,6 +46,21 @@ pub fn detect_host_info() -> HostInfo {
     HostInfo { os, arch }
 }
 
+/// Check whether a toolchain applies to the given host OS and architecture
+pub fn is_toolchain_applicable(toolchain: &ToolchainConfig, host_info: &HostInfo) -> bool {
+    if let Some(ref required_os) = toolchain.os {
+        if required_os != &host_info.os {
+            return false;
+        }
+    }
+    if let Some(ref required_arch) = toolchain.arch {
+        if required_arch != &host_info.arch {
+            return false;
+        }
+    }
+    true
+}
+
 /// Detect the actual runtime architecture using platform-specific methods
 fn detect_runtime_arch() -> String {
     // Platform-specific runtime architecture detection
@@ -450,21 +465,7 @@ impl ToolchainManager {
 
     /// Check if a toolchain is applicable for the current host
     fn is_toolchain_applicable(&self, toolchain: &ToolchainConfig, host_info: &HostInfo) -> bool {
-        // Check OS filter
-        if let Some(ref required_os) = toolchain.os {
-            if required_os != &host_info.os {
-                return false;
-            }
-        }
-
-        // Check architecture filter
-        if let Some(ref required_arch) = toolchain.arch {
-            if required_arch != &host_info.arch {
-                return false;
-            }
-        }
-
-        true
+        is_toolchain_applicable(toolchain, host_info)
     }
 
     /// Validate that no toolchains have duplicate destination paths
@@ -800,7 +801,7 @@ impl ToolchainManager {
     }
 
     /// Ensure archive is downloaded and return its path
-    fn ensure_archive_downloaded(
+    pub fn ensure_archive_downloaded(
         &self,
         toolchain: &ToolchainConfig,
         cert_validation: Option<&str>,
@@ -2195,6 +2196,118 @@ mod tests {
         assert_eq!(
             rustup_home,
             "/home/user/mirror/toolchains/rust-1.75.0/rustup"
+        );
+    }
+
+    #[test]
+    fn test_ensure_archive_downloaded_removes_zero_byte_file() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let mirror_path = fixture.path().join("mirror");
+        fs::create_dir_all(&mirror_path).expect("Failed to create mirror dir");
+
+        // Create a zero-byte file to simulate a previous failed download
+        let archive_name = "test-toolchain.tar.xz";
+        let archive_path = mirror_path.join(archive_name);
+        fs::write(&archive_path, b"").expect("Failed to create empty file");
+        assert!(archive_path.exists());
+        assert_eq!(fs::metadata(&archive_path).unwrap().len(), 0);
+
+        let manager = ToolchainManager::new(fixture.path().to_path_buf(), mirror_path.clone());
+
+        let toolchain = ToolchainConfig {
+            name: Some(archive_name.to_string()),
+            url: "https://invalid.example.com/nonexistent".to_string(),
+            destination: "toolchains/test".to_string(),
+            strip_components: None,
+            os: None,
+            arch: None,
+            sha256: None,
+            mirror_destination: None,
+            environment: None,
+            post_install_commands: None,
+        };
+
+        // Download will fail (invalid URL), but the zero-byte file should be removed
+        // first, so the function attempts a fresh download
+        let result = manager.ensure_archive_downloaded(&toolchain, None);
+        assert!(result.is_err(), "Download should fail for invalid URL");
+
+        // The zero-byte file should have been removed
+        assert!(
+            !archive_path.exists(),
+            "Zero-byte file should have been removed from mirror"
+        );
+    }
+
+    #[test]
+    fn test_verify_toolchain_sha256_none_skips() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let manager =
+            ToolchainManager::new(fixture.path().to_path_buf(), fixture.path().to_path_buf());
+
+        let file_path = fixture.path().join("test-file");
+        fs::write(&file_path, b"test content").expect("Failed to write test file");
+
+        // No expected sha256 should skip verification
+        let result = manager.verify_toolchain_sha256(&file_path, None);
+        assert!(result.is_ok(), "Should succeed when no sha256 is expected");
+    }
+
+    #[test]
+    fn test_verify_toolchain_sha256_valid() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let manager =
+            ToolchainManager::new(fixture.path().to_path_buf(), fixture.path().to_path_buf());
+
+        let file_path = fixture.path().join("test-file");
+        let content = b"hello world";
+        fs::write(&file_path, content).expect("Failed to write test file");
+
+        // Compute actual sha256 of "hello world"
+        let actual_hash = download::compute_file_sha256(&file_path).unwrap();
+
+        let result = manager.verify_toolchain_sha256(&file_path, Some(&actual_hash));
+        assert!(result.is_ok(), "Should succeed with matching sha256");
+        assert!(
+            file_path.exists(),
+            "File should still exist after valid verification"
+        );
+    }
+
+    #[test]
+    fn test_verify_toolchain_sha256_mismatch_removes_file() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let manager =
+            ToolchainManager::new(fixture.path().to_path_buf(), fixture.path().to_path_buf());
+
+        let file_path = fixture.path().join("test-file");
+        fs::write(&file_path, b"some content").expect("Failed to write test file");
+        assert!(file_path.exists());
+
+        let result = manager.verify_toolchain_sha256(
+            &file_path,
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
+        );
+        assert!(result.is_err(), "Should fail with wrong sha256");
+        assert!(
+            !file_path.exists(),
+            "File should be removed after sha256 mismatch"
+        );
+    }
+
+    #[test]
+    fn test_toolchain_config_sha256_field() {
+        let toolchain = create_test_toolchain("gcc", "toolchains/gcc");
+        assert!(
+            toolchain.sha256.is_none(),
+            "Default test toolchain should have no sha256"
+        );
+
+        let mut toolchain_with_hash = create_test_toolchain("gcc", "toolchains/gcc");
+        toolchain_with_hash.sha256 = Some("abcdef1234567890".to_string());
+        assert_eq!(
+            toolchain_with_hash.sha256.as_deref(),
+            Some("abcdef1234567890")
         );
     }
 }

@@ -1020,3 +1020,60 @@ fn test_user_config_mirror_override_with_multiple_overrides() {
         "User config mirror should override SDK config mirror even with multiple overrides"
     );
 }
+
+#[test]
+fn test_toolchain_config_parses_sha256() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("sdk.yml");
+
+    let yaml_content = format!(
+        r#"mirror: {}
+gits: []
+toolchains:
+  - name: test-toolchain.tar.xz
+    url: https://example.com/downloads/
+    destination: toolchains/test
+    sha256: abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+    os: linux
+    arch: x86_64
+"#,
+        fixture.path().display()
+    );
+    std::fs::write(&config_path, yaml_content).expect("Failed to write config");
+
+    let loaded = load_config(&config_path).expect("Should load config with toolchain sha256");
+    let toolchains = loaded.toolchains.expect("Should have toolchains section");
+    assert_eq!(toolchains.len(), 1);
+    assert_eq!(
+        toolchains[0].sha256.as_deref(),
+        Some("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
+    );
+}
+
+#[test]
+fn test_toolchain_config_parses_without_sha256() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("sdk.yml");
+
+    let yaml_content = format!(
+        r#"mirror: {}
+gits: []
+toolchains:
+  - name: test-toolchain.tar.xz
+    url: https://example.com/downloads/
+    destination: toolchains/test
+    os: linux
+    arch: x86_64
+"#,
+        fixture.path().display()
+    );
+    std::fs::write(&config_path, yaml_content).expect("Failed to write config");
+
+    let loaded = load_config(&config_path).expect("Should load config without toolchain sha256");
+    let toolchains = loaded.toolchains.expect("Should have toolchains section");
+    assert_eq!(toolchains.len(), 1);
+    assert!(
+        toolchains[0].sha256.is_none(),
+        "sha256 should be None when not specified"
+    );
+}

@@ -10,7 +10,9 @@
 // limitations under the License.
 
 use crate::cli::UtilsCommand;
-use crate::release_cmd::{handle_copy_files_hash_command, handle_sync_files_hash_command};
+use crate::release_cmd::{
+    handle_copy_files_hash_command, handle_sync_files_hash_command, handle_toolchains_hash_command,
+};
 use crate::version::{
     fetch_latest_release_version, find_cim_in_path, is_newer_version, platform_archive_name,
 };
@@ -253,6 +255,14 @@ pub(crate) fn handle_utils_command(utils_command: &UtilsCommand) {
             add_missing,
         } => {
             handle_copy_files_hash_command(file.as_deref(), *dry_run, *verbose, *add_missing);
+        }
+        UtilsCommand::HashToolchains {
+            file,
+            dry_run,
+            verbose,
+            add_missing,
+        } => {
+            handle_toolchains_hash_command(file.as_deref(), *dry_run, *verbose, *add_missing);
         }
         UtilsCommand::SyncCopyFiles {
             file,

@@ -492,6 +492,27 @@ pub enum UtilsCommand {
         )]
         add_missing: bool,
     },
+    /// Compute and update SHA256 hashes for toolchain entries
+    HashToolchains {
+        /// Only compute hash for specific toolchain (by name or URL)
+        #[arg(
+            value_name = "TOOLCHAIN",
+            help = "Specific toolchain to update hash for (optional)"
+        )]
+        file: Option<String>,
+        /// Show what would be changed without modifying sdk.yml
+        #[arg(long, help = "Show proposed changes without updating files")]
+        dry_run: bool,
+        /// Enable verbose output
+        #[arg(short, long, help = "Show detailed progress information")]
+        verbose: bool,
+        /// Automatically add missing sha256 fields instead of skipping entries
+        #[arg(
+            long,
+            help = "Add sha256 field to entries that are missing it, then compute and set the hash"
+        )]
+        add_missing: bool,
+    },
     /// Re-run copy_files operation to sync files to workspace
     SyncCopyFiles {
         /// Only sync specific file (by dest path or source URL)
