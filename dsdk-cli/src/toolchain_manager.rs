@@ -1544,6 +1544,7 @@ mod tests {
             strip_components: None,
             os: None,
             arch: None,
+            sha256: None,
             mirror_destination: None,
             environment: None,
             post_install_commands: None,

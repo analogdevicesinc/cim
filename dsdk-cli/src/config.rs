@@ -258,6 +258,9 @@ pub struct ToolchainConfig {
     /// Optional architecture filter (e.g., "x86_64", "arm64", "i386")
     #[serde(default)]
     pub arch: Option<String>,
+    /// Optional SHA256 checksum for verifying downloaded archive integrity
+    #[serde(default)]
+    pub sha256: Option<String>,
     /// Optional mirror destination path (relative to mirror directory)
     /// If not specified, uses the same path as destination
     #[serde(default)]
