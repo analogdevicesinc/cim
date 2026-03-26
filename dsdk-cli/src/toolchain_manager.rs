@@ -10,6 +10,7 @@
 // limitations under the License.
 
 use crate::config::{self, ToolchainConfig};
+use crate::download;
 use crate::workspace::expand_env_vars;
 use std::collections::HashMap;
 use std::env;
@@ -805,6 +806,7 @@ impl ToolchainManager {
         cert_validation: Option<&str>,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let archive_path = self.mirror_path.join(toolchain.get_name());
+        let expected_sha256 = toolchain.sha256.as_deref();
 
         // Remove stale zero-byte files left by previously failed downloads
         if archive_path.exists() {
@@ -819,21 +821,67 @@ impl ToolchainManager {
             }
         }
 
-        // Download archive if not already in mirror
-        if !archive_path.exists() {
-            let expanded_url = expand_env_vars(&toolchain.url);
-            let download_url = self.construct_download_url(&expanded_url, &toolchain.get_name());
-            messages::status(&format!(
-                "Downloading {} from {}...",
-                toolchain.get_name(),
-                download_url
-            ));
-            self.download_toolchain(&download_url, &archive_path, cert_validation)?;
-        } else {
-            messages::verbose(&format!("Using cached: {}", archive_path.display()));
+        // If file exists in cache, verify sha256 if provided
+        if archive_path.exists() {
+            if let Some(sha256) = expected_sha256 {
+                match download::verify_file_sha256(&archive_path, sha256) {
+                    Ok(()) => {
+                        messages::verbose(&format!(
+                            "Using cached (SHA256 verified): {}",
+                            archive_path.display()
+                        ));
+                        return Ok(archive_path);
+                    }
+                    Err(e) => {
+                        messages::info(&format!(
+                            "Cached file {} has invalid checksum: {}",
+                            archive_path.display(),
+                            e
+                        ));
+                        messages::info("Removing and re-downloading...");
+                        let _ = fs::remove_file(&archive_path);
+                    }
+                }
+            } else {
+                messages::verbose(&format!("Using cached: {}", archive_path.display()));
+                return Ok(archive_path);
+            }
         }
 
-        Ok(archive_path)
+        // Download archive (with retry on sha256 mismatch)
+        let expanded_url = expand_env_vars(&toolchain.url);
+        let download_url = self.construct_download_url(&expanded_url, &toolchain.get_name());
+        let max_attempts: u32 = if expected_sha256.is_some() { 3 } else { 1 };
+
+        for attempt in 1..=max_attempts {
+            messages::status(&format!(
+                "Downloading {} from {}...{}",
+                toolchain.get_name(),
+                download_url,
+                if attempt > 1 {
+                    format!(" (attempt {}/{})", attempt, max_attempts)
+                } else {
+                    String::new()
+                }
+            ));
+            match self.download_toolchain(
+                &download_url,
+                &archive_path,
+                cert_validation,
+                expected_sha256,
+            ) {
+                Ok(()) => return Ok(archive_path),
+                Err(e) => {
+                    if attempt == max_attempts {
+                        return Err(e);
+                    }
+                    messages::info(&format!("Download attempt {} failed: {}", attempt, e));
+                }
+            }
+        }
+
+        // Should not be reached, but just in case
+        Err("Download failed after all attempts".into())
     }
 
     /// Expand environment variables in a value string for toolchain configuration
@@ -1107,12 +1155,42 @@ impl ToolchainManager {
         Ok(())
     }
 
+    /// Verify SHA256 checksum of a downloaded toolchain file
+    ///
+    /// If no expected hash is provided, verification is skipped. On mismatch,
+    /// the file is removed and an error is returned.
+    fn verify_toolchain_sha256(
+        &self,
+        file_path: &Path,
+        expected_sha256: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(expected) = expected_sha256 else {
+            return Ok(());
+        };
+
+        messages::verbose("Verifying SHA256 checksum...");
+        match download::verify_file_sha256(file_path, expected) {
+            Ok(()) => {
+                messages::verbose("SHA256 checksum verified");
+                Ok(())
+            }
+            Err(e) => {
+                // Remove the file with bad checksum
+                if file_path.exists() {
+                    let _ = fs::remove_file(file_path);
+                }
+                Err(format!("Toolchain {}", e).into())
+            }
+        }
+    }
+
     /// Download toolchain archive from URL
     fn download_toolchain(
         &self,
         url: &str,
         dest_path: &Path,
         cert_validation: Option<&str>,
+        expected_sha256: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Use a wget-like user agent that is generally accepted by most servers
         // This avoids user-agent blocking from servers like rustup.rs
@@ -1197,6 +1275,7 @@ impl ToolchainManager {
                         ));
                         let content = response.bytes()?;
                         fs::write(dest_path, content)?;
+                        self.verify_toolchain_sha256(dest_path, expected_sha256)?;
                         return Ok(());
                     } else {
                         let error = format!(
@@ -1250,6 +1329,7 @@ impl ToolchainManager {
                             "Download succeeded using wget with disabled certificate validation",
                         );
                     }
+                    self.verify_toolchain_sha256(dest_path, expected_sha256)?;
                     return Ok(());
                 } else {
                     messages::verbose(&format!(
@@ -1284,6 +1364,7 @@ impl ToolchainManager {
                             "Download succeeded using curl with disabled certificate validation",
                         );
                     }
+                    self.verify_toolchain_sha256(dest_path, expected_sha256)?;
                     return Ok(());
                 } else {
                     messages::verbose(&format!(
