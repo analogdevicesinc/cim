@@ -19,7 +19,7 @@
 #           --yes (-y), --cert-validation
 #   - update: --no-mirror, --match, --verbose (-v), --cert-validation
 #   - foreach: command, --match
-#   - makefile: (no options)
+#   - makefile: --no-dividers
 #   - add: --name (-n), --url (-u), --commit
 #   - install os-deps: --yes (-y), --no-sudo
 #   - install pip: --profile (-p), --force (-f), --symlink, --list-profiles
@@ -35,6 +35,7 @@
 #   - config: --list (-l), --get (-g), --path (-p), --template (-t), --create (-c),
 #             --force (-f), --edit (-e), --validate (-v)
 #   - utils hash-copy-files: --dry-run, --verbose (-v), --add-missing
+#   - utils hash-toolchains: --dry-run, --verbose (-v), --add-missing
 #   - utils sync-copy-files: --dry-run, --verbose (-v), --force (-f)
 #   - utils update: (no options)
 
@@ -216,7 +217,7 @@ _cim_completions() {
             ;;
 
         makefile)
-            COMPREPLY=( $(compgen -W "--help" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "--no-dividers --help" -- "${cur}") )
             return 0
             ;;
 
@@ -435,12 +436,20 @@ _cim_completions() {
         utils)
             if [ $COMP_CWORD -eq 2 ]; then
                 # Utils subcommands
-                COMPREPLY=( $(compgen -W "hash-copy-files sync-copy-files update --help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "hash-copy-files hash-toolchains sync-copy-files update --help" -- "${cur}") )
                 return 0
             elif [ $COMP_CWORD -gt 2 ]; then
                 # Handle utils subcommand completion
                 case "${COMP_WORDS[2]}" in
                     hash-copy-files)
+                        case "${prev}" in
+                            *)
+                                COMPREPLY=( $(compgen -W "--dry-run --verbose -v --add-missing --help" -- "${cur}") )
+                                return 0
+                                ;;
+                        esac
+                        ;;
+                    hash-toolchains)
                         case "${prev}" in
                             *)
                                 COMPREPLY=( $(compgen -W "--dry-run --verbose -v --add-missing --help" -- "${cur}") )

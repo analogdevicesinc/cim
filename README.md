@@ -163,7 +163,7 @@ cim update [--match REGEX] [--no-mirror]
 Generate Makefile from sdk.yml (run from workspace).
 
 ```bash
-cim makefile
+cim makefile [--no-dividers]
 ```
 
 #### foreach
@@ -246,7 +246,38 @@ Manage user configuration.
 cim config [--list] [--get KEY] [--create] [--edit] [--validate]
 ```
 
-Config location: `~/.config/cim/config.toml` (Unix/Linux/macOS) or `%LOCALAPPDATA%\cim\config.toml` (Windows)
+Config location: `~/.config/cim/config.toml` (Unix/Linux/macOS) or
+`%LOCALAPPDATA%\cim\config.toml` (Windows)
+
+#### utils
+
+Utility commands for manifest maintenance.
+
+**hash-copy-files** - Compute and update SHA256 hashes for copy_files
+entries in sdk.yml
+
+```bash
+cim utils hash-copy-files [--dry-run] [--verbose] [--add-missing]
+```
+
+**hash-toolchains** - Compute and update SHA256 hashes for toolchain
+archives already present in the local mirror
+
+```bash
+cim utils hash-toolchains [--dry-run] [--verbose] [--add-missing]
+```
+
+**sync-copy-files** - Re-run copy_files to sync files to workspace
+
+```bash
+cim utils sync-copy-files [--dry-run] [--verbose] [--force]
+```
+
+**update** - Self-update cim binary
+
+```bash
+cim utils update
+```
 
 ### Configuration File
 
@@ -345,6 +376,7 @@ toolchains:
   # Example: ARM GNU Toolchain for aarch32 (macOS ARM64)
   - name: arm-gnu-toolchain-14.3.rel1-darwin-arm64-arm-none-eabi.tar.xz
     url: https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/
+    sha256: e4cea5bb6... # optional, verified on download
     destination: toolchains/aarch32
     strip_components: 1
     os: darwin
