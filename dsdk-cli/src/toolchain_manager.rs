@@ -806,6 +806,19 @@ impl ToolchainManager {
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let archive_path = self.mirror_path.join(toolchain.get_name());
 
+        // Remove stale zero-byte files left by previously failed downloads
+        if archive_path.exists() {
+            if let Ok(metadata) = fs::metadata(&archive_path) {
+                if metadata.len() == 0 {
+                    messages::info(&format!(
+                        "Removing stale empty file from mirror: {}",
+                        archive_path.display()
+                    ));
+                    let _ = fs::remove_file(&archive_path);
+                }
+            }
+        }
+
         // Download archive if not already in mirror
         if !archive_path.exists() {
             let expanded_url = expand_env_vars(&toolchain.url);
@@ -1243,6 +1256,10 @@ impl ToolchainManager {
                         "wget failed: {}",
                         String::from_utf8_lossy(&output.stderr)
                     ));
+                    // Remove partial/empty file left by wget
+                    if dest_path.exists() {
+                        let _ = fs::remove_file(dest_path);
+                    }
                 }
             }
 
@@ -1273,6 +1290,10 @@ impl ToolchainManager {
                         "curl failed: {}",
                         String::from_utf8_lossy(&output.stderr)
                     ));
+                    // Remove partial/empty file left by curl
+                    if dest_path.exists() {
+                        let _ = fs::remove_file(dest_path);
+                    }
                 }
             }
         }
