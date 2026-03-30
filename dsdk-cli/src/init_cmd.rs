@@ -367,13 +367,13 @@ pub(crate) fn handle_foreach_command(command: &str, match_pattern: Option<&str>)
 
     // Compile regex pattern if provided
     let match_regex = if let Some(pattern) = match_pattern {
-        match Regex::new(pattern) {
+        match compile_match_regex(pattern) {
             Ok(regex) => {
                 messages::status(&format!("Filtering repositories with pattern: {}", pattern));
                 Some(regex)
             }
             Err(e) => {
-                messages::error(&format!("Invalid regex pattern '{}': {}", pattern, e));
+                messages::error(&e);
                 return;
             }
         }
@@ -915,13 +915,13 @@ pub(crate) fn handle_init_command(config: InitConfig) {
 
     // Compile regex pattern if provided
     let match_regex = if let Some(pattern) = config.match_pattern {
-        match Regex::new(pattern) {
+        match compile_match_regex(pattern) {
             Ok(regex) => {
                 messages::verbose(&format!("Filtering repositories with pattern: {}", pattern));
                 Some(regex)
             }
             Err(e) => {
-                messages::error(&format!("Invalid regex pattern '{}': {}", pattern, e));
+                messages::error(&e);
                 return;
             }
         }
@@ -1344,6 +1344,26 @@ impl config::SdkConfigCore for FilteredSdkConfig {
     fn variables(&self) -> &Option<std::collections::HashMap<String, String>> {
         &None
     }
+}
+
+/// Compile a match pattern string into a regex.
+/// Supports comma-separated values which are converted to regex alternation.
+/// For example, "lwip,adi" becomes "(lwip|adi)".
+pub(crate) fn compile_match_regex(pattern: &str) -> Result<Regex, String> {
+    // Split on commas, trim whitespace, filter empties
+    let parts: Vec<&str> = pattern
+        .split(',')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+
+    let combined = if parts.len() == 1 {
+        parts[0].to_string()
+    } else {
+        format!("({})", parts.join("|"))
+    };
+
+    Regex::new(&combined).map_err(|e| format!("Invalid regex pattern '{}': {}", combined, e))
 }
 
 /// Filter git configurations based on regex pattern
@@ -2005,5 +2025,36 @@ gits:
         let empty_prefix = "";
         let workspace_name = format!("{}{}", empty_prefix, target);
         assert_eq!(workspace_name, target);
+    }
+
+    #[test]
+    fn test_compile_match_regex_single_pattern() {
+        let regex = super::compile_match_regex("lwip").unwrap();
+        assert!(regex.is_match("lwip"));
+        assert!(!regex.is_match("linux"));
+    }
+
+    #[test]
+    fn test_compile_match_regex_comma_separated() {
+        let regex = super::compile_match_regex("lwip,adi").unwrap();
+        assert!(regex.is_match("lwip"));
+        assert!(regex.is_match("adi-zephyr-sdk"));
+        assert!(regex.is_match("adi-sdk"));
+        assert!(regex.is_match("adi-vendor-ceva-bt"));
+        assert!(!regex.is_match("linux"));
+    }
+
+    #[test]
+    fn test_compile_match_regex_with_spaces() {
+        let regex = super::compile_match_regex("lwip , adi").unwrap();
+        assert!(regex.is_match("lwip"));
+        assert!(regex.is_match("adi-sdk"));
+    }
+
+    #[test]
+    fn test_compile_match_regex_pipe_still_works() {
+        let regex = super::compile_match_regex("lwip|adi").unwrap();
+        assert!(regex.is_match("lwip"));
+        assert!(regex.is_match("adi-sdk"));
     }
 }

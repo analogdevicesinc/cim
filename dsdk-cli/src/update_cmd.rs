@@ -11,9 +11,9 @@
 
 use crate::cli::{Cli, DockerCommand};
 use crate::init_cmd::{
-    create_filtered_sdk_config, filter_git_configs, get_latest_commit_for_branch,
-    is_branch_reference, list_available_targets, list_target_versions, list_targets_from_source,
-    resolve_target_config,
+    compile_match_regex, create_filtered_sdk_config, filter_git_configs,
+    get_latest_commit_for_branch, is_branch_reference, list_available_targets,
+    list_target_versions, list_targets_from_source, resolve_target_config,
 };
 use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
@@ -22,7 +22,6 @@ use dsdk_cli::workspace::{
     is_url, resolve_target_config_from_git, WorkspaceMarker,
 };
 use dsdk_cli::{config, docker_manager, git_operations, messages};
-use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -385,13 +384,13 @@ pub(crate) fn handle_update_command(
 
     // Compile regex pattern if provided
     let match_regex = if let Some(pattern) = match_pattern {
-        match Regex::new(pattern) {
+        match compile_match_regex(pattern) {
             Ok(regex) => {
                 messages::status(&format!("Filtering repositories with pattern: {}", pattern));
                 Some(regex)
             }
             Err(e) => {
-                messages::error(&format!("Invalid regex pattern '{}': {}", pattern, e));
+                messages::error(&e);
                 return;
             }
         }
@@ -1473,10 +1472,10 @@ pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
             // Apply filtering if --match is provided
             let filtered_sdk_config = if let Some(pattern) = r#match {
                 // Compile regex - if it fails, exit with error
-                let match_regex = match regex::Regex::new(pattern) {
+                let match_regex = match compile_match_regex(pattern) {
                     Ok(regex) => Some(regex),
                     Err(e) => {
-                        messages::error(&format!("Invalid regex pattern '{}': {}", pattern, e));
+                        messages::error(&e);
                         return;
                     }
                 };
