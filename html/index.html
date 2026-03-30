@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code in Motion - Build anything with ease.</title>
+    <meta name="description" content="CiM revolutionizes project setup. No more README wrestling, toolchain installations, or scattered files. One command to rule them all.">
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+    
+    <style>
+        :root {
+            --base: #1e1e2e; --mantle: #181825; --crust: #11111b;
+            --text: #cdd6f4; --subtext0: #a6adc8; --subtext1: #bac2de;
+            --overlay0: #6c7086; --overlay1: #9399b2; --surface0: #313244;
+            --surface1: #45475a; --surface2: #585b70; --blue: #89b4fa;
+            --lavender: #b4befe; --sapphire: #74c7ec; --sky: #89dceb;
+            --teal: #94e2d5; --green: #a6e3a1; --yellow: #f9e2af;
+            --peach: #fab387; --maroon: #eba0ac; --red: #f38ba8;
+            --pink: #f5c2e7; --mauve: #cba6f7;
+            --font-mono: 'JetBrains Mono', monospace;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-xl: 24px;
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body { font-family: var(--font-sans); background: var(--base); color: var(--text); line-height: 1.6; overflow-x: hidden; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--mantle); }
+        ::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 4px; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+        .mono { font-family: var(--font-mono); }
+        .gradient-text { background: linear-gradient(135deg, var(--blue), var(--lavender), var(--pink)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        
+        .btn { display: inline-flex; align-items: center; gap: 8px; padding: 14px 28px; border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 14px; font-weight: 600; text-decoration: none; border: none; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .btn-primary { background: linear-gradient(135deg, var(--blue), var(--lavender)); color: var(--crust); }
+        .btn-primary:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 8px 32px rgba(137, 180, 250, 0.4); }
+        .btn-secondary { background: var(--surface0); color: var(--text); border: 1px solid var(--surface1); }
+        .btn-secondary:hover { background: var(--surface1); transform: translateY(-2px); }
+        
+        .terminal { background: var(--mantle); border-radius: var(--radius-md); border: 1px solid var(--surface0); overflow: hidden; font-family: var(--font-mono); font-size: 14px; }
+        .terminal-header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--surface0); border-bottom: 1px solid var(--surface1); }
+        .terminal-dot { width: 12px; height: 12px; border-radius: 50%; }
+        .terminal-dot.red { background: var(--red); } .terminal-dot.yellow { background: var(--yellow); } .terminal-dot.green { background: var(--green); }
+        .terminal-title { margin-left: 8px; font-size: 12px; color: var(--subtext0); }
+        .terminal-body { padding: 20px; min-height: 200px; }
+        .terminal-line { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; opacity: 0; }
+        .terminal-prompt { color: var(--green); flex-shrink: 0; }
+        .terminal-command { color: var(--text); }
+        .terminal-output { color: var(--subtext0); margin-left: 24px; margin-bottom: 12px; }
+        .terminal-cursor { display: inline-block; width: 8px; height: 18px; background: var(--blue); animation: blink 1s infinite; vertical-align: middle; margin-left: 2px; }
+        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+        
+        .code-block { background: var(--mantle); border-radius: var(--radius-md); border: 1px solid var(--surface0); overflow: hidden; }
+        .code-block-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface0); border-bottom: 1px solid var(--surface1); }
+        .code-block-lang { font-family: var(--font-mono); font-size: 12px; color: var(--subtext0); text-transform: uppercase; }
+        .code-block-copy { background: none; border: none; color: var(--subtext0); cursor: pointer; padding: 4px 8px; border-radius: var(--radius-sm); transition: all 0.2s; font-family: var(--font-mono); font-size: 12px; }
+        .code-block-copy:hover { color: var(--text); background: var(--surface1); }
+        .code-block pre { padding: 20px; overflow-x: auto; font-family: var(--font-mono); font-size: 14px; line-height: 1.6; }
+        .code-comment { color: var(--overlay0); } .code-keyword { color: var(--mauve); } .code-string { color: var(--green); }
+        
+        .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; padding: 16px 0; transition: all 0.3s; }
+        .nav.scrolled { background: rgba(30, 30, 46, 0.8); backdrop-filter: blur(20px); border-bottom: 1px solid var(--surface0); }
+        .nav-inner { display: flex; align-items: center; justify-content: space-between; max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+        .nav-logo { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text); font-family: var(--font-mono); font-weight: 700; font-size: 20px; }
+        .nav-logo-icon { width: 36px; height: 36px; background: linear-gradient(135deg, var(--blue), var(--lavender)); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--crust); }
+        .nav-links { display: flex; align-items: center; gap: 32px; }
+        .nav-link { color: var(--subtext0); text-decoration: none; font-size: 14px; font-weight: 500; transition: color 0.2s; }
+        .nav-link:hover { color: var(--text); }
+        .nav-cta { display: none; }
+        .nav-mobile-toggle { display: none; background: none; border: none; color: var(--text); cursor: pointer; padding: 8px; }
+        
+        .hero { min-height: 100vh; display: flex; align-items: center; padding: 120px 0 80px; position: relative; overflow: hidden; }
+        .hero-bg { position: absolute; inset: 0; background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(137, 180, 250, 0.15), transparent), radial-gradient(ellipse 60% 40% at 80% 80%, rgba(180, 190, 254, 0.1), transparent); animation: heroGradient 20s ease-in-out infinite; }
+        @keyframes heroGradient { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
+        .hero-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; position: relative; z-index: 1; }
+        .hero-content { max-width: 560px; }
+        .hero-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--surface0); border: 1px solid var(--surface1); border-radius: 100px; font-family: var(--font-mono); font-size: 12px; color: var(--blue); margin-bottom: 24px; }
+        .hero-badge-dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .hero-title { font-family: var(--font-mono); font-size: clamp(40px, 6vw, 64px); font-weight: 700; line-height: 1.1; margin-bottom: 20px; letter-spacing: -0.02em; }
+        .hero-subtitle { font-size: 20px; color: var(--subtext0); margin-bottom: 32px; line-height: 1.5; }
+        .hero-cta { display: flex; gap: 16px; flex-wrap: wrap; }
+        .hero-terminal { transform: perspective(1000px) rotateY(-5deg) rotateX(2deg); transition: transform 0.5s ease; }
+        .hero-terminal:hover { transform: perspective(1000px) rotateY(0deg) rotateX(0deg); }
+        
+        .section { padding: 100px 0; position: relative; }
+        .section-alt { background: var(--mantle); }
+        .section-header { text-align: center; max-width: 640px; margin: 0 auto 64px; }
+        .section-label { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--blue); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 16px; }
+        .section-title { font-family: var(--font-mono); font-size: clamp(28px, 4vw, 40px); font-weight: 700; margin-bottom: 16px; }
+        .section-desc { color: var(--subtext0); font-size: 18px; }
+        
+        .problem-comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; max-width: 900px; margin: 0 auto; }
+        .problem-card { background: var(--base); border: 1px solid var(--surface0); border-radius: var(--radius-lg); padding: 32px; position: relative; overflow: hidden; }
+        .problem-card.old::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--red); }
+        .problem-card.new::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--green); }
+        .problem-icon { width: 48px; height: 48px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 24px; margin-bottom: 20px; }
+        .problem-card.old .problem-icon { background: rgba(243, 139, 168, 0.1); } .problem-card.new .problem-icon { background: rgba(166, 227, 161, 0.1); }
+        .problem-title { font-family: var(--font-mono); font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+        .problem-card.old .problem-title { color: var(--red); } .problem-card.new .problem-title { color: var(--green); }
+        .problem-list { list-style: none; }
+        .problem-list li { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; color: var(--subtext0); font-size: 15px; border-bottom: 1px solid var(--surface0); }
+        .problem-list li:last-child { border-bottom: none; }
+        .problem-check { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+        .problem-card.old .problem-check { background: rgba(243, 139, 168, 0.2); color: var(--red); }
+        .problem-card.new .problem-check { background: rgba(166, 227, 161, 0.2); color: var(--green); }
+        
+        .workflow-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; position: relative; }
+        .workflow-connector { position: absolute; top: 40px; left: 12.5%; right: 12.5%; height: 2px; background: var(--surface1); z-index: 0; }
+        .workflow-connector-fill { height: 100%; background: linear-gradient(90deg, var(--blue), var(--lavender)); width: 0%; }
+        .workflow-step { position: relative; z-index: 1; text-align: center; }
+        .workflow-step-number { width: 80px; height: 80px; border-radius: 50%; background: var(--mantle); border: 2px solid var(--surface1); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-family: var(--font-mono); font-size: 24px; font-weight: 700; color: var(--subtext0); transition: all 0.3s; }
+        .workflow-step.active .workflow-step-number { border-color: var(--blue); color: var(--blue); background: var(--base); box-shadow: 0 0 30px rgba(137, 180, 250, 0.3); }
+        .workflow-step.completed .workflow-step-number { border-color: var(--green); color: var(--green); background: var(--base); }
+        .workflow-step-title { font-family: var(--font-mono); font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+        .workflow-step-desc { font-size: 14px; color: var(--subtext0); }
+        .workflow-command { display: inline-block; margin-top: 12px; padding: 8px 16px; background: var(--surface0); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 13px; color: var(--yellow); }
+        
+        .state-diagram { background: var(--mantle); border-radius: var(--radius-lg); border: 1px solid var(--surface0); padding: 48px; overflow: hidden; }
+        .state-svg { width: 100%; height: auto; max-width: 900px; margin: 0 auto; display: block; }
+        .state-node { cursor: pointer; transition: all 0.3s; }
+        .state-node:hover rect { filter: brightness(1.2); }
+        .state-node rect { transition: all 0.3s; }
+        .state-arrow { stroke-dasharray: 8; animation: dash 30s linear infinite; }
+        @keyframes dash { to { stroke-dashoffset: -1000; } }
+        .state-tooltip { position: absolute; background: var(--surface0); border: 1px solid var(--surface1); border-radius: var(--radius-md); padding: 16px; font-size: 14px; color: var(--text); max-width: 280px; opacity: 0; pointer-events: none; transition: opacity 0.3s; z-index: 100; }
+        .state-tooltip.visible { opacity: 1; }
+        
+        .features-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+        .feature-card { background: var(--mantle); border: 1px solid var(--surface0); border-radius: var(--radius-lg); padding: 32px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); position: relative; overflow: hidden; }
+        .feature-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--blue), transparent); opacity: 0; transition: opacity 0.3s; }
+        .feature-card:hover { transform: translateY(-4px); border-color: var(--surface1); box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3); }
+        .feature-card:hover::before { opacity: 1; }
+        .feature-icon { width: 56px; height: 56px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 28px; margin-bottom: 20px; background: var(--surface0); }
+        .feature-card:nth-child(1) .feature-icon { color: var(--green); } .feature-card:nth-child(2) .feature-icon { color: var(--blue); }
+        .feature-card:nth-child(3) .feature-icon { color: var(--yellow); } .feature-card:nth-child(4) .feature-icon { color: var(--pink); }
+        .feature-title { font-family: var(--font-mono); font-size: 20px; font-weight: 600; margin-bottom: 12px; }
+        .feature-desc { color: var(--subtext0); font-size: 15px; line-height: 1.6; }
+        
+        .quickstart-container { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+        .quickstart-steps { display: flex; flex-direction: column; gap: 24px; }
+        .quickstart-step { display: flex; gap: 20px; align-items: flex-start; }
+        .quickstep-number { width: 40px; height: 40px; border-radius: 50%; background: var(--surface0); display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-weight: 700; color: var(--blue); flex-shrink: 0; }
+        .quickstep-content h3 { font-family: var(--font-mono); font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+        .quickstep-content p { color: var(--subtext0); font-size: 15px; margin-bottom: 12px; }
+        .quickstep-link { color: var(--blue); text-decoration: none; font-size: 14px; }
+        .quickstep-link:hover { text-decoration: underline; }
+        .quickstart-examples { background: var(--mantle); border-radius: var(--radius-lg); border: 1px solid var(--surface0); padding: 24px; }
+        .quickstart-examples h3 { font-family: var(--font-mono); font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--subtext0); }
+        .example-targets { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+        .example-target { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--base); border: 1px solid var(--surface0); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 14px; transition: all 0.2s; }
+        .example-target { cursor: pointer; }
+        .example-target:hover { border-color: var(--blue); background: var(--surface0); }
+        .example-target.active { border-color: var(--blue); background: var(--surface0); }
+        .example-target-icon { width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--surface1); display: flex; align-items: center; justify-content: center; }
+        .example-target-name { color: var(--text); font-weight: 500; } .example-target-desc { margin-left: auto; color: var(--overlay0); font-size: 12px; }
+        
+        .faq-list { max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+        .faq-item { background: var(--base); border: 1px solid var(--surface1); border-radius: var(--radius-md); overflow: hidden; transition: all 0.3s; }
+        .faq-item:hover { border-color: var(--surface1); } .faq-item.active { border-color: var(--blue); box-shadow: 0 0 30px rgba(137, 180, 250, 0.1); }
+        .faq-question { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; cursor: pointer; background: none; border: none; width: 100%; text-align: left; color: var(--text); font-family: var(--font-sans); font-size: 16px; font-weight: 500; }
+        .faq-question:hover { background: var(--surface0); }
+        .faq-icon { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; transition: transform 0.3s; color: var(--blue); }
+        .faq-item.active .faq-icon { transform: rotate(45deg); }
+        .faq-answer { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; }
+        .faq-answer-inner { padding: 0 24px 20px; color: var(--subtext0); font-size: 15px; line-height: 1.6; }
+        .faq-item.active .faq-answer { max-height: 500px; }
+
+        .faq-section-header { margin-top: 48px; margin-bottom: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--surface1); font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--overlay0); font-family: var(--font-mono); }
+        .faq-section-header:first-child { margin-top: 0; }
+
+        .footer { background: var(--crust); border-top: 1px solid var(--surface0); padding: 64px 0 32px; }
+        .footer-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 48px; margin-bottom: 48px; }
+        .footer-brand { max-width: 300px; }
+        .footer-logo { display: flex; align-items: center; gap: 12px; font-family: var(--font-mono); font-weight: 700; font-size: 20px; margin-bottom: 16px; }
+        .footer-desc { color: var(--subtext0); font-size: 14px; line-height: 1.6; }
+        .footer-column h4 { font-family: var(--font-mono); font-size: 14px; font-weight: 600; margin-bottom: 20px; color: var(--text); }
+        .footer-links { list-style: none; display: flex; flex-direction: column; gap: 12px; }
+        .footer-links a { color: var(--subtext0); text-decoration: none; font-size: 14px; transition: color 0.2s; }
+        .footer-links a:hover { color: var(--blue); }
+        .footer-bottom { display: flex; align-items: center; justify-content: space-between; padding-top: 32px; border-top: 1px solid var(--surface0); }
+        .footer-copyright { color: var(--overlay0); font-size: 14px; }
+        .footer-social { display: flex; gap: 16px; } .footer-social a { color: var(--subtext0); transition: color 0.2s; } .footer-social a:hover { color: var(--blue); }
+        
+        .mobile-nav { position: fixed; inset: 0; background: var(--base); z-index: 999; display: flex; flex-direction: column; padding: 100px 24px 24px; transform: translateX(100%); transition: transform 0.3s; }
+        .mobile-nav.open { transform: translateX(0); }
+        .mobile-nav-links { display: flex; flex-direction: column; gap: 24px; }
+        .mobile-nav-link { color: var(--text); text-decoration: none; font-family: var(--font-mono); font-size: 24px; font-weight: 600; }
+        
+        #toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface0); color: var(--text); padding: 12px 20px; border-radius: var(--radius-md); border: 1px solid var(--surface1); opacity: 0; transform: translateY(10px); transition: all 0.3s; z-index: 10000; font-size: 14px; pointer-events: none; }
+        
+        @media (max-width: 1024px) {
+            .hero-grid { grid-template-columns: 1fr; text-align: center; } .hero-content { max-width: 100%; } .hero-cta { justify-content: center; }
+            .hero-terminal { transform: none; max-width: 600px; margin: 0 auto; } .workflow-steps { grid-template-columns: repeat(2, 1fr); }
+            .workflow-connector { display: none; } .quickstart-container { grid-template-columns: 1fr; } .footer-grid { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 768px) {
+            .nav-links, .nav-cta { display: none; } .nav-mobile-toggle { display: block; }
+            .problem-comparison, .workflow-steps, .features-grid { grid-template-columns: 1fr; }
+            .footer-grid { grid-template-columns: 1fr; gap: 32px; } .footer-bottom { flex-direction: column; gap: 16px; text-align: center; }
+            .state-diagram { padding: 24px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav" id="nav">
+        <div class="nav-inner">
+            <a href="#" class="nav-logo">
+                <div class="nav-logo-icon">CiM</div>
+                <span>Code in Motion</span>
+            </a>
+            <div class="nav-links">
+                <a href="#problem" class="nav-link">Problem</a>
+                <a href="#how-it-works" class="nav-link">How It Works</a>
+                
+                <a href="#quickstart" class="nav-link">Quick Start</a>
+                <a href="#faq" class="nav-link">FAQ</a>
+            </div>
+            <a href="https://github.com/analogdevicesinc/cim/releases" class="btn btn-primary nav-cta" target="_blank">Download</a>
+            <button class="nav-mobile-toggle" id="mobileToggle">
+                <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
+        </div>
+    </nav>
+    <div class="mobile-nav" id="mobileNav">
+        <div class="mobile-nav-links">
+            <a href="#problem" class="mobile-nav-link">Problem</a>
+            <a href="#how-it-works" class="mobile-nav-link">How It Works</a>
+            
+            <a href="#quickstart" class="mobile-nav-link">Quick Start</a>
+            <a href="#faq" class="mobile-nav-link">FAQ</a>
+        </div>
+    </div>
+
+    <!-- Hero Section -->
+    <section class="hero" id="hero">
+        <div class="hero-bg"></div>
+        <div class="container">
+            <div class="hero-grid">
+                <div class="hero-content">
+                    <div class="hero-badge">
+                        <span class="hero-badge-dot"></span>
+                        <span>Open Source</span>
+                    </div>
+                    <h1 class="hero-title"><span class="gradient-text">Code in Motion</span></h1>
+                    <p class="hero-subtitle">Build anything easily. Skip READMEs, manual toolchain setup and scattered configs. Share repos and stop re-downloading files. One tool does it all in a developer friendly way.</p>
+                    <div class="hero-cta">
+                        <a href="https://github.com/analogdevicesinc/cim/releases" class="btn btn-primary" target="_blank">
+                            <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                            Download
+                        </a>
+                        <a href="#how-it-works" class="btn btn-secondary">Learn More</a>
+                    </div>
+                </div>
+                <div class="hero-terminal">
+                    <div class="terminal">
+                        <div class="terminal-header">
+                            <span class="terminal-dot red"></span>
+                            <span class="terminal-dot yellow"></span>
+                            <span class="terminal-dot green"></span>
+                            <span class="terminal-title">CiM demo</span>
+                        </div>
+                        <div class="terminal-body">
+                            <div class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">cim list-targets</span></div>
+                            <div class="terminal-line">
+                              <div class="terminal-output">
+                                <span style="color: var(--green)">✓</span> no-OS<br>
+                                <span style="color: var(--green)">✓</span> optee-qemu-v8<br>
+                                <span style="color: var(--green)">✓</span> u-boot<br>
+                                <span style="color: var(--overlay0)">...</span></div></div>
+                            <div class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">cim init --install -t no-OS</span></div>
+                            <div class="terminal-line"><div class="terminal-output"><span style="color: var(--green)">→</span> Initializing...<br><span style="color: var(--blue)">✓</span> Workspace ready</div></div>
+                            <div class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">cd ~/dsdk-no-OS</span></div>
+                            <div class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">make sdk-envsetup && make sdk-build</span><span class="terminal-cursor"></span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Problem Section -->
+    <section class="section" id="problem">
+        <div class="container">
+            <div class="section-header">
+                <div class="section-label">The Problem</div>
+                <h2 class="section-title">Setup and Build Software Shouldn't Be This Hard</h2>
+                <p class="section-desc">Layers of tools, scripts, dedicated environments and tribal knowledge make setups fragile, onboarding slow and CI/CD inefficient. CiM makes project setup explicit, reproducible and automatable — without sacrificing developer experience.</p>
+            </div>
+            <div class="problem-comparison">
+                <div class="problem-card old">
+                    <div class="problem-icon">😵‍💫</div>
+                    <h3 class="problem-title">The Old Way</h3>
+                    <ul class="problem-list">
+                        <li><span class="problem-check">✕</span><span>Copy-paste from outdated READMEs</span></li>
+                        <li><span class="problem-check">✕</span><span>Takes installed toolchains for granted</span></li>
+                        <li><span class="problem-check">✕</span><span>Scattered files everywhere</span></li>
+                        <li><span class="problem-check">✕</span><span>"Works on my machine"</span></li>
+                        <li><span class="problem-check">✕</span><span>Re-download files</span></li>
+                        <li><span class="problem-check">✕</span><span>Not AI/LLM ready (when GUI only)</span></li>
+                        <li><span class="problem-check">✕</span><span>Supports specific user cases</span></li>
+                        <li><span class="problem-check">✕</span><span>Release work is manual and takes time</span></li>
+                        <li><span class="problem-check">✕</span><span>Python workspace tooling requires virtual environments</span></li>
+                    </ul>
+                </div>
+                <div class="problem-card new">
+                    <div class="problem-icon">✨</div>
+                    <h3 class="problem-title">The Code in Motion Way</h3>
+                    <ul class="problem-list">
+                        <li><span class="problem-check">✓</span><span>Declared around standardized commands</span></li>
+                        <li><span class="problem-check">✓</span><span>Finds and installs the correct toolchain</span></li>
+                        <li><span class="problem-check">✓</span><span>Everything in one place</span></li>
+                        <li><span class="problem-check">✓</span><span>Reproducible builds</span></li>
+                        <li><span class="problem-check">✓</span><span>Clever caching</span></li>
+                        <li><span class="problem-check">✓</span><span>CLI based prepared for AI agents</span></li>
+                        <li><span class="problem-check">✓</span><span>Works with any type of project</span></li>
+                        <li><span class="problem-check">✓</span><span>Creates and pins new releases in minutes</span></li>
+                        <li><span class="problem-check">✓</span><span>Single executable binary</span></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works Section -->
+    <section class="section section-alt" id="how-it-works">
+        <div class="container">
+            <div class="section-header">
+                <div class="section-label">Workflow</div>
+                <h2 class="section-title">Four Commands to Build Anything</h2>
+                <p class="section-desc">No complex configurations. No dependencies to manage. Just these four simple steps.</p>
+            </div>
+            <div class="workflow-steps">
+                <div class="workflow-connector"><div class="workflow-connector-fill" id="workflowConnector"></div></div>
+                <div class="workflow-step" data-step="1">
+                    <div class="workflow-step-number">1</div>
+                    <h3 class="workflow-step-title">Discover</h3>
+                    <p class="workflow-step-desc">Find available build targets</p>
+                    <span class="workflow-command">cim list-targets</span>
+                </div>
+                <div class="workflow-step" data-step="2">
+                    <div class="workflow-step-number">2</div>
+                    <h3 class="workflow-step-title">Initialize</h3>
+                    <p class="workflow-step-desc">Create a confined workspace</p>
+                    <span class="workflow-command">cim init &lt;target&gt;</span>
+                </div>
+                <div class="workflow-step" data-step="3">
+                    <div class="workflow-step-number">3</div>
+                    <h3 class="workflow-step-title">Configure</h3>
+                    <p class="workflow-step-desc">Generate the build system</p>
+                    <span class="workflow-command">cim makefile</span>
+                </div>
+                <div class="workflow-step" data-step="4">
+                    <div class="workflow-step-number">4</div>
+                    <h3 class="workflow-step-title">Build</h3>
+                    <p class="workflow-step-desc">Compile and test</p>
+                    <span class="workflow-command">make sdk-build</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- State Diagram Section -->
+    <section class="section" id="state-diagram">
+        <div class="container">
+            <div class="section-header">
+                <div class="section-label">Architecture</div>
+                <h2 class="section-title">Under the Hood</h2>
+                <p class="section-desc">How CiM orchestrates the build process from initialization to completion.</p>
+            </div>
+            <div class="state-diagram">
+                <svg class="state-svg" viewBox="-50 0 1500 830" xmlns="http://www.w3.org/2000/svg" style="margin: 0 auto; display: block;" id="cim-diagram">
+                    <defs>
+                        <linearGradient id="nodeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#313244"/><stop offset="100%" style="stop-color:#45475a"/>
+                        </linearGradient>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+                            <polygon points="0 0, 10 4, 0 8" fill="#585b70"/>
+                        </marker>
+                    </defs>
+
+                    <!-- Nodes -->
+                    <g class="state-nodes">
+                        <!-- Row 0: cim init → cim install → cim makefile -->
+                        <g class="state-node" data-node="init" transform="translate(50, 40)">
+                            <rect width="110" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="55" y="45" text-anchor="middle" fill="#cdd6f4" font-family="JetBrains Mono" font-size="18" font-weight="600">cim</text>
+                            <text x="55" y="70" text-anchor="middle" fill="#89b4fa" font-family="JetBrains Mono" font-size="16">init</text>
+                        </g>
+
+                        <g class="state-node" data-node="install" transform="translate(290, 40)">
+                            <rect width="200" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="100" y="45" text-anchor="middle" fill="#cdd6f4" font-family="JetBrains Mono" font-size="18" font-weight="600">cim</text>
+                            <text x="100" y="70" text-anchor="middle" fill="#a6e3a1" font-family="JetBrains Mono" font-size="16">install ...</text>
+                        </g>
+
+                        <g class="state-node" data-node="makefile" transform="translate(620, 40)">
+                            <rect width="170" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="85" y="45" text-anchor="middle" fill="#cdd6f4" font-family="JetBrains Mono" font-size="18" font-weight="600">cim</text>
+                            <text x="85" y="70" text-anchor="middle" fill="#f9e2af" font-family="JetBrains Mono" font-size="16">makefile</text>
+                        </g>
+
+                        <!-- Row 1: sdk.yml (toolchain) and sdk.yml (manifest) -->
+                        <g class="state-node" data-node="sdk-toolchain" transform="translate(290, 250)">
+                            <rect width="200" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="100" y="38" text-anchor="middle" fill="#f5c2e7" font-family="JetBrains Mono" font-size="17" font-weight="600">sdk.yml</text>
+                            <text x="100" y="58" text-anchor="middle" fill="#6c7086" font-family="JetBrains Mono" font-size="14">toolchain</text>
+                            <text x="100" y="78" text-anchor="middle" fill="#89b4fa" font-family="JetBrains Mono" font-size="14">config</text>
+                        </g>
+
+                        <g class="state-node" data-node="sdk-manifest" transform="translate(780, 250)">
+                            <rect width="170" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="85" y="38" text-anchor="middle" fill="#f5c2e7" font-family="JetBrains Mono" font-size="17" font-weight="600">sdk.yml</text>
+                            <text x="85" y="58" text-anchor="middle" fill="#6c7086" font-family="JetBrains Mono" font-size="14">manifest</text>
+                            <text x="85" y="78" text-anchor="middle" fill="#cba6f7" font-family="JetBrains Mono" font-size="14">build rules</text>
+                        </g>
+
+                        <!-- Row 2: Left branch children + Generated Makefile + make sdk-build -->
+                        <g class="state-node" data-node="os-deps" transform="translate(50, 460)">
+                            <rect width="190" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="95" y="38" text-anchor="middle" fill="#fab387" font-family="JetBrains Mono" font-size="14" font-weight="600">os-dependencies</text>
+                            <text x="95" y="58" text-anchor="middle" fill="#6c7086" font-family="JetBrains Mono" font-size="14">.yml</text>
+                            <text x="95" y="78" text-anchor="middle" fill="#f9e2af" font-family="JetBrains Mono" font-size="14">Host packages</text>
+                        </g>
+
+                        <g class="state-node" data-node="toolchains" transform="translate(280, 460)">
+                            <rect width="190" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="95" y="45" text-anchor="middle" fill="#f5c2e7" font-family="JetBrains Mono" font-size="18" font-weight="600">Toolchains</text>
+                            <text x="95" y="70" text-anchor="middle" fill="#b4befe" font-family="JetBrains Mono" font-size="14">Cross-compilers</text>
+                        </g>
+
+                        <g class="state-node" data-node="python-deps" transform="translate(510, 460)">
+                            <rect width="190" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="95" y="38" text-anchor="middle" fill="#89dceb" font-family="JetBrains Mono" font-size="13" font-weight="600">python-dependencies</text>
+                            <text x="95" y="58" text-anchor="middle" fill="#6c7086" font-family="JetBrains Mono" font-size="14">.yaml</text>
+                            <text x="95" y="78" text-anchor="middle" fill="#94e2d5" font-family="JetBrains Mono" font-size="14">Python packages</text>
+                        </g>
+
+                        <g class="state-node" data-node="generated" transform="translate(760, 460)">
+                            <rect width="220" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="110" y="45" text-anchor="middle" fill="#cdd6f4" font-family="JetBrains Mono" font-size="16" font-weight="600">Generated</text>
+                            <text x="110" y="70" text-anchor="middle" fill="#cba6f7" font-family="JetBrains Mono" font-size="18">Makefile</text>
+                        </g>
+
+                        <g class="state-node" data-node="make-sdk-build" transform="translate(1130, 460)">
+                            <rect width="200" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="100" y="45" text-anchor="middle" fill="#cdd6f4" font-family="JetBrains Mono" font-size="16" font-weight="600">make</text>
+                            <text x="100" y="70" text-anchor="middle" fill="#f9e2af" font-family="JetBrains Mono" font-size="17">sdk-build</text>
+                        </g>
+
+                        <!-- Row 3: build/Makefile, extra.mk, project cmake -->
+                        <g class="state-node" data-node="build-makefile" transform="translate(700, 670)">
+                            <rect width="180" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="90" y="45" text-anchor="middle" fill="#94e2d5" font-family="JetBrains Mono" font-size="16" font-weight="600">build/Makefile</text>
+                            <text x="90" y="70" text-anchor="middle" fill="#6c7086" font-family="JetBrains Mono" font-size="14">optional</text>
+                        </g>
+
+                        <g class="state-node" data-node="extra" transform="translate(920, 670)">
+                            <rect width="170" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="85" y="45" text-anchor="middle" fill="#94e2d5" font-family="JetBrains Mono" font-size="18" font-weight="600">extra.mk</text>
+                            <text x="85" y="70" text-anchor="middle" fill="#6c7086" font-family="JetBrains Mono" font-size="14">optional</text>
+                        </g>
+
+                        <g class="state-node" data-node="project-cmake" transform="translate(1160, 670)">
+                            <rect width="200" height="100" rx="12" fill="url(#nodeGradient)" stroke="#585b70" stroke-width="2"/>
+                            <text x="100" y="45" text-anchor="middle" fill="#cdd6f4" font-family="JetBrains Mono" font-size="16" font-weight="600">project</text>
+                            <text x="100" y="70" text-anchor="middle" fill="#cba6f7" font-family="JetBrains Mono" font-size="18">cmake</text>
+                        </g>
+                    </g>
+
+                    <!-- Connection arrows -->
+                    <g class="state-connections" stroke="#585b70" stroke-width="2" fill="none">
+                        <!-- Row 0: init → install → makefile -->
+                        <path class="state-arrow" d="M 160 90 L 290 90" marker-end="url(#arrowhead)"/>
+                        <path class="state-arrow" d="M 490 90 L 620 90" marker-end="url(#arrowhead)"/>
+
+                        <!-- Row 0 → Row 1 -->
+                        <path class="state-arrow" d="M 390 140 L 390 250" marker-end="url(#arrowhead)"/>
+                        <path class="state-arrow" d="M 720 140 L 840 250" marker-end="url(#arrowhead)"/>
+
+                        <!-- Row 1 → Row 2 (left branch) -->
+                        <path class="state-arrow" d="M 320 350 L 145 460" marker-end="url(#arrowhead)"/>
+                        <path class="state-arrow" d="M 390 350 L 375 460" marker-end="url(#arrowhead)"/>
+                        <path class="state-arrow" d="M 460 350 L 605 460" marker-end="url(#arrowhead)"/>
+
+                        <!-- Row 1 → Row 2 (right branch) -->
+                        <path class="state-arrow" d="M 865 350 L 870 460" marker-end="url(#arrowhead)"/>
+
+                        <!-- Row 2: Generated Makefile → make sdk-build -->
+                        <path class="state-arrow" d="M 980 510 L 1130 510" marker-end="url(#arrowhead)"/>
+
+                        <!-- Row 2 → Row 3 -->
+                        <path class="state-arrow" d="M 830 560 L 790 670" marker-end="url(#arrowhead)"/>
+                        <path class="state-arrow" d="M 910 560 L 1005 670" marker-end="url(#arrowhead)"/>
+                        <path class="state-arrow" d="M 1230 560 L 1260 670" marker-end="url(#arrowhead)"/>
+                    </g>
+
+                    <!-- Label backgrounds -->
+                    <g>
+                        <rect x="190" y="75" width="70" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                        <rect x="520" y="75" width="70" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                        <rect x="369" y="185" width="42" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                        <rect x="755" y="185" width="42" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                        <rect x="359" y="393" width="62" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                        <rect x="835" y="393" width="68" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                        <rect x="1030" y="497" width="42" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                        <rect x="779" y="605" width="62" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                        <rect x="927" y="605" width="62" height="22" rx="4" fill="rgba(30,30,46,0.95)"/>
+                    </g>
+
+                    <!-- Labels -->
+                    <g fill="#89b4fa" font-family="JetBrains Mono" font-size="12" font-weight="500">
+                        <text x="225" y="90" text-anchor="middle">workspace</text>
+                        <text x="555" y="90" text-anchor="middle">configure</text>
+                        <text x="390" y="200" text-anchor="middle">reads</text>
+                        <text x="776" y="200" text-anchor="middle">reads</text>
+                        <text x="390" y="408" text-anchor="middle">installs</text>
+                        <text x="869" y="408" text-anchor="middle">generates</text>
+                        <text x="1051" y="512" text-anchor="middle">runs</text>
+                        <text x="810" y="620" text-anchor="middle">includes</text>
+                        <text x="958" y="620" text-anchor="middle">includes</text>
+                    </g>
+                </svg>
+                <div class="state-tooltip" id="stateTooltip"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start Section -->
+    <section class="section" id="quickstart">
+        <div class="container">
+            <div class="section-header">
+                <div class="section-label">Get Started</div>
+                <h2 class="section-title">Ready to Build?</h2>
+                <p class="section-desc">Get CiM running in under 60 seconds. No complex setup required.</p>
+            </div>
+            <div class="quickstart-container">
+                <div class="quickstart-steps">
+                    <div class="quickstart-step">
+                        <div class="quickstep-number">1</div>
+                        <div class="quickstep-content">
+                            <h3>Download CiM</h3>
+                            <p>Grab the latest precompiled binary from GitHub releases for your platform.</p>
+                            <a href="https://github.com/analogdevicesinc/cim/releases" class="quickstep-link" target="_blank">View Releases →</a>
+                        </div>
+                    </div>
+                    <div class="quickstart-step">
+                        <div class="quickstep-number">2</div>
+                        <div class="quickstep-content">
+                            <h3>Find a Manifest</h3>
+                            <p>Explore available build targets from the public manifest repository.</p>
+                            <a href="https://github.com/joabech/cim-manifests" class="quickstep-link" target="_blank">Browse Manifests →</a>
+                        </div>
+                    </div>
+                    <div class="quickstart-step">
+                        <div class="quickstep-number">3</div>
+                        <div class="quickstep-content">
+                            <h3>Initialize & Build</h3>
+                            <p>Pick a target, initialize your workspace, and start building immediately.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="quickstart-examples">
+                    <h3>Example Targets</h3>
+                    <div class="example-targets">
+                        <div class="example-target active" data-target="no-OS">
+                            <div class="example-target-icon">🔧</div>
+                            <span class="example-target-name">no-OS</span>
+                            <span class="example-target-desc">Drivers without an OS</span>
+                        </div>
+                        <div class="example-target" data-target="optee-qemu-v8">
+                            <div class="example-target-icon">🔒</div>
+                            <span class="example-target-name">optee-qemu-v8</span>
+                            <span class="example-target-desc">OP-TEE on QEMU ARMv8</span>
+                        </div>
+                        <div class="example-target" data-target="u-boot">
+                            <div class="example-target-icon">⚡</div>
+                            <span class="example-target-name">u-boot</span>
+                            <span class="example-target-desc">Universal Boot Loader</span>
+                        </div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-block-header">
+                            <span class="code-block-lang">bash</span>
+                            <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
+                        </div>
+                        <pre><code><span class="code-comment"># List available targets</span>
+cim list-targets <span class="code-keyword">--source</span> https://github.com/joabech/cim-manifests
+
+<span class="code-comment"># Initialize a workspace (use the same --source if needed)</span>
+cim init --install -t <span id="target-name">no-OS</span>
+
+<span class="code-comment"># Generate makefile and build</span>
+cim makefile && make sdk-envsetup && make sdk-build</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- FAQ Section -->
+    <section class="section section-alt" id="faq">
+        <div class="container">
+            <div class="section-header">
+                <div class="section-label">FAQ</div>
+                <h2 class="section-title">Common Questions</h2>
+                <p class="section-desc">Everything you need to know about Code in Motion.</p>
+            </div>
+            <div class="faq-list">
+                <!-- Section 1: Intro & Motivation -->
+                <div class="faq-item" id="faq-what-is-cim">
+                    <button class="faq-question"><span>What is CiM and why should I use it?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          Are you tired of outdated build instructions and scattered configs that assume Ubuntu while you’re running Fedora or macOS? Do you find yourself hunting down equivalent packages just to get started? Or wondering where files will end up? Your workspace, <b>/opt/</b>, or <b>/usr/...</b>? And do build instructions sometimes assume you already have the required toolchains installed?
+                          <br><br>
+                          If any of this sounds familiar, CiM is worth a try.
+                          <br><br>
+                          In short, CiM offers:
+                          <br>
+                          - <b>Frictionless</b>, target-specific workspace creation.
+                          <br>
+                          - A <b>standardized</b> way to build default targets.
+                          <br>
+                          - <b>Full control</b> over files, remove a target workspace without leaving stray files behind.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-why-created">
+                    <button class="faq-question"><span>Why was CiM created?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          CiM was created to address the growing complexity of building software today. Many existing tools are designed with a single community or a specific runtime in mind. CiM takes a different approach, it doesn’t mandate a target. A single CiM manifest can define standalone tools, as well as environments like Zephyr, Yocto, and Buildroot within the same project if you so wish.
+                          <br><br>
+                          CiM is inspired by several widely used tools, including Google’s repo, Zephyr’s west, Docker, Git, and Yocto. Each of these solves important problems, but also comes with limitations:
+                          <br>
+                          - <b>repo</b> – Excellent for managing large sets of independent repositories and supports mirroring well.
+                          <br>
+                          - <b>west</b> – Works great for MCU development, but is tightly coupled to the Zephyr ecosystem.
+                          <br>
+                          - <b>Docker</b> – Strong for sandboxing, packaging, and CI/CD workflows, but less convenient for developers who need to debug directly on their local machines.
+                          <br>
+                          - <b>Yocto</b> – Extremely powerful and capable of building almost anything, but highly complex, often involving hundreds of configuration files. Modifying source code typically requires separate tools (e.g., devtool) or patching recipes, which differs from the Git-based workflows most developers prefer.
+                          <br>
+                          - <b>Git</b> – The backbone of modern software development for nearly two decades. While features like submodules and worktrees are powerful, they don’t fully address issues like duplication and fragmentation across projects.
+                          <br><br>
+                          CiM builds on the strengths of these tools while aiming to reduce their complexity and limitations.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-developer">
+                    <button class="faq-question"><span>I’m a developer - do I really need another tool?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          Not really. CiM’s primary role is to set up and manage your workspace. Once that’s done, you can work exactly as you normally would, using Git, your usual build commands and your preferred debugging tools.
+                          <br><br>
+                          Think of CiM as a setup and orchestration layer, not something that replaces your workflow.
+                          <br><br>
+                          For example, imagine your product consists of 50+ repositories. As a Linux kernel developer, you might normally clone only the kernel repository. However, that alone won’t include the other components, manifests, build tools, or test assets required to build and validate the full product.
+                          <br><br>
+                          If you use CiM to set up the workspace, everything is prepared for you. From there, you can jump into the kernel repository and work as usual. When you’re ready, you can run commands like <b>make sdk-build</b> or <b>make sdk-test</b> from the workspace to build and test the full product, including your changes.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-agentic-coding">
+                    <button class="faq-question"><span>Does CiM support agentic coding?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          Yes. CiM is command-line based, which makes it easy for agentic tools to interact with.
+                          <br><br>
+                          For <b>developers</b> working on CiM itself, there are prepared files designed for tools like Claude, Copilot, and similar assistants. These help with developing new features and debugging issues as they arise.
+                          <br><br>
+                          For CiM <b>users</b>, agentic workflows can be integrated directly into projects. Files such as <a href="https://github.com/joabech/cim-manifests/blob/dd72baddadb752b3e0b5bc7b44db50ecec45dcfb/targets/optee-qemu-v8/llm/CLAUDE.md" target="_blank" style="color: var(--blue)">CLAUDE.md</a> (and similar) can be added to a manifest repository under a target and automatically copied into the workspace using the <a href="https://github.com/joabech/cim-manifests/blob/dd72baddadb752b3e0b5bc7b44db50ecec45dcfb/targets/optee-qemu-v8/sdk.yml#L68-L70" target="_blank" style="color: var(--blue)">copy_files</a> feature during workspace creation.
+                          <br><br>
+                          In short, CiM manifests can include tailored prompt files, making it easy to customize agent behavior for each specific project.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 2: Core Concepts -->
+                <div class="faq-section-header">Core Concepts</div>
+                <div class="faq-item" id="faq-manifest">
+                    <button class="faq-question"><span>What is a manifest and where can I find it?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          A manifest primarily consists of three YAML files: <b>sdk.yml</b>, <b>os-dependencies.yml</b>, and <b>python-dependencies.yml</b>. These can be supplemented with additional files as needed for a given project.
+                        <br><br>
+                        The manifest defines the scope of a project or product, what source code is required, which toolchains are needed, how components are structured, and how the default build is initialized.
+                          <br><br>
+                          A <b>manifest repository</b> itself is simply a Git repository that contains one or more manifests for different targets. Because it’s just Git, you can create and organize as many as needed. For example, a company might maintain:
+                          <br>
+                          - An internal manifest repository for private projects
+                          <br>
+                          - A public repository for open-source use
+                          <br>
+                          - Separate repositories for specific customers or partners
+                          <br><br>
+                          Individual developers can also create and host their own manifest repositories.
+                          <br>
+                          CiM uses a default manifest source, but this can be changed. You can either update it via:
+                          <br>
+                          - <b>cim config -e</b>
+                          <br><br>
+                          Or specify a source directly when running commands, for example:
+                          <br>
+                          - <b>cim list-targets --source https://...</b>
+                          <br>
+                          - <b>cim init --source https://...</b>
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-workspace-confinement">
+                    <button class="faq-question"><span>How does workspace confinement in CiM work?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          When you run <b>cim init</b>, CiM creates a self-contained workspace directory that includes everything the project needs, source code, toolchains, dependencies and build artifacts. All operations are performed within this directory.
+                          <br><br>
+                          When you’re done, you can simply delete the workspace folder and your system returns to its original state, no lingering environment variables, no global installs, and no leftover files.
+                          <br><br>
+                          There are a couple of exceptions:
+                          <br>
+                          - Host dependencies are installed as OS-level packages
+                          <br>
+                          - Repository mirrors are stored outside the workspace (opt out possible)
+                          <br><br>
+                          For host dependencies, CiM will always present the list of required packages and ask for your approval before installing anything. Nothing is installed on your system without your consent.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 3: Getting Started -->
+                <div class="faq-section-header">Getting Started</div>
+                <div class="faq-item" id="faq-existing-projects">
+                    <button class="faq-question"><span>Can I use CiM with my existing projects?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          Yes. You can either create a new target in an existing manifest repository or extend an existing target if your project fits within it. In that case, add support to get your source code and include the necessary build scripts and Makefiles.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-create-manifest">
+                    <button class="faq-question"><span>How do I create my own manifest?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          Manifests are YAML files (<b>sdk.yml</b>) that define how to set up and build a target. They specify dependencies, environment variables, build commands, and more. Refer to the <a href="https://github.com/analogdevicesinc/cim" target="_blank" style="color: var(--blue)">cim documentation</a> for the full manifest schema and examples.
+                          <br><br>
+                          In short, if you contribute to an existing manifest repository, you need to create a new subfolder under the <a href="https://github.com/joabech/cim-manifests/targets" target="_blank" style="color: var(--blue)">targets</a> directory. Inside that folder, add the <b>sdk.yml</b>, <b>os-dependencies.yml</b> and <b>python-dependencies.yml</b> files. Once your build is working as expected, commit your changes and submit a pull request. After it is merged, your new target will be available for others to use.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-build-targets">
+                    <button class="faq-question"><span>What build targets are available?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          Available targets depend on the manifest source you’re using. The public repository at <a href="https://github.com/joabech/cim-manifests" target="_blank" style="color: var(--blue)">cim-manifests</a> includes targets such as No-OS, Jupiter-SDR, OP-TEE secure OS on QEMU, U-Boot, and more. This is a list that will continuously grow. You can also create and host your own manifests as needed (see the <b>cim init --source</b> flag).
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 4: Technical Details -->
+                <div class="faq-section-header">Technical Details</div>
+                <div class="faq-item" id="faq-toolchains">
+                    <button class="faq-question"><span>Which toolchains does CiM support?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          The <b>toolchain</b> directive in <b>sdk.yml</b> has been tested with:
+                          <br>
+                          - GCC
+                          <br>
+                          - LLVM/Clang
+                          <br>
+                          - Rust
+                          <br><br>
+                          Support for additional toolchains can be added as needed.
+                          <br><br>
+                          If a toolchain isn’t directly supported, you can still use it by combining the <b>copy_files</b> and <b>install</b> directives in <b>sdk.yml</b>. This allows you to download or copy the toolchain into the workspace and then extract and set it up as required.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-platforms">
+                    <button class="faq-question"><span>What platforms does CiM support?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          CiM runs on Linux (x86_64 and arm64), Windows and macOS. Whether a specific target runs on all of these operating systems depends on the source code used for that target and its ability to build and compile binaries in each environment.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-make">
+                    <button class="faq-question"><span>Why use make and Makefile and is it required?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          The use of <b>make</b> and <b>Makefile</b> in CiM helps standardize high-level build targets and define the order in which components are built when necessary. For example, if you need to build Zephyr and Linux before flashing a device, this dependency can be defined in the <b>sdk.yml</b> using the <b>depends_on</b> node, which then generates the corresponding make dependencies.
+                          <br><br>
+                          The generated <b>Makefile</b> primarily acts as a wrapper that redirects calls to the appropriate build system used by the project, such as CMake, Ninja, Bazel, or West. Keeping the <b>Makefile</b> minimal and just redirect if possible is recommended.
+                          <br><br>
+                          If additional flags or complexity are needed to improve the user experience, you can either extend the Makefile or, preferably, place that complexity in a separate build.git repository. This keeps the manifest clean and maintainable. The <a href="https://github.com/joabech/cim-manifests/blob/dd72baddadb752b3e0b5bc7b44db50ecec45dcfb/targets/optee-qemu-v8/sdk.yml#L46-L62" target="_blank" style="color: var(--blue)">OP-TEE manifest</a> is a good example of this approach (see <a href="https://github.com/OP-TEE/build" target="_blank" style="color: var(--blue)">build.git</a>)
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-disable-mirror">
+                    <button class="faq-question"><span>Can I disable the mirror or caching feature?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          Yes. While the mirror feature can save significant time and bandwidth by caching downloads, you can disable it if you prefer fresh downloads for every workspace.
+                          <br><br>
+                          See the documentation for the specific flag or configuration option to turn off mirroring.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 5: Features & Scope -->
+                <div class="faq-section-header">Features & Scope</div>
+                <div class="faq-item" id="faq-scope">
+                    <button class="faq-question"><span>Is CiM only about workspace creation and building?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          No. While workspace creation and building are core features, CiM also provides additional commands. Running CiM without arguments lists all available commands.
+                          <br><br>
+                          There is a release command that helps tag repositories and create pinned <b>sdk.yml</b> files, and a <b>config</b> command that allows users to customize their CiM setup. For projects using <b>reStructuredText</b>, CiM can collect all documentation into a temporary folder and start a local web server, making it easier to browse documentation and serve as a starting point for AI agents.
+                          <br><br>
+                          If a manifest tracks branches instead of pinned versions, you can use the <b>update</b> command to pull the latest changes. There is also an experimental <b>docker</b> command, though it is still under development and may be unstable. Additionally, the <b>utils</b> command provides tools such as updating the CiM binary and computing hashes for integrity checks.
+                          <br><br>
+                          In addition to individual commands, CiM offers many flags to refine behavior. For example, the <b>--match</b> flag can be used with init to create a workspace that includes only matching repositories.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-versions">
+                    <button class="faq-question"><span>Will manifest targets support versions?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          Yes. CiM supports versioned targets using a simple branch naming convention. CiM uses the <b>target</b> name to discover available versions by matching Git branch names in the form <b>&lt;target&gt;-&lt;version&gt;</b>
+                          <br><br>
+                          For example, if you have a target named <b>no-OS</b>, you can create branches such as:
+                          <br>
+                          <b>no-OS-v1.0</b>, <b>no-OS-v1.1</b>, etc.
+                          <br><br>
+                          When you run:
+                          <br>
+                          <b>cim list-targets -t no-OS</b>
+                          <br><br>
+                          CiM looks for branches matching <b>no-OS-*</b> and lists the available versions.
+                          <br><br>
+                          As an example, try:
+                          <br>
+                          <b>cim list-targets -t optee-qemu-v8 --source https://github.com/joabech/cim-manifests</b>
+                          <br><br>
+                          Once you know the available versions, you can create a workspace for a specific version:
+                          <br>
+                          <b>cim init -t optee-qemu-v8 -v optee-qemu-v8-v4.9.0</b>
+                          <br><br>
+                          Using branches instead of tags provides greater flexibility: branches can be updated with hotfixes or security fixes without changing the version reference.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 6: Licensing & Support -->
+                <div class="faq-section-header">Licensing & Support</div>
+                <div class="faq-item" id="faq-free">
+                    <button class="faq-question"><span>Is CiM free to use?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                            Yes, cim is open source and free to use. It’s released under a permissive license, allowing both personal and commercial use. Contributions are welcome!
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item" id="faq-get-help">
+                    <button class="faq-question"><span>How do I report issues or get help?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">Send issues, patches etc to the CiM git if it’s about the tool and send to the the manifest git in question is it is about a target.</div>
+                    </div>
+                </div>
+
+                <!-- Section 7: Roadmap -->
+                <div class="faq-section-header">Roadmap</div>
+                <div class="faq-item" id="faq-whats-next">
+                    <button class="faq-question"><span>What’s next?</span><span class="faq-icon">+</span></button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                          CiM is still a young project, and there are many ideas and improvements in progress. A key focus is improving the dynamic nature of workspace creation. While this is relatively straightforward from a source code perspective, the main challenge lies in the build system.
+                          <br><br>
+                          CiM is designed to delegate builds to existing project build systems, which works well in simple cases. However, handling dependencies between multiple components within the same project introduces additional complexity. This may require features such as overlays, but the goal is to avoid recreating large, complex systems like Yocto or Buildroot.
+                          <br><br>
+                          There is also a <a href="https://github.com/analogdevicesinc/cim/tree/tui" target="_blank" style="color: var(--blue)">tui</a> branch in the CiM repository that may be of interest. Once it has matured, it will be merged into the main branch. Contributions are welcome, especially for users and developers interested in the TUI.
+                          </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <div class="footer-logo">
+                        <div class="nav-logo-icon">CiM</div>
+                        <span>Code in Motion</span>
+                    </div>
+                    <p class="footer-desc">Build anything. Setup nothing. A new way to orchestrate your development workflow.</p>
+                </div>
+                <div class="footer-column">
+                    <h4>Project</h4>
+                    <ul class="footer-links">
+                        <li><a href="https://github.com/analogdevicesinc/cim" target="_blank">GitHub Repository</a></li>
+                        <li><a href="https://github.com/analogdevicesinc/cim/releases" target="_blank">Releases</a></li>
+                        <li><a href="https://github.com/analogdevicesinc/cim/blob/main/README.md" target="_blank">Documentation</a></li>
+                    </ul>
+                </div>
+                <div class="footer-column">
+                    <h4>Manifests</h4>
+                    <ul class="footer-links">
+                        <li><a href="https://github.com/joabech/cim-manifests" target="_blank">Public Manifests</a></li>
+                    </ul>
+                </div>
+                <div class="footer-column">
+                    <h4>Community</h4>
+                    <ul class="footer-links">
+                        <li><a href="https://github.com/analogdevicesinc/cim/issues" target="_blank">Issues</a></li>
+                        <li><a href="https://github.com/analogdevicesinc/cim/blob/main/CONTRIBUTING.md" target="_blank">Contributing</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p class="footer-copyright">© 2026 Code in Motion. Open source under permissive license.</p>
+                <div class="footer-social">
+                    <a href="https://github.com/analogdevicesinc/cim" target="_blank" aria-label="GitHub">
+                        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <div id="toast">Copied to clipboard!</div>
+
+    <script>
+        gsap.registerPlugin(ScrollTrigger);
+
+        // Nav scroll effect
+        const nav = document.getElementById('nav');
+        window.addEventListener('scroll', () => {
+            nav.classList.toggle('scrolled', window.scrollY > 50);
+        }, { passive: true });
+
+        // Mobile nav
+        const mobileToggle = document.getElementById('mobileToggle');
+        const mobileNav = document.getElementById('mobileNav');
+        let mobileNavOpen = false;
+        mobileToggle.addEventListener('click', () => {
+            mobileNavOpen = !mobileNavOpen;
+            mobileNav.classList.toggle('open', mobileNavOpen);
+            mobileToggle.innerHTML = mobileNavOpen 
+                ? '<svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>'
+                : '<svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';
+        });
+        document.querySelectorAll('.mobile-nav-link').forEach(link => {
+            link.addEventListener('click', () => {
+                mobileNavOpen = false;
+                mobileNav.classList.remove('open');
+                mobileToggle.innerHTML = '<svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';
+            });
+        });
+
+        // Hero animations
+        const heroTl = gsap.timeline({ defaults: { ease: 'power3.out' } });
+        heroTl.from('.hero-badge', { opacity: 0, y: 20, duration: 0.6 })
+            .from('.hero-title', { opacity: 0, y: 30, duration: 0.8 }, '-=0.3')
+            .from('.hero-subtitle', { opacity: 0, y: 20, duration: 0.6 }, '-=0.4')
+            .from('.hero-cta .btn', { opacity: 0, y: 20, duration: 0.5, stagger: 0.1 }, '-=0.3')
+            .from('.hero-terminal', { opacity: 0, y: 40, duration: 1 }, '-=0.6');
+        gsap.to('.terminal-line', { opacity: 1, duration: 0.4, stagger: 0.3, delay: 1.2 });
+
+        // Problem section
+        gsap.from('.problem-card', {
+            scrollTrigger: { trigger: '#problem', start: 'top 70%', toggleActions: 'play none none reverse' },
+            opacity: 0, x: (i) => i === 0 ? -50 : 50, duration: 0.8, stagger: 0.2
+        });
+
+        // Workflow steps
+        document.querySelectorAll('.workflow-step').forEach((step, index) => {
+            gsap.from(step, {
+                scrollTrigger: { trigger: '#how-it-works', start: 'top 60%' },
+                opacity: 0, y: 40, duration: 0.6, delay: index * 0.15,
+                onComplete: () => { step.classList.add('active'); setTimeout(() => step.classList.add('completed'), 500); }
+            });
+        });
+        gsap.to('#workflowConnector', { scrollTrigger: { trigger: '#how-it-works', start: 'top 50%' }, width: '100%', duration: 1.5 });
+
+        // State diagram
+        gsap.from('.state-node', {
+            scrollTrigger: { trigger: '#state-diagram', start: 'top 80%' },
+            scale: 0.9, duration: 0.6, stagger: 0.15, ease: 'back.out(1.7)'
+        });
+        document.querySelectorAll('.state-connections path').forEach((conn, i) => {
+            const length = conn.getTotalLength ? conn.getTotalLength() : 200;
+            conn.style.strokeDasharray = length; conn.style.strokeDashoffset = -length;
+            gsap.to(conn, { scrollTrigger: { trigger: '#state-diagram', start: 'top 50%' }, strokeDashoffset: 0, duration: 0.5, delay: 0.3 + i * 0.1 });
+        });
+
+        // State tooltip
+        const stateTooltip = document.getElementById('stateTooltip');
+        const nodeDesc = { 
+            'init': 'Creates workspace and prepares environment.', 
+            'install': 'Downloads and installs all required tools and dependencies.', 
+            'makefile': 'Generates build system from manifest rules.',
+            'sdk-toolchain': 'sdk.yml toolchain configuration - defines what tools to install.',
+            'os-deps': 'os-dependencies.yml - specifies host system packages to install.',
+            'toolchains': 'Cross-compilers and build tools for the target architecture.',
+            'python-deps': 'python-dependencies.yaml - specifies Python packages to install.',
+            'sdk-manifest': 'sdk.yml manifest - defines build rules and configuration.',
+            'generated': 'Generated Makefile that orchestrates the build process.',
+            'extra': 'Optional extra.mk file for project-specific customizations.',
+            'make-sdk-build': 'Runs make sdk-build to compile the project.',
+            'project-cmake': 'CMake-based project build system.' 
+        };
+        document.querySelectorAll('.state-node').forEach(node => {
+            node.addEventListener('mouseenter', (e) => {
+                const rect = node.getBoundingClientRect();
+                stateTooltip.textContent = nodeDesc[node.dataset.node];
+                stateTooltip.classList.add('visible');
+                stateTooltip.style.left = rect.left + rect.width/2 - 140 + 'px';
+                stateTooltip.style.top = rect.bottom + 10 + window.scrollY + 'px';
+                gsap.to(node.querySelector('rect'), { stroke: '#89b4fa', strokeWidth: 3, duration: 0.3 });
+            });
+            node.addEventListener('mouseleave', () => {
+                stateTooltip.classList.remove('visible');
+                gsap.to(node.querySelector('rect'), { stroke: '#585b70', strokeWidth: 2, duration: 0.3 });
+            });
+        });
+
+        // Quick start
+        gsap.from('.quickstart-step', { scrollTrigger: { trigger: '#quickstart', start: 'top 60%' }, opacity: 0, x: -30, duration: 0.6, stagger: 0.2 });
+        gsap.from('.quickstart-examples', { scrollTrigger: { trigger: '#quickstart', start: 'top 60%' }, opacity: 0, x: 30, duration: 0.8, delay: 0.3 });
+
+        // FAQ
+        const faqItems = document.querySelectorAll('.faq-item');
+        faqItems.forEach(item => {
+            item.querySelector('.faq-question').addEventListener('click', () => {
+                const isActive = item.classList.contains('active');
+                faqItems.forEach(i => i !== item && i.classList.remove('active'));
+                item.classList.toggle('active');
+                history.replaceState(null, '', isActive ? '#faq' : '#' + item.id);
+            });
+        });
+
+        // Open and scroll to a FAQ item if the URL hash targets one on load
+        const hash = window.location.hash.slice(1);
+        if (hash) {
+            const target = document.getElementById(hash);
+            if (target && target.classList.contains('faq-item')) {
+                target.classList.add('active');
+                setTimeout(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+            }
+        }
+        gsap.from('.faq-item', { scrollTrigger: { trigger: '#faq', start: 'top 80%' }, y: 20, duration: 0.5, stagger: 0.1 });
+
+        // Utilities
+        function copyCode(btn) {
+            const code = btn.closest('.code-block').querySelector('code').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                btn.textContent = 'Copied!';
+                showToast('Copied to clipboard!');
+                setTimeout(() => btn.textContent = 'Copy', 2000);
+            });
+        }
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.style.opacity = '1'; toast.style.transform = 'translateY(0)';
+            setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateY(10px)'; }, 2000);
+        }
+
+        // Example target selection
+        document.querySelectorAll('.example-target[data-target]').forEach(el => {
+            el.addEventListener('click', () => {
+                document.querySelectorAll('.example-target').forEach(t => t.classList.remove('active'));
+                el.classList.add('active');
+                document.getElementById('target-name').textContent = el.dataset.target;
+            });
+        });
+
+        // Smooth scroll
+        document.querySelectorAll('a[href^="#"]').forEach(a => {
+            a.addEventListener('click', (e) => {
+                const href = a.getAttribute('href');
+                if (href !== '#') { e.preventDefault(); document.querySelector(href)?.scrollIntoView({ behavior: 'smooth' }); }
+            });
+        });
+
+        // Parallax
+        gsap.to('.hero-bg', { scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: 1 }, y: 100 });
+
+        // Section headers
+        document.querySelectorAll('.section-header').forEach(h => {
+            gsap.from(h.children, { scrollTrigger: { trigger: h, start: 'top 80%' }, opacity: 0, y: 20, duration: 0.6, stagger: 0.1 });
+        });
+
+        // Refresh on resize
+        let resizeTimer;
+        window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => ScrollTrigger.refresh(), 250); }, { passive: true });
+    </script>
+</body>
+</html>
