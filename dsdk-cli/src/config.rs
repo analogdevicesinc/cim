@@ -267,23 +267,41 @@ pub struct ToolchainConfig {
     pub mirror_destination: Option<String>,
     /// Optional environment variables to set when running post-install commands
     /// Supports variable expansion:
-    /// - `$PWD` or `${PWD}` - expands to the toolchain installation directory
-    /// - `$WORKSPACE` or `${WORKSPACE}` - expands to the workspace root directory
-    /// - `$HOME` or `${HOME}` - expands to the user's home directory
+    /// - `$PWD` or `${PWD}` or `${{ PWD }}` - expands to the toolchain installation directory
+    /// - `$WORKSPACE` or `${WORKSPACE}` or `${{ WORKSPACE }}` - expands to the workspace root directory
+    /// - `$HOME` or `${HOME}` or `${{ HOME }}` - expands to the user's home directory
     /// - Standard environment variables (e.g., `$PATH`) are also expanded
     ///
     /// Example:
     /// ```yaml
     /// environment:
-    ///   CARGO_HOME: "$PWD/cargo"
-    ///   RUSTUP_HOME: "$PWD/rustup"
+    ///   CARGO_HOME: "${{ WORKSPACE }}/toolchains/cargo"
+    ///   RUSTUP_HOME: "${{ WORKSPACE }}/toolchains/rustup"
     ///   PATH: "$PWD/cargo/bin:$PATH"
     /// ```
     #[serde(default)]
     pub environment: Option<HashMap<String, String>>,
-    /// Optional post-install commands to run after extraction
-    /// These commands are executed in the destination directory
-    /// Only executed when actually extracting (not when reusing existing symlinks)
+    /// Optional post-install commands to run after extraction.
+    /// These commands are executed in the destination directory.
+    /// Only executed when actually extracting (not when reusing existing symlinks).
+    ///
+    /// cim expands the following variables in each command before passing it to the shell:
+    /// - `${{ WORKSPACE }}` (preferred) or `$WORKSPACE` / `${WORKSPACE}` - workspace root
+    /// - `${{ PWD }}` or `$PWD` / `${PWD}` - toolchain installation directory (dest_path)
+    /// - `${{ HOME }}` or `$HOME` / `${HOME}` - user home directory
+    /// - Any standard environment variable using `$VAR`, `${VAR}`, or `${{ VAR }}`
+    ///
+    /// The `${{ VAR }}` template syntax (with optional whitespace inside the braces) is
+    /// recommended because it is unambiguous and will not be mis-interpreted by the shell.
+    ///
+    /// Example:
+    /// ```yaml
+    /// post_install_commands: |
+    ///   mkdir -p cargo rustup
+    ///   CARGO_HOME=${{ WORKSPACE }}/toolchains/cargo \
+    ///   RUSTUP_HOME=${{ WORKSPACE }}/toolchains/rustup \
+    ///   bash ./sh.rustup.rs -y --no-modify-path
+    /// ```
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub post_install_commands: Option<Vec<String>>,
 }
