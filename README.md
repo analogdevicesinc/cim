@@ -4,6 +4,8 @@ Code in Motion, also known as `cim`, manages multi-repository SDK workspaces and
 
 Setting up and building an entire project takes just a handful of commands, typically around 5 lines in a shell. The tool standardizes build targets across projects (sdk-xyz commands), so teams don't need to learn different conventions for each software project. Still, advanced users can continue working with the underlying build systems directly if and when needed. The defaults just make the common case easy. `cim` minimizes duplication by letting you share toolchains, workspace components, and git mirrors across multiple projects. Since it is built as a CLI, it works with CI/CD systems like GitHub Actions out of the box. The goal is to deliver production-ready software projects either as standalone projects or in the form of SDKs, both that avoid the struggle with tooling.
 
+This `README.md` is the technical documentation for `cim`. For a more high level overview, the motivations and FAQ, please check the [https://analogdevicesinc.github.io/cim](https://analogdevicesinc.github.io/cim) website.
+
 ## What Problems Does This Solve?
 
 - **Automated setup**: Replace manual README instructions and copy-paste command workflows with a single init command
@@ -90,10 +92,12 @@ Manifests define SDK targets and are stored locally (e.g., `~/devel/cim-manifest
 
 ### List Available Targets
 
+As of now we host a public manifest repository here [https://github.com/joabech/cim-manifests](https://github.com/joabech/cim-manifests) with a various open source and Analog Devices specific targets. This URL will likely move to a different location in the future. In the meantime, you are welcome to contribute to this repository with new targets and improvements to existing ones.
+
 ```bash
 cim list-targets
 cim list-targets --source https://github.com/<path-to-a>/cim-manifests
-cim list-targets --t optee-qemu-v8  # show versions
+cim list-targets -t optee-qemu-v8  # show versions
 ```
 
 ### Initialize a Workspace
@@ -108,9 +112,10 @@ Creates workspace at `$HOME/dsdk-optee-qemu-v8`. Use `-w` or `--workspace` to sp
 
 ```bash
 cd ~/dsdk-optee-qemu-v8
-cim makefile         # generate Makefile
-make sdk-build       # build
-make sdk-test        # test
+cim install toolchains   # install toolchains defined in the manifest
+cim makefile             # generate Makefile
+make sdk-build           # build
+make sdk-test            # test
 ```
 
 ---
@@ -325,7 +330,7 @@ packages and the python-dependencies.yml defines the Python packages needed
 
 ### Example
 
-Note that this example, isn't a complete manifest, but rather a demonstration of the different sections and features.
+Note that this example, isn't a complete manifest, but rather a demonstration of the different sections and features. See the [Quick Start](#quick-start) section for a public facing manifest repository with various targets.
 
 #### sdk.yml
 ```yaml
