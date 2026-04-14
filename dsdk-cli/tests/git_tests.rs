@@ -300,22 +300,51 @@ fn test_mirror_workflow() {
 }
 
 #[test]
-fn test_branch_detection() {
+fn test_branch_tag_detection() {
     let repo = MockGitRepo::new("test-repo");
     repo.add_file("test.txt", "test\n");
     repo.commit("Initial commit");
-
-    // Main/master is a branch
-    let is_branch = git_operations::is_branch_reference(&repo.path, "main");
-    let is_branch_master = git_operations::is_branch_reference(&repo.path, "master");
-    assert!(is_branch || is_branch_master);
-
-    // Create and checkout a tag
     repo.create_tag("v1.0.0");
+    git_operations::create_branch(&repo.path, "feature-branch", None)
+        .expect("Should create feature branch");
+    let url = repo.file_url();
 
-    // Tag is not a branch
-    let is_branch = git_operations::is_branch_reference(&repo.path, "v1.0.0");
-    assert!(!is_branch);
+    let refs = git_operations::ls_remote(&url, true, true).expect("ls_remote should succeed");
+
+    // Default branch is detected as a branch
+    let (main_refspec, _, main_sha) = git_operations::resolve_fetch_refspec(&refs, "main");
+    assert!(
+        main_refspec.starts_with("refs/heads/"),
+        "Default branch should be detected as a branch"
+    );
+    assert!(main_sha.is_some());
+
+    // Feature branch is detected as a branch
+    let (fb_refspec, _, fb_sha) = git_operations::resolve_fetch_refspec(&refs, "feature-branch");
+    assert!(
+        fb_refspec.starts_with("refs/heads/"),
+        "feature-branch should be a branch reference, got: {}",
+        fb_refspec
+    );
+    assert!(fb_sha.is_some());
+
+    // Tag is not detected as a branch
+    let (tag_refspec, _, tag_sha) = git_operations::resolve_fetch_refspec(&refs, "v1.0.0");
+    assert!(
+        tag_refspec.starts_with("refs/tags/"),
+        "Tag should be detected as a tag, got: {}",
+        tag_refspec
+    );
+    assert!(tag_sha.is_some());
+
+    // Nonexistent ref falls through as a commit hash (no sha)
+    let (nonexistent_refspec, _, nonexistent_sha) =
+        git_operations::resolve_fetch_refspec(&refs, "nonexistent-branch");
+    assert_eq!(
+        nonexistent_refspec, "nonexistent-branch",
+        "Nonexistent ref should be returned as-is (treated as commit hash)"
+    );
+    assert!(nonexistent_sha.is_none());
 }
 
 #[test]
