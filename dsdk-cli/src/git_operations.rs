@@ -655,6 +655,72 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_fetch_refspec_explicit_refs_heads() {
+        let refs = vec![
+            ("abc123".to_string(), "refs/heads/main".to_string()),
+            ("def456".to_string(), "refs/tags/v1.0.0".to_string()),
+        ];
+
+        // Explicit refs/heads/ — SHA resolved from ls-remote
+        let (fetch, update, sha) = resolve_fetch_refspec(&refs, "refs/heads/main");
+        assert_eq!(fetch, "refs/heads/main");
+        assert_eq!(update, "refs/heads/main");
+        assert_eq!(sha, Some("abc123".to_string()));
+
+        // Explicit refs/heads/ not in ls-remote — SHA is None
+        let (fetch, update, sha) = resolve_fetch_refspec(&refs, "refs/heads/missing");
+        assert_eq!(fetch, "refs/heads/missing");
+        assert_eq!(update, "refs/heads/missing");
+        assert_eq!(sha, None);
+    }
+
+    #[test]
+    fn test_resolve_fetch_refspec_explicit_refs_tags() {
+        let refs = vec![
+            ("abc123".to_string(), "refs/heads/main".to_string()),
+            ("def456".to_string(), "refs/tags/v1.0.0".to_string()),
+        ];
+
+        // Explicit refs/tags/ — update_ref_name strips "refs/tags/" and uses "refs/heads/"
+        let (fetch, update, sha) = resolve_fetch_refspec(&refs, "refs/tags/v1.0.0");
+        assert_eq!(fetch, "refs/tags/v1.0.0");
+        assert_eq!(update, "refs/tags/v1.0.0");
+        assert_eq!(sha, Some("def456".to_string()));
+
+        // Explicit refs/tags/ not in ls-remote — SHA is None
+        let (fetch, update, sha) = resolve_fetch_refspec(&refs, "refs/tags/missing");
+        assert_eq!(fetch, "refs/tags/missing");
+        assert_eq!(update, "refs/tags/missing");
+        assert_eq!(sha, None);
+    }
+
+    #[test]
+    fn test_resolve_fetch_refspec_short_names() {
+        let refs = vec![
+            ("abc123".to_string(), "refs/heads/main".to_string()),
+            ("def456".to_string(), "refs/tags/v1.0.0".to_string()),
+        ];
+
+        // Short branch name
+        let (fetch, update, sha) = resolve_fetch_refspec(&refs, "main");
+        assert_eq!(fetch, "refs/heads/main");
+        assert_eq!(update, "refs/heads/main");
+        assert_eq!(sha, Some("abc123".to_string()));
+
+        // Short tag name
+        let (fetch, update, sha) = resolve_fetch_refspec(&refs, "v1.0.0");
+        assert_eq!(fetch, "refs/tags/v1.0.0");
+        assert_eq!(update, "refs/tags/v1.0.0");
+        assert_eq!(sha, Some("def456".to_string()));
+
+        // Commit SHA fallthrough
+        let (fetch, update, sha) = resolve_fetch_refspec(&refs, "deadbeef");
+        assert_eq!(fetch, "deadbeef");
+        assert_eq!(update, "refs/heads/trunk");
+        assert_eq!(sha, None);
+    }
+
+    #[test]
     fn test_ls_remote_format() {
         // Test with a known public repository
         if let Ok(refs) = ls_remote("https://github.com/git/git.git", true, false) {
