@@ -139,13 +139,23 @@ pub fn fetch_all(repo_path: &Path) -> Result<GitResult> {
     git_command(&["fetch", "--all"], Some(repo_path))
 }
 
-/// Fetch a specific refspec with a depth limit
-pub fn fetch_ref(repo_path: &Path, remote: &str, refspec: &str, depth: u32) -> Result<GitResult> {
-    let depth_str = depth.to_string();
-    git_command(
-        &["fetch", remote, refspec, "--depth", &depth_str],
-        Some(repo_path),
-    )
+/// Fetch a specific refspec, optionally with a depth limit
+pub fn fetch_ref(
+    repo_path: &Path,
+    remote: &str,
+    refspec: &str,
+    depth: Option<u32>,
+) -> Result<GitResult> {
+    match depth {
+        Some(d) => {
+            let depth_str = d.to_string();
+            git_command(
+                &["fetch", remote, refspec, "--depth", &depth_str],
+                Some(repo_path),
+            )
+        }
+        None => git_command(&["fetch", remote, refspec], Some(repo_path)),
+    }
 }
 
 /// Fetch all remotes with tags
