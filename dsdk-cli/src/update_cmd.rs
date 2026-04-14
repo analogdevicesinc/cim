@@ -24,11 +24,8 @@ use dsdk_cli::workspace::{
 use dsdk_cli::{config, docker_manager, git_operations, messages};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
 use threadpool::ThreadPool;
 
 /// Configuration command options
@@ -935,8 +932,6 @@ pub(crate) fn clone_repo_to_workspace(
         git_cfg.url.clone()
     };
 
-    let should_timeout = clone_source.starts_with("git@") || clone_source.starts_with("ssh://");
-
     if mirror_repo_path.exists() {
         // Use --reference to hardlink objects from the mirror
         let result = git_operations::clone_repo(&clone_source, repo_path, Some(&mirror_repo_path));
@@ -957,27 +952,6 @@ pub(crate) fn clone_repo_to_workspace(
                 return false;
             }
         }
-    } else if should_timeout {
-        // Use timeout for SSH URLs
-        if let Some(child) = execute_git_clone(
-            "git",
-            &["clone", &clone_source, &repo_path.to_string_lossy()],
-            git_cfg,
-        ) {
-            if let Ok(output) = child.wait_with_output() {
-                if output.status.success() {
-                    // Set origin to upstream
-                    let _ = git_operations::remote_set_url(repo_path, "origin", &git_cfg.url);
-                    return checkout_commit(git_cfg, repo_path);
-                } else {
-                    messages::error(&format!("{} (clone failed)", git_cfg.name));
-                    return false;
-                }
-            }
-        } else {
-            messages::error(&format!("{} (clone timed out)", git_cfg.name));
-            return false;
-        }
     } else {
         // Direct execution for HTTP/HTTPS/file URLs
         let result = git_operations::clone_repo(&clone_source, repo_path, None);
@@ -994,7 +968,6 @@ pub(crate) fn clone_repo_to_workspace(
             }
         }
     }
-    false
 }
 
 /// Checkout the specified commit for a repository
@@ -1062,65 +1035,6 @@ pub(crate) fn checkout_commit(git_cfg: &config::GitConfig, repo_path: &Path) -> 
                     git_cfg.name, git_cfg.commit
                 ));
                 false
-            }
-        }
-    }
-}
-
-/// Execute a git clone command and wait for completion
-pub(crate) fn execute_git_clone(
-    command: &str,
-    args: &[&str],
-    git_cfg: &config::GitConfig,
-) -> Option<Child> {
-    let start = Instant::now();
-    let mut child = match Command::new(command)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => {
-            messages::error(&format!(
-                "Failed to start git clone for {}: {}",
-                git_cfg.name, e
-            ));
-            return None;
-        }
-    };
-
-    // Provide periodic updates for long-running operations
-    let mut last_update = start;
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                messages::status(&format!(
-                    "Git clone for {} completed in {:.1}s",
-                    git_cfg.name,
-                    start.elapsed().as_secs_f64()
-                ));
-                return Some(child);
-            }
-            Ok(None) => {
-                // Provide periodic updates for long-running operations
-                if last_update.elapsed() > Duration::from_secs(30) {
-                    messages::status(&format!(
-                        "Still cloning {} (elapsed: {:.1}s)...",
-                        git_cfg.name,
-                        start.elapsed().as_secs_f64()
-                    ));
-                    last_update = Instant::now();
-                }
-                thread::sleep(Duration::from_millis(500));
-            }
-            Err(e) => {
-                messages::error(&format!(
-                    "Error waiting for git clone for {}: {}",
-                    git_cfg.name, e
-                ));
-                return None;
             }
         }
     }
@@ -1249,42 +1163,17 @@ pub(crate) fn clone_repo_to_workspace_no_mirror(
         }
     }
 
-    let should_timeout = git_cfg.url.starts_with("git@") || git_cfg.url.starts_with("ssh://");
+    let result = git_operations::clone_repo(&git_cfg.url, repo_path, None);
 
-    if should_timeout {
-        // Use timeout for SSH URLs
-        if let Some(child) = execute_git_clone(
-            "git",
-            &["clone", &git_cfg.url, &repo_path.to_string_lossy()],
-            git_cfg,
-        ) {
-            if let Ok(output) = child.wait_with_output() {
-                if output.status.success() {
-                    return checkout_commit(git_cfg, repo_path);
-                } else {
-                    messages::error(&format!("{} (clone failed)", git_cfg.name));
-                    return false;
-                }
-            }
-        } else {
-            messages::error(&format!("{} (clone timed out)", git_cfg.name));
+    match result {
+        Ok(result) if result.is_success() => {
+            return checkout_commit(git_cfg, repo_path);
+        }
+        _ => {
+            messages::error(&format!("{} (clone failed)", git_cfg.name));
             return false;
         }
-    } else {
-        // Direct execution for HTTP/HTTPS/file URLs
-        let result = git_operations::clone_repo(&git_cfg.url, repo_path, None);
-
-        match result {
-            Ok(result) if result.is_success() => {
-                return checkout_commit(git_cfg, repo_path);
-            }
-            _ => {
-                messages::error(&format!("{} (clone failed)", git_cfg.name));
-                return false;
-            }
-        }
     }
-    false
 }
 
 /// Handle Docker commands
