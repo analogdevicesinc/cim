@@ -1431,8 +1431,8 @@ pub(crate) fn list_targets_from_git_repo(git_url: &str) -> Result<Vec<String>, a
 
     let temp_path = temp_dir.path();
 
-    // Perform shallow clone of just the main branch
-    let clone_result = git_operations::clone_repo_shallow(git_url, temp_path, 1)?;
+    // Perform clone
+    let clone_result = git_operations::clone_repo(git_url, temp_path, None)?;
 
     if !clone_result.is_success() {
         return Err(anyhow::anyhow!("Git clone failed: {}", clone_result.stderr));

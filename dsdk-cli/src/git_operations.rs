@@ -83,51 +83,6 @@ pub fn clone_repo(url: &str, path: &Path, reference: Option<&Path>) -> Result<Gi
     git_command(&args_str, None)
 }
 
-/// Clone repository with shallow depth
-pub fn clone_repo_shallow(url: &str, path: &Path, depth: u32) -> Result<GitResult> {
-    let depth_str = depth.to_string();
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec!["clone", "--depth", &depth_str, url, &path_str];
-
-    git_command(&args, None)
-}
-
-/// Clone repository with single branch
-pub fn clone_repo_single_branch(url: &str, path: &Path, branch: &str) -> Result<GitResult> {
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec![
-        "clone",
-        "--single-branch",
-        "--branch",
-        branch,
-        url,
-        &path_str,
-    ];
-    git_command(&args, None)
-}
-
-/// Clone repository with shallow depth and single branch
-pub fn clone_repo_shallow_single_branch(
-    url: &str,
-    path: &Path,
-    branch: &str,
-    depth: u32,
-) -> Result<GitResult> {
-    let depth_str = depth.to_string();
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec![
-        "clone",
-        "--depth",
-        &depth_str,
-        "--single-branch",
-        "--branch",
-        branch,
-        url,
-        &path_str,
-    ];
-    git_command(&args, None)
-}
-
 /// Fetch from remote
 pub fn fetch(repo_path: &Path, remote: Option<&str>) -> Result<GitResult> {
     let remote = remote.unwrap_or("origin");
