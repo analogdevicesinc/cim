@@ -11,8 +11,7 @@
 
 use crate::cli::{Cli, DockerCommand};
 use crate::init_cmd::{
-    compile_match_regex, create_filtered_sdk_config, filter_git_configs,
-    get_latest_commit_for_branch, is_branch_reference, list_available_targets,
+    compile_match_regex, create_filtered_sdk_config, filter_git_configs, list_available_targets,
     list_target_versions, list_targets_from_source, resolve_target_config,
 };
 use crate::version::{print_update_notice, spawn_version_check};
