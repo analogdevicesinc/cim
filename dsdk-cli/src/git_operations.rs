@@ -288,6 +288,45 @@ pub fn get_latest_commit_for_remote_branch(
     None
 }
 
+/// Determine the fetch refspec, update-ref target, and resolved SHA from ls-remote pairs.
+///
+/// Returns `(fetch_refspec, update_ref_name, sha)`, in order of precedence:
+/// - Tag `v1.0`    : `(refs/tags/v1.0, refs/tags/v1.0, Some(sha))`
+/// - Branch `foo`  : `(refs/heads/foo, refs/heads/foo, Some(sha))`
+/// - Commit SHA    : `(sha, refs/heads/trunk, None)`
+pub fn resolve_fetch_refspec(
+    refs: &[(String, String)],
+    ref_name: &str,
+) -> (String, String, Option<String>) {
+    // Explicit reference
+    if ref_name.starts_with("refs/heads/") || ref_name.starts_with("refs/tags/") {
+        let sha = refs
+            .iter()
+            .find(|(_, r)| r == ref_name)
+            .map(|(s, _)| s.clone());
+        return (ref_name.to_string(), ref_name.to_string(), sha);
+    }
+    // Iterate in reverse so tags take precedence over a same-named branch.
+    for (sha, full_ref) in refs.iter().rev() {
+        if full_ref == &format!("refs/tags/{}", ref_name) {
+            return (
+                format!("refs/tags/{}", ref_name),
+                format!("refs/tags/{}", ref_name),
+                Some(sha.clone()),
+            );
+        }
+        if full_ref == &format!("refs/heads/{}", ref_name) {
+            return (
+                format!("refs/heads/{}", ref_name),
+                format!("refs/heads/{}", ref_name),
+                Some(sha.clone()),
+            );
+        }
+    }
+    // Commit hash — fetch directly, anchor under trunk
+    (ref_name.to_string(), "refs/heads/trunk".to_string(), None)
+}
+
 /// Get current commit hash
 pub fn get_current_commit(repo_path: &Path) -> Result<String> {
     let result = git_command(&["rev-parse", "HEAD"], Some(repo_path))?;

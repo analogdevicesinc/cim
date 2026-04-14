@@ -99,4 +99,3 @@ pub fn get_mirror_repo_path(mirror_path: &Path, name: &str, url: &str) -> PathBu
     let org_repo = git_operations::extract_org_and_repo(url);
     mirror_path.join(format!("{}-{}", org_repo, hash))
 }
-
