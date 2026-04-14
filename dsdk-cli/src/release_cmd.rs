@@ -175,11 +175,10 @@ pub(crate) fn handle_release_command(
             }
 
             // Check if tag already exists
-            let tag_check = git_operations::list_tags(&repo_path, Some(tag_str));
-
-            match tag_check {
-                Ok(tags) => {
-                    if !tags.is_empty() {
+            let tag_ref = format!("refs/tags/{}", tag_str);
+            match git_operations::ls_remote(&git_cfg.url, false, true) {
+                Ok(refs) => {
+                    if refs.iter().any(|(_, r)| r == &tag_ref) {
                         messages::info(&format!(
                             "Warning: Tag '{}' already exists in {}",
                             tag_str, git_cfg.name

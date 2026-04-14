@@ -179,7 +179,8 @@ pub fn checkout(repo_path: &Path, commit_ref: &str) -> Result<GitResult> {
 }
 
 /// List remote references
-pub fn ls_remote(url: &str, heads: bool, tags: bool) -> Result<Vec<String>> {
+/// Returns `(sha, ref_name)`
+pub fn ls_remote(url: &str, heads: bool, tags: bool) -> Result<Vec<(String, String)>> {
     let mut args = vec!["ls-remote"];
     if heads {
         args.push("--heads");
@@ -194,10 +195,15 @@ pub fn ls_remote(url: &str, heads: bool, tags: bool) -> Result<Vec<String>> {
         return Err(anyhow!("git ls-remote failed: {}", result.stderr));
     }
 
-    let refs: Vec<String> = result
+    let refs = result
         .stdout
         .lines()
-        .filter_map(|line| line.split_whitespace().nth(1).map(|s| s.to_string()))
+        .filter_map(|line| {
+            let mut cols = line.split_whitespace();
+            let sha = cols.next()?.to_string();
+            let refname = cols.next()?.to_string();
+            Some((sha, refname))
+        })
         .collect();
 
     Ok(refs)
@@ -646,7 +652,7 @@ mod tests {
         if let Ok(refs) = ls_remote("https://github.com/git/git.git", true, false) {
             assert!(!refs.is_empty());
             // Check that we get proper ref format
-            assert!(refs.iter().any(|r| r.starts_with("refs/heads/")));
+            assert!(refs.iter().any(|(_, r)| r.starts_with("refs/heads/")));
         }
     }
 

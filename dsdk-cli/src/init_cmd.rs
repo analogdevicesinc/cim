@@ -1483,7 +1483,7 @@ pub(crate) fn list_target_versions(
         let mut versions = Vec::new();
         let target_prefix = format!("{}-", target_name);
 
-        for ref_name in refs {
+        for (_, ref_name) in refs {
             // Extract branch/tag name from refs/heads/ or refs/tags/
             let name = if let Some(branch_name) = ref_name.strip_prefix("refs/heads/") {
                 branch_name
