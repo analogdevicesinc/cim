@@ -925,17 +925,21 @@ pub(crate) fn clone_repo_to_workspace(
     let mirror_repo_path =
         dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
-    // Determine the clone source (prefer mirror if exists, otherwise use original URL)
-    let clone_source = if mirror_repo_path.exists() {
-        format!("file://{}", mirror_repo_path.display())
-    } else {
-        git_cfg.url.clone()
-    };
-
     if mirror_repo_path.exists() {
-        // Use --reference to hardlink objects from the mirror
-        let result = git_operations::clone_repo(&clone_source, repo_path, Some(&mirror_repo_path));
+        // Resolve refspec and target SHA
+        let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+        let (fetch_refspec, update_ref_name, sha) =
+            git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+        let target_sha = sha.unwrap_or_else(|| git_cfg.commit.clone());
 
+        // Ensure the commit is present in the mirror, fetching it if needed
+        if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
+            let _ = git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1);
+            let _ = git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
+        }
+
+        let mirror_url = format!("file://{}", mirror_repo_path.display());
+        let result = git_operations::clone_repo(&mirror_url, repo_path, &fetch_refspec, 1);
         match result {
             Ok(result) if result.is_success() => {
                 // Set origin to upstream and add mirror remote
@@ -953,13 +957,11 @@ pub(crate) fn clone_repo_to_workspace(
             }
         }
     } else {
-        // Direct execution for HTTP/HTTPS/file URLs
-        let result = git_operations::clone_repo(&clone_source, repo_path, None);
-
+        let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+        let (fetch_refspec, _, _) = git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+        let result = git_operations::clone_repo(&git_cfg.url, repo_path, &fetch_refspec, 1);
         match result {
             Ok(result) if result.is_success() => {
-                // Set origin to upstream
-                let _ = git_operations::remote_set_url(repo_path, "origin", &git_cfg.url);
                 return checkout_commit(git_cfg, repo_path);
             }
             _ => {
@@ -1163,15 +1165,14 @@ pub(crate) fn clone_repo_to_workspace_no_mirror(
         }
     }
 
-    let result = git_operations::clone_repo(&git_cfg.url, repo_path, None);
-
+    let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+    let (fetch_refspec, _, _) = git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+    let result = git_operations::clone_repo(&git_cfg.url, repo_path, &fetch_refspec, 1);
     match result {
-        Ok(result) if result.is_success() => {
-            return checkout_commit(git_cfg, repo_path);
-        }
+        Ok(result) if result.is_success() => checkout_commit(git_cfg, repo_path),
         _ => {
             messages::error(&format!("{} (clone failed)", git_cfg.name));
-            return false;
+            false
         }
     }
 }

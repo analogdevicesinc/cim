@@ -251,24 +251,18 @@ pub fn resolve_target_config_from_git(
 
     let temp_path = temp_dir.path();
 
-    // Clone the repository
-    let clone_result = git_operations::clone_repo(git_source, temp_path, None)?;
+    // Resolve the fetch refspec
+    let clone_refspec = if let Some(v) = version {
+        let refs = git_operations::ls_remote(git_source, true, true).unwrap_or_default();
+        let (fetch_refspec, _, _) = git_operations::resolve_fetch_refspec(&refs, v);
+        fetch_refspec
+    } else {
+        "HEAD".to_string()
+    };
 
+    let clone_result = git_operations::clone_repo(git_source, temp_path, &clone_refspec, 1)?;
     if !clone_result.is_success() {
         return Err(anyhow::anyhow!("Git clone failed: {}", clone_result.stderr));
-    }
-
-    // Checkout specific version if requested
-    if let Some(v) = version {
-        let checkout_result = git_operations::checkout(temp_path, v)?;
-
-        if !checkout_result.is_success() {
-            return Err(anyhow::anyhow!(
-                "Git checkout of version '{}' failed: {}",
-                v,
-                checkout_result.stderr
-            ));
-        }
     }
 
     // Check if target exists and has sdk.yml

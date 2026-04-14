@@ -55,7 +55,7 @@ fn test_clone_repository() {
     let fixture = TestFixture::new();
     let clone_path = fixture.path().join("clone");
 
-    let result = git_operations::clone_repo(&source_repo.file_url(), &clone_path, None)
+    let result = git_operations::clone_repo(&source_repo.file_url(), &clone_path, "HEAD", 1)
         .expect("Should clone repository");
 
     assert!(result.is_success());
@@ -64,29 +64,6 @@ fn test_clone_repository() {
         fs::read_to_string(clone_path.join("README.md")).unwrap(),
         "# Test\n"
     );
-}
-
-#[test]
-fn test_clone_with_reference() {
-    let source_repo = MockGitRepo::new("source");
-    source_repo.add_file("data.txt", "content\n");
-    source_repo.commit("Initial commit");
-
-    let fixture = TestFixture::new();
-
-    // Create a mirror clone first
-    let mirror_path = fixture.path().join("mirror");
-    git_operations::clone_repo(&source_repo.file_url(), &mirror_path, None)
-        .expect("Should clone to mirror");
-
-    // Clone with reference to mirror
-    let workspace_path = fixture.path().join("workspace");
-    let result =
-        git_operations::clone_repo(&source_repo.file_url(), &workspace_path, Some(&mirror_path))
-            .expect("Should clone with reference");
-
-    assert!(result.is_success());
-    assert!(workspace_path.join("data.txt").exists());
 }
 
 #[test]
@@ -170,7 +147,7 @@ fn test_fetch_operations() {
     // Clone from upstream
     let fixture = TestFixture::new();
     let clone_path = fixture.path().join("clone");
-    git_operations::clone_repo(&upstream.file_url(), &clone_path, None).expect("Should clone");
+    git_operations::clone_repo(&upstream.file_url(), &clone_path, "HEAD", 1).expect("Should clone");
 
     // Add new commit to working repo
     working.add_file("new.txt", "new content\n");
@@ -310,7 +287,8 @@ fn test_mirror_workflow() {
     let clone_result = git_operations::clone_repo(
         &format!("file://{}", mirror_path.display()),
         &workspace_path,
-        None,
+        "HEAD",
+        1,
     )
     .expect("Should clone from mirror");
     assert!(clone_result.is_success());
