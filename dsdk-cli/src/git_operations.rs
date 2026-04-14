@@ -68,7 +68,6 @@ pub fn git_command(args: &[&str], cwd: Option<&Path>) -> Result<GitResult> {
 }
 
 /// Clone repository to specified path
-/// On Windows, if SSH fails, automatically retries with HTTPS by temporarily disabling insteadOf config
 pub fn clone_repo(url: &str, path: &Path, reference: Option<&Path>) -> Result<GitResult> {
     let mut args = vec!["clone".to_string()];
 
@@ -81,95 +80,16 @@ pub fn clone_repo(url: &str, path: &Path, reference: Option<&Path>) -> Result<Gi
     args.push(path.to_string_lossy().to_string());
 
     let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let result = git_command(&args_str, None)?;
-
-    // On Windows, if clone fails with SSH error, retry with HTTPS by disabling insteadOf
-    #[cfg(target_os = "windows")]
-    {
-        if !result.is_success()
-            && (result.stderr.contains("kex_exchange_identification")
-                || result.stderr.contains("Connection to") && result.stderr.contains("port 22")
-                || result
-                    .stderr
-                    .contains("Could not read from remote repository"))
-        {
-            crate::messages::info("SSH connection failed, retrying with HTTPS...");
-
-            // Try again with git config to disable insteadOf rewriting
-            let mut cmd = Command::new("git");
-            cmd.args(&args_str);
-
-            // Disable interactive authentication prompts
-            cmd.env("GIT_TERMINAL_PROMPT", "0");
-            cmd.env("GIT_ASKPASS", "echo");
-
-            // Override insteadOf configuration to prevent SSH URL rewriting
-            cmd.env("GIT_CONFIG_COUNT", "1");
-            cmd.env("GIT_CONFIG_KEY_0", "url.https://github.com/.insteadOf");
-            cmd.env("GIT_CONFIG_VALUE_0", "");
-
-            let output = cmd
-                .output()
-                .map_err(|e| anyhow!("Failed to execute git {}: {}", args_str.join(" "), e))?;
-
-            return Ok(GitResult {
-                success: output.status.success(),
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
-        }
-    }
-
-    Ok(result)
+    git_command(&args_str, None)
 }
 
 /// Clone repository with shallow depth
-/// On Windows, if SSH fails, automatically retries with HTTPS by temporarily disabling insteadOf config
 pub fn clone_repo_shallow(url: &str, path: &Path, depth: u32) -> Result<GitResult> {
     let depth_str = depth.to_string();
     let path_str = path.to_string_lossy().to_string();
     let args = vec!["clone", "--depth", &depth_str, url, &path_str];
 
-    let result = git_command(&args, None)?;
-
-    // On Windows, if clone fails with SSH error, retry with HTTPS by disabling insteadOf
-    #[cfg(target_os = "windows")]
-    {
-        if !result.is_success()
-            && (result.stderr.contains("kex_exchange_identification")
-                || result.stderr.contains("Connection to") && result.stderr.contains("port 22")
-                || result
-                    .stderr
-                    .contains("Could not read from remote repository"))
-        {
-            crate::messages::info("SSH connection failed, retrying with HTTPS...");
-
-            // Try again with git config to disable insteadOf rewriting
-            let mut cmd = Command::new("git");
-            cmd.args(&args);
-
-            // Disable interactive authentication prompts
-            cmd.env("GIT_TERMINAL_PROMPT", "0");
-            cmd.env("GIT_ASKPASS", "echo");
-
-            // Override insteadOf configuration to prevent SSH URL rewriting
-            cmd.env("GIT_CONFIG_COUNT", "1");
-            cmd.env("GIT_CONFIG_KEY_0", "url.https://github.com/.insteadOf");
-            cmd.env("GIT_CONFIG_VALUE_0", "");
-
-            let output = cmd
-                .output()
-                .map_err(|e| anyhow!("Failed to execute git {}: {}", args.join(" "), e))?;
-
-            return Ok(GitResult {
-                success: output.status.success(),
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
-        }
-    }
-
-    Ok(result)
+    git_command(&args, None)
 }
 
 /// Clone repository with single branch
