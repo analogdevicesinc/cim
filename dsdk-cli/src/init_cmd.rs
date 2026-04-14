@@ -15,10 +15,7 @@ use crate::install_cmd::{
     is_container_environment,
 };
 use crate::makefile::generate_makefile_content;
-use crate::update_cmd::{
-    update_mirror_repos, update_workspace_repos_no_mirror_with_result,
-    update_workspace_repos_with_result,
-};
+use crate::update_cmd::{update_mirror_repos, update_workspace_repos_with_result};
 use crate::version::spawn_version_check;
 use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::download::{copy_yaml_files_to_workspace, process_copy_files};
@@ -1088,7 +1085,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         } else {
             messages::info("Skipping mirror operations (no_mirror = true in user config)");
         }
-        update_workspace_repos_no_mirror_with_result(&filtered_config, &workspace_path, true)
+        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, true)
     } else {
         messages::verbose(&format!("Mirror: {}", sdk_config.mirror().display()));
 
@@ -1096,7 +1093,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         update_mirror_repos(&filtered_config);
 
         // Update workspace repositories
-        update_workspace_repos_with_result(&filtered_config, &workspace_path, true)
+        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, false)
     };
 
     // Process copy_files after git repositories are cloned
