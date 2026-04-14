@@ -173,6 +173,11 @@ pub fn ls_remote(url: &str, heads: bool, tags: bool) -> Result<Vec<(String, Stri
     Ok(refs)
 }
 
+/// Check if a git object exists in a repository
+pub fn cat_file(repo_path: &Path, object: &str) -> bool {
+    git_command(&["cat-file", "-e", object], Some(repo_path)).is_ok_and(|r| r.success)
+}
+
 /// List all tags from a local git repository
 pub fn list_local_tags(repo_path: &Path) -> Result<Vec<String>> {
     let result = git_command(&["tag", "--list"], Some(repo_path))?;
