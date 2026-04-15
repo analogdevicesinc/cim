@@ -46,17 +46,27 @@ impl DocManager {
     /// Check if virtual environment exists in workspace
     fn venv_exists(&self) -> bool {
         let venv_path = self.workspace_path.join(".venv");
-        venv_path.exists() && venv_path.join("bin").join("python3").exists()
+        let python_exe = if cfg!(windows) {
+            venv_path.join("Scripts").join("python.exe")
+        } else {
+            venv_path.join("bin").join("python3")
+        };
+        venv_path.exists() && python_exe.exists()
     }
 
     /// Get the command and environment for executing Python tools with virtual environment support
     fn get_python_command(&self, tool: &str) -> (String, Vec<(String, String)>) {
         if self.venv_exists() {
-            let venv_bin = self.workspace_path.join(".venv").join("bin");
+            let venv_bin = if cfg!(windows) {
+                self.workspace_path.join(".venv").join("Scripts")
+            } else {
+                self.workspace_path.join(".venv").join("bin")
+            };
             let mut path = std::env::var("PATH").unwrap_or_default();
 
             // Prepend venv bin directory to PATH so tools like sphinx-build are found
-            path = format!("{}:{}", venv_bin.display(), path);
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            path = format!("{}{}{}", venv_bin.display(), sep, path);
 
             let env_vars = vec![
                 ("PATH".to_string(), path),
