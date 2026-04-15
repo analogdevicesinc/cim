@@ -554,18 +554,61 @@ pub fn expand_env_vars(path: &str) -> String {
     chars.into_iter().collect()
 }
 
+/// Return `true` if `s` contains a `$` that is **not** part of a `${{ … }}`
+/// manifest-variable reference.
+///
+/// `${{ VAR }}` patterns are intentionally kept as-is so that Makefile
+/// generation can later convert them to `$(VAR)` Make references.  They must
+/// not trigger the "unresolved host env var" warning.
+///
+/// # Examples
+///
+/// ```
+/// use dsdk_cli::workspace::has_unresolved_env_var_refs;
+///
+/// assert!(!has_unresolved_env_var_refs("https://example.com"));
+/// assert!(!has_unresolved_env_var_refs("${{ WORKSPACE }}/bin"));
+/// assert!(!has_unresolved_env_var_refs("${{ A }}/${{ B }}"));
+/// assert!(has_unresolved_env_var_refs("$UNSET_HOST_VAR/path"));
+/// assert!(has_unresolved_env_var_refs("${{ WORKSPACE }}/$UNSET"));
+/// ```
+pub fn has_unresolved_env_var_refs(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            // Check for ${{ … }} pattern — skip it entirely.
+            if bytes.get(i + 1) == Some(&b'{') && bytes.get(i + 2) == Some(&b'{') {
+                if let Some(rel) = s[i + 3..].find("}}") {
+                    i = i + 3 + rel + 2;
+                    continue;
+                }
+            }
+            // A bare `$` that is not part of a manifest-variable reference.
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Resolve manifest variable values by expanding host env vars within them.
 ///
 /// Each value in the raw map is passed through [`expand_env_vars`]. If a value
-/// still contains a `$` character after expansion, the referenced host env var
-/// was not set — a warning is logged so the user knows the variable is unresolved.
+/// still contains a `$` character after expansion — and that `$` is **not**
+/// part of a `${{ VAR }}` manifest-variable reference — a warning is logged so
+/// the user knows the variable is unresolved.
+///
+/// `${{ VAR }}` patterns are left in place intentionally: Makefile generation
+/// will convert them to `$(VAR)` Make references at a later stage.
 ///
 /// # Example
 ///
 /// ```text
 /// variables:
-///   DOCKER_DEFAULT_PLATFORM: $HOST_DEFAULT_PLATFORM   # resolved from env
-///   SDK_BASE_URL: https://example.com/sdk              # literal
+///   DOCKER_DEFAULT_PLATFORM: $HOST_DEFAULT_PLATFORM    # resolved from env
+///   SDK_BASE_URL: https://example.com/sdk               # literal
+///   TOOLCHAIN_PATH: ${{ WORKSPACE }}/toolchains/bin    # passed to Make
 /// ```
 pub fn resolve_variables(
     raw: &std::collections::HashMap<String, String>,
@@ -573,7 +616,7 @@ pub fn resolve_variables(
     raw.iter()
         .map(|(key, value)| {
             let resolved = expand_env_vars(value);
-            if resolved.contains('$') {
+            if has_unresolved_env_var_refs(&resolved) {
                 messages::info(&format!(
                     "Warning: manifest variable '{}' has an unresolved reference in value: '{}'",
                     key, resolved
@@ -1027,6 +1070,60 @@ mod tests {
         assert_eq!(
             expand_manifest_vars("path/${{ UNKNOWN }}/file", &vars),
             "path/${{ UNKNOWN }}/file"
+        );
+    }
+
+    #[test]
+    fn test_has_unresolved_env_var_refs_no_dollar() {
+        assert!(!has_unresolved_env_var_refs("https://example.com/sdk"));
+        assert!(!has_unresolved_env_var_refs(""));
+        assert!(!has_unresolved_env_var_refs("plain-value"));
+    }
+
+    #[test]
+    fn test_has_unresolved_env_var_refs_manifest_pattern_only() {
+        // ${{ VAR }} patterns are intentional Make references — not unresolved.
+        assert!(!has_unresolved_env_var_refs("${{ WORKSPACE }}/bin"));
+        assert!(!has_unresolved_env_var_refs("${{ A }}/${{ B }}"));
+        assert!(!has_unresolved_env_var_refs(
+            "prefix/${{ WORKSPACE }}/suffix"
+        ));
+    }
+
+    #[test]
+    fn test_has_unresolved_env_var_refs_bare_dollar() {
+        // A bare $VAR or ${VAR} that was not expanded is a real warning case.
+        assert!(has_unresolved_env_var_refs("$UNSET_HOST_VAR/path"));
+        assert!(has_unresolved_env_var_refs("${UNSET_VAR}/path"));
+    }
+
+    #[test]
+    fn test_has_unresolved_env_var_refs_mixed() {
+        // A mix: the ${{ }} part is fine, but the bare $UNSET is a real warning.
+        assert!(has_unresolved_env_var_refs("${{ WORKSPACE }}/$UNSET"));
+    }
+
+    #[test]
+    fn test_resolve_variables_manifest_ref_passes_through() {
+        // ${{ WORKSPACE }} must survive resolve_variables unchanged so that
+        // Makefile generation can convert it to $(WORKSPACE) later.
+        let mut raw = std::collections::HashMap::new();
+        raw.insert(
+            "TOOLCHAIN_PATH".to_string(),
+            "${{ WORKSPACE }}/toolchains/bin".to_string(),
+        );
+        raw.insert("PLAIN".to_string(), "no-dollar-here".to_string());
+
+        let resolved = resolve_variables(&raw);
+
+        assert_eq!(
+            resolved.get("TOOLCHAIN_PATH").map(String::as_str),
+            Some("${{ WORKSPACE }}/toolchains/bin"),
+            "Manifest variable reference should pass through resolve_variables unchanged"
+        );
+        assert_eq!(
+            resolved.get("PLAIN").map(String::as_str),
+            Some("no-dollar-here")
         );
     }
 

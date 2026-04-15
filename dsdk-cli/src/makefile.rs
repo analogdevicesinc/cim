@@ -121,7 +121,11 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         let mut sorted: Vec<_> = vars.iter().collect();
         sorted.sort_by_key(|(k, _)| k.as_str());
         for (key, value) in sorted {
-            makefile.push_str(&format!("{} ?= {}\n", key, value));
+            // Convert ${{ VAR }} references to $(VAR) so Make resolves them at
+            // build time. This lets users reference $(WORKSPACE) and other Make
+            // variables directly from sdk.yml variable definitions.
+            let make_value = render_command_for_makefile(value);
+            makefile.push_str(&format!("{} ?= {}\n", key, make_value));
         }
         makefile.push('\n');
     }
@@ -133,7 +137,10 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
                 makefile.push_str(&makefile_divider("Makefile includes"));
             }
             for include_line in makefile_includes {
-                makefile.push_str(&format!("-{}\n", include_line));
+                // Convert ${{ VAR }} references in include paths to $(VAR) so
+                // Make resolves them at build time (e.g. $(WORKSPACE)/foo.mk).
+                let rendered = render_command_for_makefile(include_line);
+                makefile.push_str(&format!("-{}\n", rendered));
             }
             makefile.push('\n');
         }
@@ -1258,6 +1265,133 @@ mod tests {
         assert_eq!(
             render_command_for_makefile("echo ${{ NOCLOSE"),
             "echo ${{ NOCLOSE"
+        );
+    }
+
+    #[test]
+    fn test_manifest_vars_workspace_reference() {
+        // ${{ WORKSPACE }} in variable values must become $(WORKSPACE) so Make
+        // can resolve the workspace path at build time.
+        let mut vars = std::collections::HashMap::new();
+        vars.insert(
+            "TOOLCHAIN_PATH".to_string(),
+            "${{ WORKSPACE }}/toolchains/aarch64-bm/bin".to_string(),
+        );
+        vars.insert(
+            "PLATFORMS_DIR".to_string(),
+            "${{ WORKSPACE }}/platforms".to_string(),
+        );
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![],
+            copy_files: None,
+            makefile_include: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(vars),
+        };
+
+        let makefile = generate_makefile_content(&config, false);
+
+        assert!(
+            makefile.contains("TOOLCHAIN_PATH ?= $(WORKSPACE)/toolchains/aarch64-bm/bin"),
+            "Expected WORKSPACE reference converted to Make variable, got:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("PLATFORMS_DIR ?= $(WORKSPACE)/platforms"),
+            "Expected WORKSPACE reference converted to Make variable, got:\n{}",
+            makefile
+        );
+        // Raw ${{ }} syntax must not survive into the generated Makefile.
+        assert!(
+            !makefile.contains("${{"),
+            "Raw ${{{{ }}}} syntax should not appear in Makefile, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_manifest_vars_arbitrary_make_variable_reference() {
+        // Any ${{ VAR }} (not just WORKSPACE) in a variable value must be
+        // converted to $(VAR), enabling cross-variable composition.
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("BASE".to_string(), "/opt/sdk".to_string());
+        vars.insert("DERIVED".to_string(), "${{ BASE }}/extras".to_string());
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![],
+            copy_files: None,
+            makefile_include: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(vars),
+        };
+
+        let makefile = generate_makefile_content(&config, false);
+
+        assert!(
+            makefile.contains("DERIVED ?= $(BASE)/extras"),
+            "Expected cross-variable reference converted to Make form, got:\n{}",
+            makefile
+        );
+        assert!(
+            !makefile.contains("${{"),
+            "Raw ${{{{ }}}} syntax should not appear in Makefile, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_makefile_include_with_workspace_reference() {
+        // ${{ WORKSPACE }} in makefile_include paths must become $(WORKSPACE).
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![],
+            copy_files: None,
+            makefile_include: Some(vec![
+                "include ${{ WORKSPACE }}/shared/common.mk".to_string(),
+                "include platform/board.mk".to_string(),
+            ]),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false);
+
+        assert!(
+            makefile.contains("-include $(WORKSPACE)/shared/common.mk"),
+            "Expected WORKSPACE in include path converted, got:\n{}",
+            makefile
+        );
+        // Plain include paths must still work unchanged.
+        assert!(
+            makefile.contains("-include platform/board.mk"),
+            "Expected plain include path unchanged, got:\n{}",
+            makefile
+        );
+        assert!(
+            !makefile.contains("${{"),
+            "Raw ${{{{ }}}} syntax should not appear in Makefile, got:\n{}",
+            makefile
         );
     }
 
