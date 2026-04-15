@@ -746,6 +746,7 @@ mod tests {
             copy_files: None,
             install: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,

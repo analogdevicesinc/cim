@@ -1017,6 +1017,7 @@ mod tests {
 
         let test_config = config::SdkConfig {
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,

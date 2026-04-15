@@ -139,6 +139,7 @@ fn test_dockerfile_with_https_urls() {
         install: None,
         copy_files: None,
         makefile_include: None,
+        build_folder: None,
         envsetup: None,
         test: None,
         clean: None,

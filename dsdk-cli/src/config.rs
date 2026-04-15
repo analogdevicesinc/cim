@@ -193,6 +193,9 @@ pub trait SdkConfigCore {
     fn gits(&self) -> &Vec<GitConfig>;
     fn install(&self) -> &Option<Vec<InstallConfig>>;
     fn makefile_include(&self) -> &Option<Vec<String>>;
+    /// Workspace-relative directory in which per-git `<name>.mk` fragments are
+    /// auto-discovered.  When `None` the default location `build/` is used.
+    fn build_folder(&self) -> &Option<String>;
     fn envsetup(&self) -> &Option<SdkTarget>;
     fn test(&self) -> &Option<SdkTarget>;
     fn clean(&self) -> &Option<SdkTarget>;
@@ -497,6 +500,12 @@ pub struct SdkConfig {
     pub install: Option<Vec<InstallConfig>>,
     #[serde(default)]
     pub makefile_include: Option<Vec<String>>,
+    /// Workspace-relative directory in which per-git `<name>.mk` fragments are
+    /// auto-discovered by `cim makefile`.  When absent the default location
+    /// `build/` is used.  This is an optional convenience key; omitting it
+    /// preserves the existing behaviour.
+    #[serde(default)]
+    pub build_folder: Option<String>,
     #[serde(default, deserialize_with = "deserialize_sdk_target")]
     pub envsetup: Option<SdkTarget>,
     #[serde(default, deserialize_with = "deserialize_sdk_target")]
@@ -529,6 +538,10 @@ impl SdkConfigCore for SdkConfig {
 
     fn makefile_include(&self) -> &Option<Vec<String>> {
         &self.makefile_include
+    }
+
+    fn build_folder(&self) -> &Option<String> {
+        &self.build_folder
     }
 
     fn envsetup(&self) -> &Option<SdkTarget> {

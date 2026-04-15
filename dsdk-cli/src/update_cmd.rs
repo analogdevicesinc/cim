@@ -1492,6 +1492,7 @@ pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
                     copy_files: full_sdk_config.copy_files.clone(),
                     install: full_sdk_config.install.clone(),
                     makefile_include: full_sdk_config.makefile_include.clone(),
+                    build_folder: full_sdk_config.build_folder.clone(),
                     envsetup: full_sdk_config.envsetup.clone(),
                     test: full_sdk_config.test.clone(),
                     clean: full_sdk_config.clean.clone(),
