@@ -290,27 +290,7 @@ impl VenvManager {
             }
         }
 
-        messages::status(&format!(
-            "Creating Python virtual environment at {}...",
-            venv_path.display()
-        ));
-
-        let output = std::process::Command::new("python3")
-            .args(["-m", "venv"])
-            .arg(&venv_path)
-            .current_dir(&self.workspace_path)
-            .output()?;
-
-        if !output.status.success() {
-            return Err(format!(
-                "Failed to create virtual environment:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
-
-        messages::success("Virtual environment created successfully");
-        Ok(())
+        run_python_venv_creation(&self.workspace_path)
     }
 
     /// Create virtual environment in mirror and symlink to workspace
@@ -385,23 +365,7 @@ impl VenvManager {
                 std::fs::create_dir_all(parent)?;
             }
 
-            messages::status(&format!(
-                "Creating Python virtual environment in mirror at {}...",
-                mirror_venv_path.display()
-            ));
-
-            let output = std::process::Command::new("python3")
-                .args(["-m", "venv"])
-                .arg(&mirror_venv_path)
-                .output()?;
-
-            if !output.status.success() {
-                return Err(format!(
-                    "Failed to create mirror virtual environment:\n{}",
-                    String::from_utf8_lossy(&output.stderr)
-                )
-                .into());
-            }
+            run_python_venv_creation(&self.mirror_path)?;
         }
 
         // Create symlink from workspace to mirror
@@ -463,40 +427,64 @@ impl VenvManager {
     }
 }
 
-/// Check if virtual environment exists in workspace
+/// Get the platform-specific path to the venv's bin/Scripts directory.
+pub(crate) fn get_venv_bin_dir(workspace_path: &Path) -> PathBuf {
+    workspace_path.join(".venv").join({
+        #[cfg(windows)]
+        {
+            "Scripts"
+        }
+
+        #[cfg(not(windows))]
+        {
+            "bin"
+        }
+    })
+}
+
+/// Get the platform-specific Python executable path inside the venv.
+pub(crate) fn get_venv_python_path(workspace_path: &Path) -> PathBuf {
+    get_venv_bin_dir(workspace_path).join({
+        #[cfg(windows)]
+        {
+            "python.exe"
+        }
+
+        #[cfg(not(windows))]
+        {
+            "python3"
+        }
+    })
+}
+
+/// Check if a virtual environment exists in the workspace.
 pub(crate) fn venv_exists(workspace_path: &Path) -> bool {
     let venv_path = workspace_path.join(".venv");
-    venv_path.exists() && venv_path.join("bin").join("python3").exists()
+    venv_path.exists() && get_venv_python_path(workspace_path).exists()
 }
 
-/// Get the path to the virtual environment's pip executable
-pub(crate) fn get_venv_pip_path(workspace_path: &Path) -> PathBuf {
-    workspace_path.join(".venv").join("bin").join("pip")
-}
-
-/// Create a Python virtual environment in the workspace
-pub(crate) fn create_virtual_environment(
-    workspace_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let venv_path = workspace_path.join(".venv");
-
-    if venv_exists(workspace_path) {
-        messages::info(&format!(
-            "Virtual environment already exists at {}",
-            venv_path.display()
-        ));
-        return Ok(());
+/// Get the platform-specific Python interpreter command.
+fn python_command() -> &'static str {
+    if cfg!(windows) {
+        "python"
+    } else {
+        "python3"
     }
+}
+
+/// Create a Python venv at the given path
+fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let venv_path = workspace_path.join(".venv");
 
     messages::status(&format!(
         "Creating Python virtual environment at {}...",
         venv_path.display()
     ));
 
-    let output = std::process::Command::new("python3")
+    // Create the venv.
+    let output = std::process::Command::new(python_command())
         .args(["-m", "venv"])
-        .arg(&venv_path)
-        .current_dir(workspace_path)
+        .arg(venv_path)
         .output()?;
 
     if !output.status.success() {
@@ -507,8 +495,50 @@ pub(crate) fn create_virtual_environment(
         .into());
     }
 
+    // Determine the python executable inside the newly-created venv
+    let venv_python = get_venv_python_path(workspace_path);
+
+    // Bootstrap pip inside the venv
+    let ensurepip_output = std::process::Command::new(&venv_python)
+        .args(["-m", "ensurepip"])
+        .output()?;
+
+    if !ensurepip_output.status.success() {
+        return Err(format!(
+            "Failed ensure pip in virtual environment:\n{}",
+            String::from_utf8_lossy(&ensurepip_output.stderr)
+        )
+        .into());
+    }
+    let upgrade_pip_output = std::process::Command::new(&venv_python)
+        .args(["-m", "pip", "install", "pip", "--upgrade"])
+        .output()?;
+
+    if !upgrade_pip_output.status.success() {
+        return Err(format!(
+            "Failed to upgrade pip in virtual environment:\n{}",
+            String::from_utf8_lossy(&upgrade_pip_output.stderr)
+        )
+        .into());
+    }
+
     messages::success("Virtual environment created successfully");
     Ok(())
+}
+
+/// Create a Python virtual environment in the workspace
+pub(crate) fn create_virtual_environment(
+    workspace_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if venv_exists(workspace_path) {
+        messages::info(&format!(
+            "Virtual environment already exists at {}",
+            workspace_path.display()
+        ));
+        return Ok(());
+    }
+
+    run_python_venv_creation(workspace_path)
 }
 
 /// Detect if we're running in a container environment
@@ -546,10 +576,12 @@ pub(crate) fn ensure_docs_dependencies(
 
     // Check if virtual environment exists and has sphinx-build
     if venv_exists(workspace_path) {
-        let sphinx_build_path = workspace_path
-            .join(".venv")
-            .join("bin")
-            .join("sphinx-build");
+        let sphinx_build_name = if cfg!(windows) {
+            "sphinx-build.exe"
+        } else {
+            "sphinx-build"
+        };
+        let sphinx_build_path = get_venv_bin_dir(workspace_path).join(sphinx_build_name);
         if sphinx_build_path.exists() {
             // Virtual environment exists and has sphinx, we're good
             return Ok(());
@@ -645,19 +677,19 @@ pub(crate) fn install_pip_packages(
         );
     }
 
-    let venv_pip = get_venv_pip_path(&workspace_path);
+    let venv_python = get_venv_python_path(&workspace_path);
     messages::verbose(&format!(
-        "Using virtual environment pip: {}",
-        venv_pip.display()
+        "Using virtual environment python: {}",
+        venv_python.display()
     ));
     messages::status(&format!(
-        "Running: {} install {}",
-        venv_pip.display(),
+        "Running: {} -m pip install {}",
+        venv_python.display(),
         packages.join(" ")
     ));
 
-    let status = std::process::Command::new(&venv_pip)
-        .arg("install")
+    let status = std::process::Command::new(&venv_python)
+        .args(["-m", "pip", "install"])
         .arg("--trusted-host")
         .arg("pypi.org")
         .arg("--trusted-host")
@@ -1104,13 +1136,12 @@ mod tests {
     #[test]
     fn test_venv_exists_true() {
         let (_temp_dir, workspace_path) = create_test_workspace();
-        let venv_path = workspace_path.join(".venv");
-        let bin_path = venv_path.join("bin");
-        fs::create_dir_all(&bin_path).expect("Failed to create venv structure");
+        let bin_dir = get_venv_bin_dir(&workspace_path);
+        fs::create_dir_all(&bin_dir).expect("Failed to create venv structure");
 
         // Create python3 executable (empty file is fine for test)
-        let python_exe = bin_path.join("python3");
-        fs::write(&python_exe, "").expect("Failed to create python3 file");
+        let python_exe = get_venv_python_path(&workspace_path);
+        fs::write(&python_exe, "").expect("Failed to create python file");
 
         assert!(venv_exists(&workspace_path));
     }
@@ -1124,13 +1155,6 @@ mod tests {
         let venv_path = workspace_path.join(".venv");
         fs::create_dir_all(&venv_path).expect("Failed to create venv dir");
         assert!(!venv_exists(&workspace_path));
-    }
-
-    #[test]
-    fn test_get_venv_pip_path() {
-        let (_temp_dir, workspace_path) = create_test_workspace();
-        let expected_pip_path = workspace_path.join(".venv").join("bin").join("pip");
-        assert_eq!(get_venv_pip_path(&workspace_path), expected_pip_path);
     }
 
     #[test]
@@ -1181,13 +1205,6 @@ mod tests {
     fn test_venv_path_helpers() {
         let (_temp_dir, workspace_path) = create_test_workspace();
 
-        // Test pip path generation
-        let pip_path = get_venv_pip_path(&workspace_path);
-        assert_eq!(
-            pip_path,
-            workspace_path.join(".venv").join("bin").join("pip")
-        );
-
         // Test venv detection with non-existent venv
         assert!(!venv_exists(&workspace_path));
 
@@ -1197,10 +1214,28 @@ mod tests {
         assert!(!venv_exists(&workspace_path)); // Still false, no python3
 
         // Test venv detection with complete structure
-        let bin_dir = venv_dir.join("bin");
+        let bin_dir = get_venv_bin_dir(&workspace_path);
         fs::create_dir_all(&bin_dir).expect("Failed to create bin dir");
-        let python_exe = bin_dir.join("python3");
-        fs::write(&python_exe, "").expect("Failed to create python3");
+        let python_exe = get_venv_python_path(&workspace_path);
+        fs::write(&python_exe, "").expect("Failed to create python");
         assert!(venv_exists(&workspace_path)); // Now true
+    }
+
+    #[test]
+    fn test_venv_python_has_virtual_env_set() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+
+        run_python_venv_creation(&workspace_path).expect("Failed to create virtual environment");
+
+        // Under venv, prefix refers to the venv prefix. The base_prefix
+        // does not change, and always points to the base Python installation
+        // https://docs.python.org/3/library/sys.html#sys.base_prefix
+        let venv_python = get_venv_python_path(&workspace_path);
+        let output = std::process::Command::new(&venv_python)
+            .args(["-c", "import sys; assert sys.prefix != sys.base_prefix"])
+            .output()
+            .expect("Failed to assert Python prefix");
+
+        assert!(output.status.success());
     }
 }
