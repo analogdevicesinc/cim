@@ -69,7 +69,7 @@ pub(crate) fn handle_makefile_command(no_dividers: bool) {
     }
 
     let dividers = !effective_no_dividers;
-    let makefile = generate_makefile_content(&sdk_config, dividers);
+    let makefile = generate_makefile_content(&sdk_config, dividers, Some(&workspace_path));
 
     match std::fs::write(&output_path, makefile) {
         Ok(_) => messages::success(&format!("Makefile written to {}", output_path.display())),
@@ -92,10 +92,41 @@ fn makefile_divider(title: &str) -> String {
     )
 }
 
-/// Generate the content of the Makefile from SDK configuration
+/// Discover `build/<name>.mk` files in the workspace for each git in the config.
+///
+/// Returns a list of relative paths (`build/<name>.mk`) for each git whose
+/// corresponding makefile fragment exists under `<workspace>/build/`.  The
+/// returned paths are relative to the workspace root so they can be used
+/// directly in `-include` directives of the generated `Makefile`.
+fn discover_git_mk_files(
+    workspace_path: &std::path::Path,
+    gits: &[config::GitConfig],
+) -> Vec<String> {
+    gits.iter()
+        .filter_map(|git| {
+            let mk_path = workspace_path
+                .join("build")
+                .join(format!("{}.mk", git.name));
+            if mk_path.exists() {
+                Some(format!("build/{}.mk", git.name))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Generate the content of the Makefile from SDK configuration.
+///
+/// When `workspace_path` is provided the workspace `build/` directory is
+/// scanned for per-git makefile fragments (`build/<name>.mk`).  Any fragment
+/// that exists is automatically included via a `-include build/<name>.mk`
+/// directive placed in the same section as the explicit `makefile_include`
+/// entries from `sdk.yml`.
 pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
     sdk_config: &T,
     dividers: bool,
+    workspace_path: Option<&std::path::Path>,
 ) -> String {
     let mut makefile = String::new();
 
@@ -130,20 +161,35 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         makefile.push('\n');
     }
 
-    // Add makefile includes after variables so included files can reference them
-    if let Some(makefile_includes) = sdk_config.makefile_include() {
-        if !makefile_includes.is_empty() {
-            if dividers {
-                makefile.push_str(&makefile_divider("Makefile includes"));
-            }
-            for include_line in makefile_includes {
-                // Convert ${{ VAR }} references in include paths to $(VAR) so
-                // Make resolves them at build time (e.g. $(WORKSPACE)/foo.mk).
-                let rendered = render_command_for_makefile(include_line);
-                makefile.push_str(&format!("-{}\n", rendered));
-            }
-            makefile.push('\n');
+    // Collect explicit makefile_include entries from sdk.yml
+    let explicit_includes: Vec<String> = sdk_config
+        .makefile_include()
+        .as_deref()
+        .unwrap_or(&[])
+        .to_vec();
+
+    // Auto-discover per-git makefile fragments: build/<name>.mk
+    let git_mk_includes: Vec<String> = if let Some(ws) = workspace_path {
+        discover_git_mk_files(ws, sdk_config.gits())
+    } else {
+        vec![]
+    };
+
+    // Emit all includes after variables so included files can reference Make vars
+    if !explicit_includes.is_empty() || !git_mk_includes.is_empty() {
+        if dividers {
+            makefile.push_str(&makefile_divider("Makefile includes"));
         }
+        for include_line in &explicit_includes {
+            // Convert ${{ VAR }} references in include paths to $(VAR) so
+            // Make resolves them at build time (e.g. $(WORKSPACE)/foo.mk).
+            let rendered = render_command_for_makefile(include_line);
+            makefile.push_str(&format!("-{}\n", rendered));
+        }
+        for mk_path in &git_mk_includes {
+            makefile.push_str(&format!("-include {}\n", mk_path));
+        }
+        makefile.push('\n');
     }
 
     if dividers {
@@ -721,7 +767,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
         assert!(
             makefile.starts_with(&format!("{}\n\n", WORKSPACE_VARIABLE)),
             "Expected WORKSPACE variable first in Makefile, got:\n{}",
@@ -758,7 +804,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
         assert!(makefile.contains(".PHONY: all"));
         assert!(makefile.contains("all: sdk-build"));
         assert!(makefile.contains("test-repo:"));
@@ -803,7 +849,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
         assert!(makefile.contains("all: sdk-build"));
         assert!(makefile.contains("base-repo:"));
         assert!(makefile.contains("dep-repo: base-repo"));
@@ -886,7 +932,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
         assert!(makefile.contains("empty-build:"));
 
         // Test with multiple dependencies
@@ -930,7 +976,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Check that .PHONY includes sdk-envsetup
         assert!(makefile.contains(".PHONY: all sdk-envsetup"));
@@ -966,7 +1012,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Check that comments are preserved
         assert!(makefile.contains("#Setup toolchain"));
@@ -998,7 +1044,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Should not include sdk-envsetup in PHONY or create target
         assert!(makefile.contains(".PHONY: all"));
@@ -1023,7 +1069,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Should not include sdk-envsetup
         assert!(makefile.contains(".PHONY: all"));
@@ -1073,7 +1119,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Check that .PHONY includes sdk-test
         assert!(makefile.contains(".PHONY: all sdk-test"));
@@ -1112,7 +1158,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Check that comments are preserved
         assert!(makefile.contains("#Run unit tests"));
@@ -1144,7 +1190,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Should not include sdk-test in PHONY or create target
         assert!(makefile.contains(".PHONY: all"));
@@ -1169,7 +1215,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Should not include sdk-test
         assert!(makefile.contains(".PHONY: all"));
@@ -1218,7 +1264,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Check that .PHONY includes both targets
         assert!(makefile.contains(".PHONY: all sdk-envsetup sdk-test"));
@@ -1297,7 +1343,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         assert!(
             makefile.contains("TOOLCHAIN_PATH ?= $(WORKSPACE)/toolchains/aarch64-bm/bin"),
@@ -1340,7 +1386,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         assert!(
             makefile.contains("DERIVED ?= $(BASE)/extras"),
@@ -1375,7 +1421,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         assert!(
             makefile.contains("-include $(WORKSPACE)/shared/common.mk"),
@@ -1425,7 +1471,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         let workspace_index = makefile
             .find(WORKSPACE_VARIABLE)
@@ -1481,7 +1527,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         let vars_pos = makefile.find("?=").expect("variables block missing");
         let include_pos = makefile.find("-include").expect("include block missing");
@@ -1527,7 +1573,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, true);
+        let makefile = generate_makefile_content(&config, true, None);
 
         // Verify divider banners are present
         assert!(
@@ -1598,7 +1644,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false);
+        let makefile = generate_makefile_content(&config, false, None);
 
         // Verify no divider banners are present
         assert!(
@@ -1616,6 +1662,324 @@ mod tests {
             "################################################################################\n\
              # Test Section\n\
              ################################################################################\n"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests for automatic per-git build/<name>.mk discovery
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_discover_git_mk_files_none_present() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let gits = vec![config::GitConfig {
+            name: "u-boot".to_string(),
+            url: "https://example.com/u-boot.git".to_string(),
+            commit: "main".to_string(),
+            build_depends_on: None,
+            git_depends_on: None,
+            build: None,
+            documentation_dir: None,
+        }];
+        let found = discover_git_mk_files(tmp.path(), &gits);
+        assert!(
+            found.is_empty(),
+            "Expected no mk files when build/ dir is absent"
+        );
+    }
+
+    #[test]
+    fn test_discover_git_mk_files_one_present() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(build_dir.join("u-boot.mk"), "# u-boot rules\n").expect("write u-boot.mk");
+
+        let gits = vec![
+            config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+            config::GitConfig {
+                name: "linux".to_string(),
+                url: "https://example.com/linux.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+        ];
+
+        let found = discover_git_mk_files(tmp.path(), &gits);
+        assert_eq!(found, vec!["build/u-boot.mk".to_string()]);
+    }
+
+    #[test]
+    fn test_discover_git_mk_files_multiple_present() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(build_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
+        std::fs::write(build_dir.join("linux.mk"), "").expect("write linux.mk");
+
+        let gits = vec![
+            config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+            config::GitConfig {
+                name: "linux".to_string(),
+                url: "https://example.com/linux.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+            config::GitConfig {
+                name: "trusted-firmware-a".to_string(),
+                url: "https://example.com/tfa.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+        ];
+
+        let found = discover_git_mk_files(tmp.path(), &gits);
+        assert_eq!(found.len(), 2);
+        assert!(found.contains(&"build/u-boot.mk".to_string()));
+        assert!(found.contains(&"build/linux.mk".to_string()));
+    }
+
+    #[test]
+    fn test_generate_makefile_auto_includes_git_mk() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(
+            build_dir.join("u-boot.mk"),
+            "u-boot-build:\n\t$(MAKE) -C u-boot\n",
+        )
+        .expect("write u-boot.mk");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: Some(vec!["$(MAKE) u-boot-build".to_string()]),
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+
+        assert!(
+            makefile.contains("-include build/u-boot.mk"),
+            "Expected auto-include for u-boot.mk, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_generate_makefile_no_auto_includes_when_mk_absent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: Some(vec!["$(MAKE) -C u-boot".to_string()]),
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+
+        assert!(
+            !makefile.contains("-include build/u-boot.mk"),
+            "Expected no auto-include when u-boot.mk is absent, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_auto_includes_after_explicit_includes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(build_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: Some(vec!["include shared/platform.mk".to_string()]),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+
+        let explicit_pos = makefile
+            .find("-include shared/platform.mk")
+            .expect("explicit include missing");
+        let auto_pos = makefile
+            .find("-include build/u-boot.mk")
+            .expect("auto-include missing");
+
+        assert!(
+            explicit_pos < auto_pos,
+            "Expected explicit includes before auto-discovered ones, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_auto_includes_with_dividers() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(build_dir.join("linux.mk"), "").expect("write linux.mk");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "linux".to_string(),
+                url: "https://example.com/linux.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let makefile = generate_makefile_content(&config, true, Some(tmp.path()));
+
+        assert!(
+            makefile.contains("# Makefile includes\n"),
+            "Expected 'Makefile includes' divider for auto-discovered file, got:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("-include build/linux.mk"),
+            "Expected auto-include for linux.mk, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_auto_includes_variables_before_auto_includes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(build_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
+
+        let mut vars = std::collections::HashMap::new();
+        vars.insert(
+            "CROSS_COMPILE".to_string(),
+            "aarch64-linux-gnu-".to_string(),
+        );
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(vars),
+        };
+
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+
+        let vars_pos = makefile.find("?=").expect("variables block missing");
+        let include_pos = makefile
+            .find("-include build/u-boot.mk")
+            .expect("auto-include missing");
+
+        assert!(
+            vars_pos < include_pos,
+            "Expected variables before auto-discovered -include lines, got:\n{}",
+            makefile
         );
     }
 }

@@ -1211,7 +1211,8 @@ pub(crate) fn handle_init_command(config: InitConfig) {
                         .as_ref()
                         .and_then(|uc| uc.no_dividers)
                         .unwrap_or(false);
-                    let makefile_content = generate_makefile_content(&sdk_config, dividers);
+                    let makefile_content =
+                        generate_makefile_content(&sdk_config, dividers, Some(&workspace_path));
                     match std::fs::write(&makefile_path, makefile_content) {
                         Ok(_) => {
                             messages::verbose(&format!(
