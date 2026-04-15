@@ -1301,6 +1301,7 @@ pub(crate) struct FilteredSdkConfig {
     pub(crate) gits: Vec<config::GitConfig>,
     pub(crate) mirror: PathBuf,
     pub(crate) makefile_include: Option<Vec<String>>,
+    pub(crate) build_folder: Option<String>,
     pub(crate) envsetup: Option<config::SdkTarget>,
     pub(crate) test: Option<config::SdkTarget>,
 }
@@ -1320,6 +1321,10 @@ impl config::SdkConfigCore for FilteredSdkConfig {
 
     fn makefile_include(&self) -> &Option<Vec<String>> {
         &self.makefile_include
+    }
+
+    fn build_folder(&self) -> &Option<String> {
+        &self.build_folder
     }
 
     fn envsetup(&self) -> &Option<config::SdkTarget> {
@@ -1407,6 +1412,7 @@ pub(crate) fn create_filtered_sdk_config<T: config::SdkConfigCore>(
         gits: filtered_gits,
         mirror: sdk_config.mirror().to_path_buf(),
         makefile_include: sdk_config.makefile_include().clone(),
+        build_folder: sdk_config.build_folder().clone(),
         envsetup: sdk_config.envsetup().clone(),
         test: sdk_config.test().clone(),
     }

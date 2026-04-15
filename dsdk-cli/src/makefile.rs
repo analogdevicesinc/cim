@@ -92,23 +92,62 @@ fn makefile_divider(title: &str) -> String {
     )
 }
 
-/// Discover `build/<name>.mk` files in the workspace for each git in the config.
+/// Resolve the `build_folder` value from sdk.yml to an absolute `PathBuf`
+/// suitable for probing the file system.
 ///
-/// Returns a list of relative paths (`build/<name>.mk`) for each git whose
-/// corresponding makefile fragment exists under `<workspace>/build/`.  The
-/// returned paths are relative to the workspace root so they can be used
-/// directly in `-include` directives of the generated `Makefile`.
+/// The raw string may contain:
+/// - `${{ WORKSPACE }}` — expanded to the actual workspace path.
+/// - Host env-var references (`$HOME`, `~/`, `${VAR}`, `%VAR%`) — expanded
+///   by [`dsdk_cli::workspace::expand_env_vars`].
+/// - An absolute path — used directly.
+/// - A plain relative path — joined with `workspace_path`.
+fn resolve_build_folder_for_check(
+    workspace_path: &std::path::Path,
+    raw: &str,
+) -> std::path::PathBuf {
+    // Inject WORKSPACE so that ${{ WORKSPACE }} expands to the real path.
+    let mut ctx = std::collections::HashMap::new();
+    ctx.insert(
+        "WORKSPACE".to_string(),
+        workspace_path.to_string_lossy().to_string(),
+    );
+    let expanded = dsdk_cli::workspace::expand_manifest_vars(raw, &ctx);
+    let expanded = dsdk_cli::workspace::expand_env_vars(&expanded);
+    let path = std::path::PathBuf::from(&expanded);
+    if path.is_absolute() {
+        path
+    } else {
+        workspace_path.join(path)
+    }
+}
+
+/// Discover `<build_folder>/<name>.mk` files for each git in the config.
+///
+/// `build_folder` is the raw string from sdk.yml's `build_folder:` key.  It
+/// may be:
+/// - `None` — use the default `"build"` directory (backward-compatible).
+/// - A plain relative path (`"mk-files"`) — resolved relative to the workspace.
+/// - An absolute path (`"/opt/sdk/fragments"`) — used directly.
+/// - A manifest-variable reference (`"${{ WORKSPACE }}/mk-files"`) — the
+///   `${{ WORKSPACE }}` token is expanded to the actual workspace path for the
+///   file-system check.  The raw string (with the token still present) is
+///   returned in the include paths so that [`render_command_for_makefile`] can
+///   later convert it to `$(WORKSPACE)/mk-files/<name>.mk` in the Makefile.
+///
+/// Returns a list of include-path strings (`<folder>/<name>.mk`) for each git
+/// whose corresponding fragment exists on disk.
 fn discover_git_mk_files(
     workspace_path: &std::path::Path,
     gits: &[config::GitConfig],
+    build_folder: Option<&str>,
 ) -> Vec<String> {
+    let folder = build_folder.unwrap_or("build");
+    let dir_for_check = resolve_build_folder_for_check(workspace_path, folder);
     gits.iter()
         .filter_map(|git| {
-            let mk_path = workspace_path
-                .join("build")
-                .join(format!("{}.mk", git.name));
+            let mk_path = dir_for_check.join(format!("{}.mk", git.name));
             if mk_path.exists() {
-                Some(format!("build/{}.mk", git.name))
+                Some(format!("{}/{}.mk", folder, git.name))
             } else {
                 None
             }
@@ -168,9 +207,9 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         .unwrap_or(&[])
         .to_vec();
 
-    // Auto-discover per-git makefile fragments: build/<name>.mk
+    // Auto-discover per-git makefile fragments: <build_folder>/<name>.mk
     let git_mk_includes: Vec<String> = if let Some(ws) = workspace_path {
-        discover_git_mk_files(ws, sdk_config.gits())
+        discover_git_mk_files(ws, sdk_config.gits(), sdk_config.build_folder().as_deref())
     } else {
         vec![]
     };
@@ -187,7 +226,11 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
             makefile.push_str(&format!("-{}\n", rendered));
         }
         for mk_path in &git_mk_includes {
-            makefile.push_str(&format!("-include {}\n", mk_path));
+            // Apply ${{ VAR }} → $(VAR) conversion so that manifest-variable
+            // references in build_folder (e.g. ${{ WORKSPACE }}/mk-files)
+            // become proper Make variable references in the include directive.
+            let rendered = render_command_for_makefile(mk_path);
+            makefile.push_str(&format!("-include {}\n", rendered));
         }
         makefile.push('\n');
     }
@@ -759,6 +802,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -796,6 +840,7 @@ mod tests {
             gits: vec![git_config],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -841,6 +886,7 @@ mod tests {
             gits: vec![git1, git2],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -924,6 +970,7 @@ mod tests {
             gits: vec![git_config],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -965,6 +1012,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: Some(config::SdkTarget::Commands(vec![
                 "ln -sf qemu_v8.mk build/Makefile".to_string(),
                 "cd build && make -j3 toolchains".to_string(),
@@ -998,6 +1046,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: Some(config::SdkTarget::Commands(vec![
                 "# Setup toolchain".to_string(),
                 "@echo Setting up environment".to_string(),
@@ -1036,6 +1085,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1061,6 +1111,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1108,6 +1159,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: Some(config::SdkTarget::Commands(vec![
                 "cargo test --release".to_string(),
@@ -1144,6 +1196,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: Some(config::SdkTarget::Commands(vec![
                 "# Run unit tests".to_string(),
@@ -1182,6 +1235,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1207,6 +1261,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1254,6 +1309,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: Some(config::SdkTarget::Commands(vec![
                 "make configure".to_string()
             ])),
@@ -1335,6 +1391,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1378,6 +1435,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1413,6 +1471,7 @@ mod tests {
                 "include ${{ WORKSPACE }}/shared/common.mk".to_string(),
                 "include platform/board.mk".to_string(),
             ]),
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1463,6 +1522,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1519,6 +1579,7 @@ mod tests {
             gits: vec![],
             copy_files: None,
             makefile_include: Some(vec!["include build/extra.mk".to_string()]),
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1565,6 +1626,7 @@ mod tests {
             gits: vec![git_config],
             copy_files: None,
             makefile_include: Some(vec!["include extra.mk".to_string()]),
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1636,6 +1698,7 @@ mod tests {
             gits: vec![git_config],
             copy_files: None,
             makefile_include: Some(vec!["include extra.mk".to_string()]),
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1681,7 +1744,7 @@ mod tests {
             build: None,
             documentation_dir: None,
         }];
-        let found = discover_git_mk_files(tmp.path(), &gits);
+        let found = discover_git_mk_files(tmp.path(), &gits, None);
         assert!(
             found.is_empty(),
             "Expected no mk files when build/ dir is absent"
@@ -1716,7 +1779,7 @@ mod tests {
             },
         ];
 
-        let found = discover_git_mk_files(tmp.path(), &gits);
+        let found = discover_git_mk_files(tmp.path(), &gits, None);
         assert_eq!(found, vec!["build/u-boot.mk".to_string()]);
     }
 
@@ -1758,7 +1821,7 @@ mod tests {
             },
         ];
 
-        let found = discover_git_mk_files(tmp.path(), &gits);
+        let found = discover_git_mk_files(tmp.path(), &gits, None);
         assert_eq!(found.len(), 2);
         assert!(found.contains(&"build/u-boot.mk".to_string()));
         assert!(found.contains(&"build/linux.mk".to_string()));
@@ -1790,6 +1853,7 @@ mod tests {
             }],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1826,6 +1890,7 @@ mod tests {
             }],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1865,6 +1930,7 @@ mod tests {
             }],
             copy_files: None,
             makefile_include: Some(vec!["include shared/platform.mk".to_string()]),
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1911,6 +1977,7 @@ mod tests {
             }],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1961,6 +2028,7 @@ mod tests {
             }],
             copy_files: None,
             makefile_include: None,
+            build_folder: None,
             envsetup: None,
             test: None,
             clean: None,
@@ -1981,5 +2049,252 @@ mod tests {
             "Expected variables before auto-discovered -include lines, got:\n{}",
             makefile
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests for build_folder configuration key
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_build_folder_overrides_default_build_dir() {
+        // When build_folder is set, fragments are looked up under that folder
+        // instead of the default "build/" directory.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let custom_dir = tmp.path().join("mk-files");
+        std::fs::create_dir_all(&custom_dir).expect("create mk-files dir");
+        std::fs::write(custom_dir.join("u-boot.mk"), "# custom location\n")
+            .expect("write u-boot.mk");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: Some("mk-files".to_string()),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+
+        assert!(
+            makefile.contains("-include mk-files/u-boot.mk"),
+            "Expected auto-include from custom folder, got:\n{}",
+            makefile
+        );
+        assert!(
+            !makefile.contains("-include build/u-boot.mk"),
+            "Expected no auto-include from default build/ folder, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_build_folder_not_found_in_default_dir() {
+        // When build_folder is set and the fragment exists in build/ but not in
+        // the configured folder, the fragment must NOT be included.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Put the .mk file in the default build/ dir only
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(build_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: Some("other-dir".to_string()),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+
+        assert!(
+            !makefile.contains("-include"),
+            "Expected no auto-include when .mk absent from configured folder, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_discover_git_mk_files_custom_folder() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let custom_dir = tmp.path().join("fragments");
+        std::fs::create_dir_all(&custom_dir).expect("create fragments dir");
+        std::fs::write(custom_dir.join("linux.mk"), "").expect("write linux.mk");
+
+        let gits = vec![
+            config::GitConfig {
+                name: "linux".to_string(),
+                url: "https://example.com/linux.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+            config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+        ];
+
+        let found = discover_git_mk_files(tmp.path(), &gits, Some("fragments"));
+        assert_eq!(found, vec!["fragments/linux.mk".to_string()]);
+    }
+
+    #[test]
+    fn test_build_folder_absolute_path() {
+        // An absolute path in build_folder is used directly for the FS check
+        // and emitted verbatim in the -include directive.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let abs_dir = tmp.path().join("abs-fragments");
+        std::fs::create_dir_all(&abs_dir).expect("create abs-fragments dir");
+        std::fs::write(abs_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
+
+        let abs_path = abs_dir.to_str().unwrap().to_string();
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: Some(abs_path.clone()),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        // Use a *different* directory as the workspace root so we can confirm
+        // the absolute path is used for the check rather than workspace-relative.
+        let other_ws = tempfile::tempdir().expect("other workspace tempdir");
+        let makefile = generate_makefile_content(&config, false, Some(other_ws.path()));
+
+        let expected = format!("-include {}/u-boot.mk", abs_path);
+        assert!(
+            makefile.contains(&expected),
+            "Expected absolute-path include '{}', got:\n{}",
+            expected,
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_build_folder_workspace_variable_reference() {
+        // ${{ WORKSPACE }}/fragments → file-system check uses the real path;
+        // the Makefile include directive becomes $(WORKSPACE)/fragments/<name>.mk.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fragments_dir = tmp.path().join("fragments");
+        std::fs::create_dir_all(&fragments_dir).expect("create fragments dir");
+        std::fs::write(fragments_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: Some("${{ WORKSPACE }}/fragments".to_string()),
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+
+        assert!(
+            makefile.contains("-include $(WORKSPACE)/fragments/u-boot.mk"),
+            "Expected Make-variable include for ${{{{ WORKSPACE }}}}/fragments, got:\n{}",
+            makefile
+        );
+        // The raw ${{ }} syntax must not appear in the output.
+        assert!(
+            !makefile.contains("${{"),
+            "Raw ${{{{ }}}} syntax must not appear in Makefile, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_resolve_build_folder_for_check_relative() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = resolve_build_folder_for_check(tmp.path(), "my-dir");
+        assert_eq!(result, tmp.path().join("my-dir"));
+    }
+
+    #[test]
+    fn test_resolve_build_folder_for_check_absolute() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let abs = tmp.path().join("abs").to_string_lossy().to_string();
+        let result = resolve_build_folder_for_check(tmp.path(), &abs);
+        assert_eq!(result, std::path::PathBuf::from(&abs));
+    }
+
+    #[test]
+    fn test_resolve_build_folder_for_check_workspace_var() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let raw = "${{ WORKSPACE }}/sub";
+        let result = resolve_build_folder_for_check(tmp.path(), raw);
+        assert_eq!(result, tmp.path().join("sub"));
     }
 }

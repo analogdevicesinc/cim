@@ -165,7 +165,12 @@ cim update [--match REGEX] [--no-mirror]
 
 #### makefile
 
-Generate Makefile from sdk.yml (run from workspace).
+Generate Makefile from sdk.yml (run from workspace). Emits standard
+`sdk-*` targets (`sdk-build`, `sdk-test`, `sdk-clean`, `sdk-flash`,
+`sdk-envsetup`) and a target per git repository. Per-git build
+fragment files (`<name>.mk`) are auto-discovered from the directory
+set by `build_folder` (default: `build/`) and added as `-include`
+directives automatically.
 
 ```bash
 cim makefile [--no-dividers]
@@ -365,6 +370,27 @@ mirror: $HOME/tmp/mirror
 variables:
   SDK_BASE_URL: https://artifacts.example.com/sdk  # literal base URL
   SDK_ARCH: $HOST_ARCH                             # resolved from host env var
+
+
+################################################################################
+# Explicit Makefile includes — appended before auto-discovered fragments.
+# Supports ${{ WORKSPACE }} variable references and plain relative paths.
+################################################################################
+makefile_include:
+  - include ${{ WORKSPACE }}/shared/common.mk
+
+
+################################################################################
+# Optional: directory where per-git build fragment files (<name>.mk) are
+# auto-discovered by "cim makefile" and added as -include directives.
+# Defaults to build/ when absent.
+#
+# Accepted forms:
+#   build_folder: build                   # workspace-relative (default)
+#   build_folder: ${{ WORKSPACE }}/build  # same, portable Make variable
+#   build_folder: /opt/sdk/fragments      # absolute path
+################################################################################
+build_folder: build
 
 
 ################################################################################

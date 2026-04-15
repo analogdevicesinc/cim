@@ -41,6 +41,49 @@ This project is a Rust-based SDK management tool designed to manage multiple git
 - `Makefile`: Makefile created by `cim makefile` command for easy access to common targets.
 - `.vscode`: VCcode `tasks.json` also created when running `cim makefile`.
 
+## WORKSPACE Variable and ${{ VAR }} Syntax
+
+Every generated `Makefile` opens with:
+
+```make
+WORKSPACE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+```
+
+This makes `$(WORKSPACE)` a relocatable Make variable pointing to the
+workspace root at build time. Never hard-code absolute workspace paths
+in manifest fields or Makefile fragments; always use `${{ WORKSPACE }}`
+(in sdk.yml) or `$(WORKSPACE)` (in `.mk` files).
+
+The `${{ VAR }}` template syntax is used throughout sdk.yml. Its
+behaviour differs by field type:
+
+- **Recipe commands** (`build`, `test`, `clean`, `flash`, `envsetup`,
+  per-git `build`): `${{ VAR }}` → `$(VAR)` via
+  `render_command_for_makefile()`. Make expands the reference at build
+  time, so the value remains overridable from the command line.
+- **Path fields** (`build_folder`, `makefile_include` entries):
+  at `cim makefile` generation time `${{ WORKSPACE }}` is expanded to
+  the real workspace path for file-system probing
+  (`resolve_build_folder_for_check()` injects `WORKSPACE` into the
+  variable map and calls `expand_manifest_vars()`). The `-include`
+  directive written to the Makefile uses `$(WORKSPACE)/…` so it
+  remains portable across machines.
+- **`variables:` values**: host env-var syntax (`$VAR`, `$HOME`, `~/`)
+  is expanded at manifest load time via `expand_env_vars()`. Any
+  surviving `${{ VAR }}` becomes `$(VAR)` in the generated `?=`
+  assignment via `render_command_for_makefile()`.
+
+Key functions in `dsdk-cli/src/`:
+- `makefile.rs` — `render_command_for_makefile()`: `${{ VAR }}` →
+  `$(VAR)` for use in Makefile recipes and `-include` directives.
+- `makefile.rs` — `resolve_build_folder_for_check()`: resolves a
+  `build_folder` or similar path field for FS probing; handles
+  relative, absolute, and `${{ WORKSPACE }}` forms.
+- `workspace.rs` — `expand_manifest_vars()`: expands `${{ VAR }}`
+  tokens against a caller-supplied variable map.
+- `workspace.rs` — `expand_env_vars()`: expands `$VAR`, `${VAR}`,
+  `~/` from the host environment.
+
 ## Cim Development Workflow
 - Use `make` or `make all` to build, test, lint, format, and install cim in one command.
 - Use `make build` for quick builds during development.
