@@ -16,10 +16,10 @@
 #   - list-targets: --source (-s), --target (-t)
 #   - init: --target (-t), --source (-s), --version (-v), --workspace (-w),
 #           --no-mirror, --force, --match, --verbose, --install, --full, --symlink,
-#           --yes (-y), --cert-validation
+#           --yes (-y), --cert-validation, --no-includes
 #   - update: --no-mirror, --match, --verbose (-v), --cert-validation
 #   - foreach: command, --match
-#   - makefile: --no-dividers
+#   - makefile: --no-dividers, --no-includes
 #   - add: --name (-n), --url (-u), --commit
 #   - install os-deps: --yes (-y), --no-sudo
 #   - install pip: --profile (-p), --force (-f), --symlink, --list-profiles
@@ -171,8 +171,17 @@ _cim_completions() {
                     COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
                     return 0
                     ;;
+                --no-includes)
+                    # Complete common repository names from sdk.yml if available
+                    local repo_names=""
+                    if [ -f "sdk.yml" ]; then
+                        repo_names=$(grep -A1 "^  - name:" sdk.yml 2>/dev/null | grep "name:" | sed 's/.*name: //' | tr '\n' ',')
+                    fi
+                    COMPREPLY=( $(compgen -W "${repo_names}" -- "${cur}") )
+                    return 0
+                    ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --force --match --install --full --symlink --yes -y --verbose --cert-validation --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --force --match --install --full --symlink --yes -y --verbose --cert-validation --no-includes --help" -- "${cur}") )
                     return 0
                     ;;
             esac
@@ -217,8 +226,21 @@ _cim_completions() {
             ;;
 
         makefile)
-            COMPREPLY=( $(compgen -W "--no-dividers --help" -- "${cur}") )
-            return 0
+            case "${prev}" in
+                --no-includes)
+                    # Complete common repository names from sdk.yml if available
+                    local repo_names=""
+                    if [ -f "sdk.yml" ]; then
+                        repo_names=$(grep -A1 "^  - name:" sdk.yml 2>/dev/null | grep "name:" | sed 's/.*name: //' | tr '\n' ',')
+                    fi
+                    COMPREPLY=( $(compgen -W "${repo_names}" -- "${cur}") )
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=( $(compgen -W "--no-dividers --no-includes --help" -- "${cur}") )
+                    return 0
+                    ;;
+            esac
             ;;
 
         add)
