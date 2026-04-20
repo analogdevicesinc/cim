@@ -14,8 +14,27 @@ use dsdk_cli::{config, messages, vscode_tasks_manager};
 
 const WORKSPACE_VARIABLE: &str = "WORKSPACE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))";
 
+/// Parse the raw `--no-includes` CLI value into an exclusion list.
+///
+/// - `None` → flag was not provided; no suppression (`None` returned).
+/// - `Some("")` → bare `--no-includes`; suppress all (`Some(vec![])` returned).
+/// - `Some("a,b,c")` → suppress named repos (`Some(vec!["a", "b", "c"])`).
+fn parse_no_includes(value: Option<&str>) -> Option<Vec<String>> {
+    match value {
+        None => None,
+        Some("") => Some(vec![]),
+        Some(s) => Some(
+            s.split(',')
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        ),
+    }
+}
+
 /// Generate a Makefile from the SDK configuration
-pub(crate) fn handle_makefile_command(no_dividers: bool) {
+pub(crate) fn handle_makefile_command(no_dividers: bool, no_includes: Option<&str>) {
     // Must be run from within a workspace
     let workspace_path = match get_current_workspace() {
         Ok(path) => path,
@@ -69,7 +88,13 @@ pub(crate) fn handle_makefile_command(no_dividers: bool) {
     }
 
     let dividers = !effective_no_dividers;
-    let makefile = generate_makefile_content(&sdk_config, dividers, Some(&workspace_path));
+    let exclude = parse_no_includes(no_includes);
+    let makefile = generate_makefile_content(
+        &sdk_config,
+        dividers,
+        Some(&workspace_path),
+        exclude.as_deref(),
+    );
 
     match std::fs::write(&output_path, makefile) {
         Ok(_) => messages::success(&format!("Makefile written to {}", output_path.display())),
@@ -136,14 +161,32 @@ fn resolve_build_folder_for_check(
 ///
 /// Returns a list of include-path strings (`<folder>/<name>.mk`) for each git
 /// whose corresponding fragment exists on disk.
+///
+/// `exclude` controls suppression of discovered fragments:
+/// - `None` — no suppression; all found fragments are returned.
+/// - `Some(&[])` — return an empty list (suppress everything).
+/// - `Some(names)` — omit fragments whose repository name is in `names`.
 fn discover_git_mk_files(
     workspace_path: &std::path::Path,
     gits: &[config::GitConfig],
     build_folder: Option<&str>,
+    exclude: Option<&[String]>,
 ) -> Vec<String> {
+    // If all fragments are suppressed, skip the filesystem scan entirely.
+    if let Some(names) = exclude {
+        if names.is_empty() {
+            return vec![];
+        }
+    }
     let folder = build_folder.unwrap_or("build");
     let dir_for_check = resolve_build_folder_for_check(workspace_path, folder);
     gits.iter()
+        .filter(|git| {
+            // Keep this git unless its name is in the exclusion list.
+            exclude
+                .map(|names| !names.iter().any(|n| n == &git.name))
+                .unwrap_or(true)
+        })
         .filter_map(|git| {
             let mk_path = dir_for_check.join(format!("{}.mk", git.name));
             if mk_path.exists() {
@@ -162,10 +205,19 @@ fn discover_git_mk_files(
 /// that exists is automatically included via a `-include build/<name>.mk`
 /// directive placed in the same section as the explicit `makefile_include`
 /// entries from `sdk.yml`.
+///
+/// `exclude_mk_fragments` controls which per-git fragments are suppressed:
+/// - `None` — no suppression; all discovered fragments are included
+///   (backward-compatible default).
+/// - `Some(&[])` — suppress all discovered fragments (equivalent to
+///   `--no-includes` with no argument).
+/// - `Some(names)` — suppress only the fragments whose repository name
+///   appears in `names` (e.g. `&["qemu", "trusted-services"]`).
 pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
     sdk_config: &T,
     dividers: bool,
     workspace_path: Option<&std::path::Path>,
+    exclude_mk_fragments: Option<&[String]>,
 ) -> String {
     let mut makefile = String::new();
 
@@ -209,7 +261,12 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
 
     // Auto-discover per-git makefile fragments: <build_folder>/<name>.mk
     let git_mk_includes: Vec<String> = if let Some(ws) = workspace_path {
-        discover_git_mk_files(ws, sdk_config.gits(), sdk_config.build_folder().as_deref())
+        discover_git_mk_files(
+            ws,
+            sdk_config.gits(),
+            sdk_config.build_folder().as_deref(),
+            exclude_mk_fragments,
+        )
     } else {
         vec![]
     };
@@ -811,7 +868,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
         assert!(
             makefile.starts_with(&format!("{}\n\n", WORKSPACE_VARIABLE)),
             "Expected WORKSPACE variable first in Makefile, got:\n{}",
@@ -849,7 +906,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
         assert!(makefile.contains(".PHONY: all"));
         assert!(makefile.contains("all: sdk-build"));
         assert!(makefile.contains("test-repo:"));
@@ -895,7 +952,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
         assert!(makefile.contains("all: sdk-build"));
         assert!(makefile.contains("base-repo:"));
         assert!(makefile.contains("dep-repo: base-repo"));
@@ -979,7 +1036,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
         assert!(makefile.contains("empty-build:"));
 
         // Test with multiple dependencies
@@ -1024,7 +1081,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Check that .PHONY includes sdk-envsetup
         assert!(makefile.contains(".PHONY: all sdk-envsetup"));
@@ -1061,7 +1118,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Check that comments are preserved
         assert!(makefile.contains("#Setup toolchain"));
@@ -1094,7 +1151,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Should not include sdk-envsetup in PHONY or create target
         assert!(makefile.contains(".PHONY: all"));
@@ -1120,7 +1177,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Should not include sdk-envsetup
         assert!(makefile.contains(".PHONY: all"));
@@ -1171,7 +1228,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Check that .PHONY includes sdk-test
         assert!(makefile.contains(".PHONY: all sdk-test"));
@@ -1211,7 +1268,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Check that comments are preserved
         assert!(makefile.contains("#Run unit tests"));
@@ -1244,7 +1301,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Should not include sdk-test in PHONY or create target
         assert!(makefile.contains(".PHONY: all"));
@@ -1270,7 +1327,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Should not include sdk-test
         assert!(makefile.contains(".PHONY: all"));
@@ -1320,7 +1377,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Check that .PHONY includes both targets
         assert!(makefile.contains(".PHONY: all sdk-envsetup sdk-test"));
@@ -1400,7 +1457,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         assert!(
             makefile.contains("TOOLCHAIN_PATH ?= $(WORKSPACE)/toolchains/aarch64-bm/bin"),
@@ -1444,7 +1501,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         assert!(
             makefile.contains("DERIVED ?= $(BASE)/extras"),
@@ -1480,7 +1537,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         assert!(
             makefile.contains("-include $(WORKSPACE)/shared/common.mk"),
@@ -1531,7 +1588,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         let workspace_index = makefile
             .find(WORKSPACE_VARIABLE)
@@ -1588,7 +1645,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         let vars_pos = makefile.find("?=").expect("variables block missing");
         let include_pos = makefile.find("-include").expect("include block missing");
@@ -1635,7 +1692,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, true, None);
+        let makefile = generate_makefile_content(&config, true, None, None);
 
         // Verify divider banners are present
         assert!(
@@ -1707,7 +1764,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false, None);
+        let makefile = generate_makefile_content(&config, false, None, None);
 
         // Verify no divider banners are present
         assert!(
@@ -1744,7 +1801,7 @@ mod tests {
             build: None,
             documentation_dir: None,
         }];
-        let found = discover_git_mk_files(tmp.path(), &gits, None);
+        let found = discover_git_mk_files(tmp.path(), &gits, None, None);
         assert!(
             found.is_empty(),
             "Expected no mk files when build/ dir is absent"
@@ -1779,7 +1836,7 @@ mod tests {
             },
         ];
 
-        let found = discover_git_mk_files(tmp.path(), &gits, None);
+        let found = discover_git_mk_files(tmp.path(), &gits, None, None);
         assert_eq!(found, vec!["build/u-boot.mk".to_string()]);
     }
 
@@ -1821,7 +1878,7 @@ mod tests {
             },
         ];
 
-        let found = discover_git_mk_files(tmp.path(), &gits, None);
+        let found = discover_git_mk_files(tmp.path(), &gits, None, None);
         assert_eq!(found.len(), 2);
         assert!(found.contains(&"build/u-boot.mk".to_string()));
         assert!(found.contains(&"build/linux.mk".to_string()));
@@ -1862,7 +1919,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), None);
 
         assert!(
             makefile.contains("-include build/u-boot.mk"),
@@ -1899,7 +1956,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), None);
 
         assert!(
             !makefile.contains("-include build/u-boot.mk"),
@@ -1939,7 +1996,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), None);
 
         let explicit_pos = makefile
             .find("-include shared/platform.mk")
@@ -1986,7 +2043,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, true, Some(tmp.path()));
+        let makefile = generate_makefile_content(&config, true, Some(tmp.path()), None);
 
         assert!(
             makefile.contains("# Makefile includes\n"),
@@ -2037,7 +2094,7 @@ mod tests {
             variables: Some(vars),
         };
 
-        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), None);
 
         let vars_pos = makefile.find("?=").expect("variables block missing");
         let include_pos = makefile
@@ -2089,7 +2146,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), None);
 
         assert!(
             makefile.contains("-include mk-files/u-boot.mk"),
@@ -2137,7 +2194,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), None);
 
         assert!(
             !makefile.contains("-include"),
@@ -2174,7 +2231,7 @@ mod tests {
             },
         ];
 
-        let found = discover_git_mk_files(tmp.path(), &gits, Some("fragments"));
+        let found = discover_git_mk_files(tmp.path(), &gits, Some("fragments"), None);
         assert_eq!(found, vec!["fragments/linux.mk".to_string()]);
     }
 
@@ -2216,7 +2273,7 @@ mod tests {
         // Use a *different* directory as the workspace root so we can confirm
         // the absolute path is used for the check rather than workspace-relative.
         let other_ws = tempfile::tempdir().expect("other workspace tempdir");
-        let makefile = generate_makefile_content(&config, false, Some(other_ws.path()));
+        let makefile = generate_makefile_content(&config, false, Some(other_ws.path()), None);
 
         let expected = format!("-include {}/u-boot.mk", abs_path);
         assert!(
@@ -2260,7 +2317,7 @@ mod tests {
             variables: None,
         };
 
-        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), None);
 
         assert!(
             makefile.contains("-include $(WORKSPACE)/fragments/u-boot.mk"),
@@ -2296,5 +2353,167 @@ mod tests {
         let raw = "${{ WORKSPACE }}/sub";
         let result = resolve_build_folder_for_check(tmp.path(), raw);
         assert_eq!(result, tmp.path().join("sub"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests for --no-includes / exclude_mk_fragments
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_no_includes_all_suppresses_all_fragments() {
+        // Some(&[]) means bare --no-includes: all auto-discovered fragments
+        // must be omitted from the generated Makefile.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(build_dir.join("qemu.mk"), "").expect("write qemu.mk");
+        std::fs::write(build_dir.join("trusted-services.mk"), "")
+            .expect("write trusted-services.mk");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![
+                config::GitConfig {
+                    name: "qemu".to_string(),
+                    url: "https://example.com/qemu.git".to_string(),
+                    commit: "main".to_string(),
+                    build_depends_on: None,
+                    git_depends_on: None,
+                    build: None,
+                    documentation_dir: None,
+                },
+                config::GitConfig {
+                    name: "trusted-services".to_string(),
+                    url: "https://example.com/ts.git".to_string(),
+                    commit: "main".to_string(),
+                    build_depends_on: None,
+                    git_depends_on: None,
+                    build: None,
+                    documentation_dir: None,
+                },
+            ],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        // Exclude all: pass Some(&[])
+        let exclude: Vec<String> = vec![];
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), Some(&exclude));
+
+        assert!(
+            !makefile.contains("-include build/qemu.mk"),
+            "Expected qemu.mk suppressed by --no-includes, got:\n{}",
+            makefile
+        );
+        assert!(
+            !makefile.contains("-include build/trusted-services.mk"),
+            "Expected trusted-services.mk suppressed by --no-includes, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_no_includes_named_suppresses_only_listed() {
+        // Some(&["qemu"]) means --no-includes=qemu: only the qemu fragment is
+        // excluded; trusted-services must still be included.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(build_dir.join("qemu.mk"), "").expect("write qemu.mk");
+        std::fs::write(build_dir.join("trusted-services.mk"), "")
+            .expect("write trusted-services.mk");
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![
+                config::GitConfig {
+                    name: "qemu".to_string(),
+                    url: "https://example.com/qemu.git".to_string(),
+                    commit: "main".to_string(),
+                    build_depends_on: None,
+                    git_depends_on: None,
+                    build: None,
+                    documentation_dir: None,
+                },
+                config::GitConfig {
+                    name: "trusted-services".to_string(),
+                    url: "https://example.com/ts.git".to_string(),
+                    commit: "main".to_string(),
+                    build_depends_on: None,
+                    git_depends_on: None,
+                    build: None,
+                    documentation_dir: None,
+                },
+            ],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+        };
+
+        let exclude = vec!["qemu".to_string()];
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()), Some(&exclude));
+
+        assert!(
+            !makefile.contains("-include build/qemu.mk"),
+            "Expected qemu.mk excluded by --no-includes=qemu, got:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("-include build/trusted-services.mk"),
+            "Expected trusted-services.mk still included, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_parse_no_includes_none() {
+        assert!(parse_no_includes(None).is_none());
+    }
+
+    #[test]
+    fn test_parse_no_includes_bare_flag() {
+        let result = parse_no_includes(Some(""));
+        assert_eq!(result, Some(vec![]));
+    }
+
+    #[test]
+    fn test_parse_no_includes_single_name() {
+        let result = parse_no_includes(Some("qemu"));
+        assert_eq!(result, Some(vec!["qemu".to_string()]));
+    }
+
+    #[test]
+    fn test_parse_no_includes_multiple_names() {
+        let result = parse_no_includes(Some("qemu,trusted-services"));
+        assert_eq!(
+            result,
+            Some(vec!["qemu".to_string(), "trusted-services".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_parse_no_includes_trims_whitespace() {
+        let result = parse_no_includes(Some(" qemu , trusted-services "));
+        assert_eq!(
+            result,
+            Some(vec!["qemu".to_string(), "trusted-services".to_string()])
+        );
     }
 }
