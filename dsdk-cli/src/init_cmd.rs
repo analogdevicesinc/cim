@@ -666,6 +666,9 @@ pub(crate) struct InitConfig<'a> {
     pub(crate) symlink: bool,
     pub(crate) yes: bool,
     pub(crate) _cert_validation: Option<&'a str>,
+    /// Parsed value of --no-includes: None = no suppression, Some(vec![]) =
+    /// suppress all, Some(names) = suppress only the named repos.
+    pub(crate) no_mk_includes: Option<Vec<String>>,
 }
 
 /// Initialize a new workspace
@@ -1215,7 +1218,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
                         &sdk_config,
                         dividers,
                         Some(&workspace_path),
-                        None,
+                        config.no_mk_includes.as_deref(),
                     );
                     match std::fs::write(&makefile_path, makefile_content) {
                         Ok(_) => {

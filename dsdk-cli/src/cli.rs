@@ -125,6 +125,23 @@ pub enum Commands {
             help = "Certificate validation: strict (default), relaxed (insecure), auto"
         )]
         cert_validation: Option<String>,
+        /// Suppress auto-inclusion of per-git build/<name>.mk fragments when
+        /// generating the Makefile during --install or --full.
+        /// Without a value: disable all fragments.
+        /// With a value: comma-separated list of repo names to exclude
+        /// (e.g. --no-includes=qemu,trusted-services).
+        #[arg(
+            long = "no-includes",
+            value_name = "NAMES",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "",
+            help = "Suppress auto-inclusion of per-git Makefile fragments.\n\
+                    Without a value: disable all fragments.\n\
+                    With a value: comma-separated list of repo names to exclude\n\
+                    (e.g. --no-includes=qemu,trusted-services)."
+        )]
+        no_includes: Option<String>,
     },
     /// Update all git repositories
     Update {
@@ -621,6 +638,7 @@ mod tests {
                 symlink: _,
                 yes: _,
                 cert_validation: _,
+                no_includes: _,
             }) => {
                 assert_eq!(target, &Some("my-target".to_string()));
                 assert_eq!(
