@@ -147,6 +147,7 @@ Initialize workspace from target.
 ```bash
 cim init --target NAME [--workspace PATH] [--version VERSION]
           [--match REGEX] [--install] [--full] [--symlink] [--no-mirror]
+          [--no-includes[=NAMES]]
 ```
 
 - `--install`: Install toolchains and pip packages after init
@@ -154,6 +155,8 @@ cim init --target NAME [--workspace PATH] [--version VERSION]
 - `--symlink`: Install to mirror with symlinks in workspace
 - `--match REGEX`: Only clone repos matching pattern
 - `--no-mirror`: Disable mirroring for this workspace
+- `--no-includes`: Suppress all auto-discovered per-git `build/<name>.mk` fragment includes in the generated Makefile
+- `--no-includes=NAMES`: Suppress only the named repositories (comma-separated, e.g. `--no-includes=qemu,trusted-services`)
 
 #### update
 
@@ -173,8 +176,11 @@ set by `build_folder` (default: `build/`) and added as `-include`
 directives automatically.
 
 ```bash
-cim makefile [--no-dividers]
+cim makefile [--no-dividers] [--no-includes[=NAMES]]
 ```
+
+- `--no-includes`: Suppress all auto-discovered per-git `build/<name>.mk` fragment includes. Useful when a cloned repository owns the `build/` directory and its `.mk` files must not be pulled into the top-level Makefile (e.g. OP-TEE's `build.git`).
+- `--no-includes=NAMES`: Suppress only the named repositories (comma-separated, e.g. `--no-includes=qemu,trusted-services`).
 
 #### foreach
 
