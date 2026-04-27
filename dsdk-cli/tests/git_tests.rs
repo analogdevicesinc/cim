@@ -266,11 +266,13 @@ fn test_config_operations() {
     git_operations::config(&repo_path, "user.email", "test@example.com")
         .expect("Should set user.email");
 
-    // Verify config was set by using git command directly
-    let result = git_operations::git_command(&["config", "user.name"], Some(&repo_path))
-        .expect("Should get config");
-    assert!(result.is_success());
-    assert!(result.stdout.contains("Test User"));
+    // Verify config was set by reading it back via git2
+    let repo = git2::Repository::open(&repo_path).expect("Should open repo");
+    let config = repo.config().expect("Should get config");
+    let name = config
+        .get_string("user.name")
+        .expect("Should get user.name");
+    assert_eq!(name, "Test User");
 }
 
 #[test]
@@ -456,4 +458,49 @@ fn test_get_mirror_repo_path_different_urls_get_different_paths() {
     assert_eq!(result, mirror_path.join(format!("u-boot-{}", hash)));
     // Ensure it's different from the default path
     assert_ne!(result, mirror_path.join("u-boot"));
+}
+
+/// Verify that checkout() resolves a remote-only branch name via the
+/// `origin/<name>` DWIM fallback — the regression that broke
+/// `cim init --version` after the libgit2 migration.
+#[test]
+fn test_checkout_remote_branch_by_name() {
+    // 1. Create an upstream bare repo.
+    let upstream = MockGitRepo::create_bare("upstream.git");
+    let working = MockGitRepo::new("working");
+    git_operations::remote_add(&working.path, "origin", &upstream.file_url())
+        .expect("Should add remote");
+
+    // Commit v1 on main and create feature-branch at this point.
+    working.add_file("version.txt", "1.0\n");
+    working.commit("Version 1.0");
+    git_operations::create_branch(&working.path, "feature-branch", None)
+        .expect("Should create branch");
+    // Push feature-branch (still points at v1).
+    git_operations::push(&working.path, Some("origin"), Some("feature-branch"))
+        .expect("Should push feature-branch");
+
+    // Advance main past the branch point so the two diverge.
+    working.add_file("version.txt", "2.0\n");
+    working.commit("Version 2.0");
+    git_operations::push(&working.path, Some("origin"), Some("main")).expect("Should push main");
+
+    // 2. Clone from upstream — default branch (main) is checked out.
+    let fixture = TestFixture::new();
+    let clone_path = fixture.path().join("clone");
+    git_operations::clone_repo(&upstream.file_url(), &clone_path, None).expect("Should clone");
+
+    // Sanity: working tree starts on main (v2.0).
+    let content = fs::read_to_string(clone_path.join("version.txt")).unwrap();
+    assert_eq!(content, "2.0\n");
+
+    // 3. checkout() with the bare branch name must succeed via the
+    //    origin/ DWIM fallback (no local "feature-branch" exists).
+    let result = git_operations::checkout(&clone_path, "feature-branch")
+        .expect("Should checkout remote branch by name (DWIM fallback)");
+    assert!(result.is_success());
+
+    // 4. Verify we got the v1.0 content from feature-branch.
+    let content = fs::read_to_string(clone_path.join("version.txt")).unwrap();
+    assert_eq!(content, "1.0\n");
 }

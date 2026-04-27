@@ -696,18 +696,11 @@ pub(crate) fn handle_existing_workspace_repo(
         let mirror_repo_path =
             dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
-        let _ = git_operations::git_command(
-            &["remote", "set-url", "origin", &git_cfg.url],
-            Some(repo_path),
-        );
-        let _ = git_operations::git_command(
-            &[
-                "remote",
-                "add",
-                "mirror",
-                &format!("file://{}", mirror_repo_path.display()),
-            ],
-            Some(repo_path),
+        let _ = git_operations::remote_set_url(repo_path, "origin", &git_cfg.url);
+        let _ = git_operations::remote_add(
+            repo_path,
+            "mirror",
+            &format!("file://{}", mirror_repo_path.display()),
         );
 
         if mirror_repo_path.exists() {

@@ -9,15 +9,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Centralized git operations using host git binary
+//! Centralized git operations module
 //!
-//! This module provides a consistent interface for all git operations
-//! using the host system's git command rather than libgit2.
+//! This module provides the public API for all git operations in cim.
+//! All operations use libgit2 natively via the `git2` crate.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use git2::{
+    AutotagOption, BranchType, Cred, CredentialType, FetchOptions, IndexAddOption, ObjectType,
+    ProxyOptions, RemoteCallbacks, Repository, RepositoryInitOptions, StatusOptions,
+};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Debug)]
 pub struct GitResult {
@@ -32,78 +35,259 @@ impl GitResult {
     }
 }
 
-/// Execute git command with consistent error handling
-pub fn git_command(args: &[&str], cwd: Option<&Path>) -> Result<GitResult> {
-    // Print verbose output showing the full command
-    if crate::messages::is_verbose() {
-        let cmd_str = format!("git {}", args.join(" "));
-        if let Some(dir) = cwd {
-            crate::messages::verbose(&format!("$ cd {} && {}", dir.display(), cmd_str));
-        } else {
-            crate::messages::verbose(&format!("$ {}", cmd_str));
-        }
-    }
+// ---------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------
 
-    let mut cmd = Command::new("git");
-    cmd.args(args);
-
-    // Disable interactive authentication prompts (fixes Windows /dev/tty issue)
-    // This prevents git from trying to access /dev/tty which doesn't exist on Windows
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-    cmd.env("GIT_ASKPASS", "echo");
-
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-
-    let output = cmd
-        .output()
-        .map_err(|e| anyhow!("Failed to execute git {}: {}", args.join(" "), e))?;
-
-    Ok(GitResult {
-        success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    })
+/// Return the user's home directory in a cross-platform way.
+///
+/// Checks `HOME` (Unix) first, then `USERPROFILE` (Windows).
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
 }
 
-/// Clone repository to specified path
-pub fn clone_repo(url: &str, path: &Path, reference: Option<&Path>) -> Result<GitResult> {
-    let mut args = vec!["clone".to_string()];
+/// Build `RemoteCallbacks` with credential handling.
+///
+/// libgit2 does not automatically resolve credentials the way the git
+/// binary does — the application must provide a callback that returns
+/// credentials when the server requests authentication.
+///
+/// The callback inspects `allowed_types` and tries, in order:
+/// 1. SSH agent (works on Linux, macOS, Windows with OpenSSH agent)
+/// 2. SSH key from default locations (~/.ssh/id_ed25519, id_rsa, …)
+/// 3. `credential.helper` from `.gitconfig` (handles OS-specific stores:
+///    macOS Keychain, Windows GCM, Linux store/cache)
+/// 4. Default credentials (e.g. NTLM/Kerberos for local URLs)
+fn make_remote_callbacks<'a>() -> RemoteCallbacks<'a> {
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|url, username_from_url, allowed_types| {
+        // 1. SSH agent
+        if allowed_types.contains(CredentialType::SSH_KEY) {
+            if let Some(username) = username_from_url {
+                if let Ok(cred) = Cred::ssh_key_from_agent(username) {
+                    return Ok(cred);
+                }
 
+                // 2. SSH key files from home directory (cross-platform)
+                if let Some(home) = home_dir() {
+                    for key_name in &["id_ed25519", "id_rsa", "id_ecdsa"] {
+                        let key_path = home.join(".ssh").join(key_name);
+                        if key_path.exists() {
+                            if let Ok(cred) = Cred::ssh_key(username, None, &key_path, None) {
+                                return Ok(cred);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Credential helper from .gitconfig (GCM, osxkeychain, store, etc.)
+        if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            if let Ok(config) = git2::Config::open_default() {
+                if let Ok(cred) = Cred::credential_helper(&config, url, username_from_url) {
+                    return Ok(cred);
+                }
+            }
+        }
+
+        // 4. Default credentials (e.g. for local file:// URLs)
+        if allowed_types.contains(CredentialType::DEFAULT) {
+            return Cred::default();
+        }
+
+        Err(git2::Error::from_str("no suitable credentials found"))
+    });
+    callbacks
+}
+
+/// Build `FetchOptions` with standard callbacks and proxy settings.
+fn make_fetch_options<'a>() -> FetchOptions<'a> {
+    let mut fetch_opts = FetchOptions::new();
+    fetch_opts.remote_callbacks(make_remote_callbacks());
+    let mut proxy = ProxyOptions::new();
+    proxy.auto();
+    fetch_opts.proxy_options(proxy);
+    fetch_opts
+}
+
+/// Helper to produce a successful `GitResult`.
+fn ok_result() -> GitResult {
+    GitResult {
+        success: true,
+        stdout: String::new(),
+        stderr: String::new(),
+    }
+}
+
+/// Log a git-equivalent command in verbose mode, matching the old
+/// `$ cd /path && git <args>` format for debugging and user visibility.
+fn log_git(cwd: Option<&Path>, args: &str) {
+    if crate::messages::is_verbose() {
+        if let Some(dir) = cwd {
+            crate::messages::verbose(&format!("$ cd {} && git {}", dir.display(), args));
+        } else {
+            crate::messages::verbose(&format!("$ git {}", args));
+        }
+    }
+}
+
+// ---------------------------------------------------------------
+// Clone operations
+// ---------------------------------------------------------------
+
+/// Clone repository to specified path.
+///
+/// When `reference` is provided, the reference repo's object store is
+/// registered as an alternate **before** the fetch runs — mirroring
+/// `git clone --reference <ref_path>`.  This lets libgit2 skip objects
+/// that already exist in the reference repo, making local-mirror clones
+/// near-instant.
+pub fn clone_repo(url: &str, path: &Path, reference: Option<&Path>) -> Result<GitResult> {
     if let Some(ref_path) = reference {
-        args.push("--reference".to_string());
-        args.push(ref_path.to_string_lossy().to_string());
+        log_git(
+            None,
+            &format!(
+                "clone --reference {} {} {}",
+                ref_path.display(),
+                url,
+                path.display()
+            ),
+        );
+    } else {
+        log_git(None, &format!("clone {} {}", url, path.display()));
     }
 
-    args.push(url.to_string());
-    args.push(path.to_string_lossy().to_string());
+    let callbacks = make_remote_callbacks();
+    let mut fetch_opts = FetchOptions::new();
+    fetch_opts.remote_callbacks(callbacks);
 
-    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    git_command(&args_str, None)
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fetch_opts);
+
+    if let Some(ref_path) = reference {
+        // Resolve the objects directory of the reference repo.
+        let alt_path = if ref_path.join("objects").exists() {
+            ref_path.join("objects")
+        } else {
+            ref_path.join(".git").join("objects")
+        };
+        let alt_str = alt_path.to_string_lossy().to_string();
+
+        // `remote_create` is called with the newly-initialised repo
+        // *before* the fetch.  We inject the alternate here so the
+        // fetch can skip objects already present in the reference repo.
+        builder.remote_create(move |repo, name, url_arg| {
+            if let Ok(odb) = repo.odb() {
+                let _ = odb.add_disk_alternate(&alt_str);
+            }
+            repo.remote(name, url_arg)
+        });
+    }
+
+    builder
+        .clone(url, path)
+        .with_context(|| format!("Failed to clone {} to {}", url, path.display()))?;
+
+    // `add_disk_alternate` only affects the in-memory ODB of the repo
+    // instance used during clone.  Persist the alternate to disk so that
+    // future `Repository::open()` calls (e.g. checkout) also find the
+    // objects.  This matches what `git clone --reference` writes.
+    if let Some(ref_path) = reference {
+        let alt_path = if ref_path.join("objects").exists() {
+            ref_path.join("objects")
+        } else {
+            ref_path.join(".git").join("objects")
+        };
+        let alternates_file = path
+            .join(".git")
+            .join("objects")
+            .join("info")
+            .join("alternates");
+        if let Some(parent) = alternates_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&alternates_file, format!("{}\n", alt_path.display())).with_context(
+            || {
+                format!(
+                    "Failed to write alternates file at {}",
+                    alternates_file.display()
+                )
+            },
+        )?;
+    }
+
+    Ok(ok_result())
 }
 
 /// Clone repository with shallow depth
 pub fn clone_repo_shallow(url: &str, path: &Path, depth: u32) -> Result<GitResult> {
-    let depth_str = depth.to_string();
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec!["clone", "--depth", &depth_str, url, &path_str];
+    log_git(
+        None,
+        &format!("clone --depth {} {} {}", depth, url, path.display()),
+    );
 
-    git_command(&args, None)
+    let mut fetch_opts = make_fetch_options();
+    fetch_opts.depth(depth as i32);
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fetch_opts);
+
+    builder.clone(url, path).with_context(|| {
+        format!(
+            "Failed to shallow-clone {} (depth {}) to {}",
+            url,
+            depth,
+            path.display()
+        )
+    })?;
+
+    Ok(ok_result())
 }
 
 /// Clone repository with single branch
 pub fn clone_repo_single_branch(url: &str, path: &Path, branch: &str) -> Result<GitResult> {
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec![
-        "clone",
-        "--single-branch",
-        "--branch",
-        branch,
-        url,
-        &path_str,
-    ];
-    git_command(&args, None)
+    log_git(
+        None,
+        &format!(
+            "clone --single-branch --branch {} {} {}",
+            branch,
+            url,
+            path.display()
+        ),
+    );
+
+    let fetch_opts = make_fetch_options();
+
+    // Restrict fetch to a single branch via a narrow refspec.
+    let refspec = format!("+refs/heads/{}:refs/remotes/origin/{}", branch, branch);
+    let url_owned = url.to_string();
+    let refspec_owned = refspec.clone();
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.branch(branch);
+    builder.fetch_options(fetch_opts);
+    builder.remote_create(move |repo, _name, url_arg| {
+        let url_to_use = if url_arg.is_empty() {
+            url_owned.as_str()
+        } else {
+            url_arg
+        };
+        repo.remote_with_fetch("origin", url_to_use, &refspec_owned)
+    });
+
+    builder.clone(url, path).with_context(|| {
+        format!(
+            "Failed to single-branch clone {} (branch {}) to {}",
+            url,
+            branch,
+            path.display()
+        )
+    })?;
+
+    Ok(ok_result())
 }
 
 /// Clone repository with shallow depth and single branch
@@ -113,30 +297,89 @@ pub fn clone_repo_shallow_single_branch(
     branch: &str,
     depth: u32,
 ) -> Result<GitResult> {
-    let depth_str = depth.to_string();
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec![
-        "clone",
-        "--depth",
-        &depth_str,
-        "--single-branch",
-        "--branch",
-        branch,
-        url,
-        &path_str,
-    ];
-    git_command(&args, None)
+    log_git(
+        None,
+        &format!(
+            "clone --depth {} --single-branch --branch {} {} {}",
+            depth,
+            branch,
+            url,
+            path.display()
+        ),
+    );
+
+    let mut fetch_opts = make_fetch_options();
+    fetch_opts.depth(depth as i32);
+
+    let refspec = format!("+refs/heads/{}:refs/remotes/origin/{}", branch, branch);
+    let url_owned = url.to_string();
+    let refspec_owned = refspec.clone();
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.branch(branch);
+    builder.fetch_options(fetch_opts);
+    builder.remote_create(move |repo, _name, url_arg| {
+        let url_to_use = if url_arg.is_empty() {
+            url_owned.as_str()
+        } else {
+            url_arg
+        };
+        repo.remote_with_fetch("origin", url_to_use, &refspec_owned)
+    });
+
+    builder.clone(url, path).with_context(|| {
+        format!(
+            "Failed to shallow single-branch clone {} (branch {}, depth {}) to {}",
+            url,
+            branch,
+            depth,
+            path.display()
+        )
+    })?;
+
+    Ok(ok_result())
 }
 
 /// Fetch from remote
 pub fn fetch(repo_path: &Path, remote: Option<&str>) -> Result<GitResult> {
-    let remote = remote.unwrap_or("origin");
-    git_command(&["fetch", remote], Some(repo_path))
+    let r = remote.unwrap_or("origin");
+    log_git(Some(repo_path), &format!("fetch {}", r));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let remote_name = remote.unwrap_or("origin");
+    let mut remote_obj = repo
+        .find_remote(remote_name)
+        .with_context(|| format!("Remote '{}' not found", remote_name))?;
+
+    let mut fetch_opts = make_fetch_options();
+    remote_obj
+        .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
+        .with_context(|| format!("Fetch from '{}' failed", remote_name))?;
+
+    Ok(ok_result())
 }
 
 /// Fetch all remotes
 pub fn fetch_all(repo_path: &Path) -> Result<GitResult> {
-    git_command(&["fetch", "--all"], Some(repo_path))
+    log_git(Some(repo_path), "fetch --all");
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+
+    let remote_names: Vec<String> = repo
+        .remotes()?
+        .iter()
+        .filter_map(|r| r.map(String::from))
+        .collect();
+
+    for name in &remote_names {
+        let mut remote = repo.find_remote(name)?;
+        let mut fetch_opts = make_fetch_options();
+        remote.fetch(&[] as &[&str], Some(&mut fetch_opts), None)?;
+    }
+
+    Ok(ok_result())
 }
 
 /// Fetch a specific refspec, optionally with a depth limit
@@ -146,164 +389,252 @@ pub fn fetch_ref(
     refspec: &str,
     depth: Option<u32>,
 ) -> Result<GitResult> {
-    match depth {
-        Some(d) => {
-            let depth_str = d.to_string();
-            git_command(
-                &["fetch", remote, refspec, "--depth", &depth_str],
-                Some(repo_path),
-            )
-        }
-        None => git_command(&["fetch", remote, refspec], Some(repo_path)),
+    if let Some(d) = depth {
+        log_git(
+            Some(repo_path),
+            &format!("fetch {} {} --depth {}", remote, refspec, d),
+        );
+    } else {
+        log_git(Some(repo_path), &format!("fetch {} {}", remote, refspec));
     }
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let mut remote_obj = repo
+        .find_remote(remote)
+        .with_context(|| format!("Remote '{}' not found", remote))?;
+
+    let mut fetch_opts = make_fetch_options();
+    if let Some(d) = depth {
+        fetch_opts.depth(d as i32);
+    }
+    remote_obj
+        .fetch(&[refspec], Some(&mut fetch_opts), None)
+        .with_context(|| format!("Fetch refspec '{}' from '{}' failed", refspec, remote))?;
+
+    Ok(ok_result())
 }
 
-/// Fetch all remotes with tags
-/// Uses aggressive fetch strategy with retry logic to ensure all branches are discovered
+/// Fetch all remotes with tags and prune deleted refs.
+///
+/// libgit2's fetch is atomic — the 3-level retry cascade previously used
+/// with the git binary is unnecessary here.
 pub fn fetch_all_with_tags(repo_path: &Path) -> Result<GitResult> {
-    // Try aggressive fetch first (--force --prune to rediscover all remote branches)
-    let result = git_command(
-        &["fetch", "--all", "--tags", "--force", "--prune"],
-        Some(repo_path),
-    );
+    log_git(Some(repo_path), "fetch --all --tags --force --prune");
 
-    if let Ok(ref git_result) = result {
-        if git_result.is_success() {
-            return result;
-        }
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+
+    let remote_names: Vec<String> = repo
+        .remotes()?
+        .iter()
+        .filter_map(|r| r.map(String::from))
+        .collect();
+
+    for name in &remote_names {
+        let mut remote = repo.find_remote(name)?;
+        let mut fetch_opts = make_fetch_options();
+        fetch_opts.download_tags(AutotagOption::All);
+        fetch_opts.prune(git2::FetchPrune::On);
+        remote.fetch(&[] as &[&str], Some(&mut fetch_opts), None)?;
     }
 
-    // If --force fails, retry without --force but keep --prune
-    let result = git_command(&["fetch", "--all", "--tags", "--prune"], Some(repo_path));
-
-    if let Ok(ref git_result) = result {
-        if git_result.is_success() {
-            return result;
-        }
-    }
-
-    // Final fallback: basic fetch without aggressive flags
-    git_command(&["fetch", "--all", "--tags"], Some(repo_path))
+    Ok(ok_result())
 }
 
 /// Fetch tags from a specific remote
 pub fn fetch_tags(repo_path: &Path, remote: Option<&str>) -> Result<GitResult> {
-    let remote = remote.unwrap_or("origin");
-    git_command(&["fetch", remote, "--tags"], Some(repo_path))
+    let r = remote.unwrap_or("origin");
+    log_git(Some(repo_path), &format!("fetch --tags {}", r));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let remote_name = remote.unwrap_or("origin");
+    let mut remote_obj = repo
+        .find_remote(remote_name)
+        .with_context(|| format!("Remote '{}' not found", remote_name))?;
+
+    let mut fetch_opts = make_fetch_options();
+    fetch_opts.download_tags(AutotagOption::All);
+    remote_obj
+        .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
+        .with_context(|| format!("Fetch tags from '{}' failed", remote_name))?;
+
+    Ok(ok_result())
 }
 
 /// Checkout commit/branch/tag
+///
+/// Mirrors `git checkout <ref>` DWIM (Do What I Mean) behaviour:
+/// when `commit_ref` cannot be resolved directly, fall back to
+/// `origin/<commit_ref>` so that remote-only branch names work
+/// without requiring a local tracking branch first.
 pub fn checkout(repo_path: &Path, commit_ref: &str) -> Result<GitResult> {
-    git_command(&["checkout", commit_ref], Some(repo_path))
+    log_git(Some(repo_path), &format!("checkout {}", commit_ref));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+
+    // Resolve the reference to an object.
+    // Try the literal name first (covers local branches, tags, SHAs, and
+    // fully-qualified refs).  If that fails, try the remote-tracking
+    // branch `origin/<name>` — this is the DWIM behaviour that the
+    // host `git checkout` provides automatically but libgit2's
+    // `revparse_single` does not.
+    let obj = match repo.revparse_single(commit_ref) {
+        Ok(obj) => obj,
+        Err(_) => {
+            let remote_ref = format!("origin/{}", commit_ref);
+            repo.revparse_single(&remote_ref)
+                .with_context(|| format!("Cannot resolve '{}'", commit_ref))?
+        }
+    };
+
+    // Peel to commit (handles tags pointing to commits).
+    let commit = obj
+        .peel_to_commit()
+        .with_context(|| format!("'{}' does not resolve to a commit", commit_ref))?;
+
+    // Checkout the tree and detach HEAD.
+    let mut checkout_builder = git2::build::CheckoutBuilder::new();
+    checkout_builder.force();
+    repo.checkout_tree(commit.as_object(), Some(&mut checkout_builder))
+        .with_context(|| format!("Checkout tree failed for '{}'", commit_ref))?;
+    repo.set_head_detached(commit.id())
+        .with_context(|| format!("set_head_detached failed for '{}'", commit_ref))?;
+
+    Ok(ok_result())
 }
 
 /// List remote references
 /// Returns `(sha, ref_name)`
 pub fn ls_remote(url: &str, heads: bool, tags: bool) -> Result<Vec<(String, String)>> {
-    let mut args = vec!["ls-remote"];
+    let mut flags = Vec::new();
     if heads {
-        args.push("--heads");
+        flags.push("--heads");
     }
     if tags {
-        args.push("--tags");
+        flags.push("--tags");
     }
-    args.push(url);
+    log_git(None, &format!("ls-remote {} {}", flags.join(" "), url));
 
-    let result = git_command(&args, None)?;
-    if !result.success {
-        return Err(anyhow!("git ls-remote failed: {}", result.stderr));
-    }
+    // Each call needs its own temp directory — using only the PID causes lock
+    // collisions when multiple threads call ls_remote concurrently.
+    let temp_dir = tempfile::tempdir().context("Failed to create temp directory for ls-remote")?;
+    let repo = Repository::init_bare(temp_dir.path())?;
+    let mut remote = repo.remote_anonymous(url)?;
 
-    let refs = result
-        .stdout
-        .lines()
-        .filter_map(|line| {
-            let mut cols = line.split_whitespace();
-            let sha = cols.next()?.to_string();
-            let refname = cols.next()?.to_string();
-            Some((sha, refname))
+    remote
+        .connect_auth(git2::Direction::Fetch, Some(make_remote_callbacks()), None)
+        .with_context(|| format!("Failed to connect to {}", url))?;
+
+    let remote_heads = remote.list()?;
+    let refs: Vec<(String, String)> = remote_heads
+        .iter()
+        .filter_map(|head| {
+            let name = head.name().to_string();
+            let oid = head.oid().to_string();
+
+            if !heads && !tags {
+                // No filter — return everything.
+                return Some((oid, name));
+            }
+            if heads && name.starts_with("refs/heads/") {
+                return Some((oid, name));
+            }
+            if tags && name.starts_with("refs/tags/") {
+                return Some((oid, name));
+            }
+            None
         })
         .collect();
+
+    remote.disconnect()?;
+    // temp_dir is dropped here, cleaning up automatically.
 
     Ok(refs)
 }
 
 /// Check if a git object exists in a repository
 pub fn cat_file(repo_path: &Path, object: &str) -> bool {
-    git_command(&["cat-file", "-e", object], Some(repo_path)).is_ok_and(|r| r.success)
+    log_git(Some(repo_path), &format!("cat-file -e {}", object));
+
+    let repo = match Repository::open(repo_path) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    // Try to parse the object spec and find it in the ODB.
+    let found = match repo.revparse_single(object) {
+        Ok(_) => true,
+        Err(_) => {
+            // Also try direct ODB lookup for raw SHA.
+            if let Ok(oid) = git2::Oid::from_str(object) {
+                repo.odb().is_ok_and(|odb| odb.exists(oid))
+            } else {
+                false
+            }
+        }
+    };
+    found
 }
 
 /// List all tags from a local git repository
 pub fn list_local_tags(repo_path: &Path) -> Result<Vec<String>> {
-    let result = git_command(&["tag", "--list"], Some(repo_path))?;
-    if !result.success {
-        return Err(anyhow!("git tag --list failed: {}", result.stderr));
-    }
-
-    let tags: Vec<String> = result
-        .stdout
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect();
-
-    Ok(tags)
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let tags = repo.tag_names(None)?;
+    Ok(tags.iter().filter_map(|t| t.map(String::from)).collect())
 }
 
 /// List all local branches from a local git repository
 pub fn list_local_branches(repo_path: &Path) -> Result<Vec<String>> {
-    let result = git_command(&["branch", "--list"], Some(repo_path))?;
-    if !result.success {
-        return Err(anyhow!("git branch --list failed: {}", result.stderr));
-    }
-
-    let branches: Vec<String> = result
-        .stdout
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            // Remove the '*' marker for current branch and trim whitespace
-            if let Some(stripped) = line.strip_prefix("* ") {
-                stripped.trim().to_string()
-            } else {
-                line.trim().to_string()
-            }
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let branches = repo.branches(Some(BranchType::Local))?;
+    let names: Vec<String> = branches
+        .filter_map(|b| {
+            b.ok()
+                .and_then(|(branch, _)| branch.name().ok().flatten().map(String::from))
         })
-        .filter(|line| !line.is_empty())
         .collect();
-
-    Ok(branches)
+    Ok(names)
 }
 
 /// Check if reference is a branch
 pub fn is_branch_reference(repo_path: &Path, commit_ref: &str) -> bool {
-    // Check remote branch
+    let repo = match Repository::open(repo_path) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    // Check remote branch.
     let remote_ref = format!("refs/remotes/origin/{}", commit_ref);
-    if git_command(&["show-ref", "--verify", &remote_ref], Some(repo_path)).is_ok_and(|r| r.success)
-    {
+    if repo.find_reference(&remote_ref).is_ok() {
         return true;
     }
 
-    // Check local branch
+    // Check local branch.
     let local_ref = format!("refs/heads/{}", commit_ref);
-    git_command(&["show-ref", "--verify", &local_ref], Some(repo_path)).is_ok_and(|r| r.success)
+    let is_local = repo.find_reference(&local_ref).is_ok();
+    is_local
 }
 
 /// Get latest commit hash for branch
 pub fn get_latest_commit_for_branch(repo_path: &Path, branch_name: &str) -> Option<String> {
-    // Try remote branch first
-    let remote_branch = format!("origin/{}", branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
+    let repo = Repository::open(repo_path).ok()?;
+
+    // Try remote branch first.
+    let remote_ref = format!("origin/{}", branch_name);
+    if let Ok(obj) = repo.revparse_single(&remote_ref) {
+        if let Ok(commit) = obj.peel_to_commit() {
+            return Some(commit.id().to_string());
         }
     }
 
-    // Fallback to local branch
-    if let Ok(result) = git_command(&["rev-parse", branch_name], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
+    // Fallback to local branch.
+    if let Ok(obj) = repo.revparse_single(branch_name) {
+        if let Ok(commit) = obj.peel_to_commit() {
+            return Some(commit.id().to_string());
         }
     }
 
@@ -316,27 +647,28 @@ pub fn get_latest_commit_for_remote_branch(
     remote: &str,
     branch_name: &str,
 ) -> Option<String> {
-    // In bare repos after fetch, we can use origin/branch notation
+    let repo = Repository::open(repo_path).ok()?;
+
+    // In bare repos after fetch, try remote/branch notation.
     let remote_branch = format!("{}/{}", remote, branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
+    if let Ok(obj) = repo.revparse_single(&remote_branch) {
+        if let Ok(commit) = obj.peel_to_commit() {
+            return Some(commit.id().to_string());
         }
     }
 
-    // For mirror repos, branches are stored directly as refs/heads/{branch}
-    // Try refs/heads/{branch} directly (this works for mirror repos)
+    // For mirror repos, branches are stored as refs/heads/{branch}.
     let heads_ref = format!("refs/heads/{}", branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &heads_ref], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
+    if let Ok(reference) = repo.find_reference(&heads_ref) {
+        if let Ok(commit) = reference.peel_to_commit() {
+            return Some(commit.id().to_string());
         }
     }
 
-    // Try just the branch name as a final fallback
-    if let Ok(result) = git_command(&["rev-parse", branch_name], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
+    // Final fallback: just the branch name.
+    if let Ok(obj) = repo.revparse_single(branch_name) {
+        if let Ok(commit) = obj.peel_to_commit() {
+            return Some(commit.id().to_string());
         }
     }
 
@@ -384,28 +716,41 @@ pub fn resolve_fetch_refspec(
 
 /// Get current commit hash
 pub fn get_current_commit(repo_path: &Path) -> Result<String> {
-    let result = git_command(&["rev-parse", "HEAD"], Some(repo_path))?;
-    if !result.success {
-        return Err(anyhow!("Failed to get current commit: {}", result.stderr));
-    }
-    Ok(result.stdout.trim().to_string())
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let head = repo.head().context("Failed to get HEAD")?;
+    let commit = head
+        .peel_to_commit()
+        .context("HEAD does not point to a commit")?;
+    Ok(commit.id().to_string())
 }
 
 /// Check if repository is dirty (has uncommitted changes)
 pub fn is_repo_dirty(repo_path: &Path) -> Result<bool> {
-    let result = git_command(&["status", "--porcelain"], Some(repo_path))?;
-    if !result.success {
-        return Err(anyhow!(
-            "Failed to check repository status: {}",
-            result.stderr
-        ));
-    }
-    Ok(!result.stdout.trim().is_empty())
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true);
+    let statuses = repo
+        .statuses(Some(&mut opts))
+        .context("Failed to get repository status")?;
+    Ok(!statuses.is_empty())
 }
 
 /// Update reference (for mirrors)
 pub fn update_ref(repo_path: &Path, ref_name: &str, commit_hash: &str) -> Result<GitResult> {
-    git_command(&["update-ref", ref_name, commit_hash], Some(repo_path))
+    log_git(
+        Some(repo_path),
+        &format!("update-ref {} {}", ref_name, commit_hash),
+    );
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let oid = git2::Oid::from_str(commit_hash)
+        .with_context(|| format!("Invalid OID '{}'", commit_hash))?;
+    repo.reference(ref_name, oid, true, "cim: update-ref")
+        .with_context(|| format!("update_ref '{}' failed", ref_name))?;
+    Ok(ok_result())
 }
 
 /// Create branch
@@ -414,11 +759,23 @@ pub fn create_branch(
     branch_name: &str,
     commit_ref: Option<&str>,
 ) -> Result<GitResult> {
-    let mut args = vec!["branch", branch_name];
-    if let Some(commit) = commit_ref {
-        args.push(commit);
-    }
-    git_command(&args, Some(repo_path))
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+
+    let commit = if let Some(ref_str) = commit_ref {
+        repo.revparse_single(ref_str)?
+            .peel_to_commit()
+            .with_context(|| format!("'{}' is not a commit", ref_str))?
+    } else {
+        repo.head()?
+            .peel_to_commit()
+            .context("HEAD is not a commit")?
+    };
+
+    repo.branch(branch_name, &commit, false)
+        .with_context(|| format!("Failed to create branch '{}'", branch_name))?;
+
+    Ok(ok_result())
 }
 
 /// Create branch with force flag
@@ -427,37 +784,91 @@ pub fn create_branch_force(
     branch_name: &str,
     commit_ref: &str,
 ) -> Result<GitResult> {
-    git_command(&["branch", "-f", branch_name, commit_ref], Some(repo_path))
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let commit = repo
+        .revparse_single(commit_ref)?
+        .peel_to_commit()
+        .with_context(|| format!("'{}' is not a commit", commit_ref))?;
+    repo.branch(branch_name, &commit, true)
+        .with_context(|| format!("Failed to force-create branch '{}'", branch_name))?;
+    Ok(ok_result())
 }
 
 /// Clone repository as bare (for mirrors)
 pub fn clone_bare(url: &str, path: &Path) -> Result<GitResult> {
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec!["clone", "--bare", url, &path_str];
-    git_command(&args, None)
+    log_git(None, &format!("clone --bare {} {}", url, path.display()));
+
+    let callbacks = make_remote_callbacks();
+    let mut fetch_opts = FetchOptions::new();
+    fetch_opts.remote_callbacks(callbacks);
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.bare(true);
+    builder.fetch_options(fetch_opts);
+
+    builder
+        .clone(url, path)
+        .with_context(|| format!("Failed to bare-clone {} to {}", url, path.display()))?;
+
+    Ok(ok_result())
 }
 
 /// Clone repository as mirror (for mirroring)
 pub fn clone_mirror(url: &str, path: &Path) -> Result<GitResult> {
-    // Ensure parent directory exists
+    log_git(None, &format!("clone --mirror {} {}", url, path.display()));
+
+    // Ensure parent directory exists.
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| anyhow!("Failed to create parent directory: {}", e))?;
     }
 
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec!["clone", "--mirror", url, &path_str];
-    git_command(&args, None)
+    // Mirror = bare repo + fetch refspec `+refs/*:refs/*`.
+    let mut opts = RepositoryInitOptions::new();
+    opts.bare(true);
+    let repo = Repository::init_opts(path, &opts)
+        .with_context(|| format!("Failed to init bare repo at {}", path.display()))?;
+
+    // Configure origin with mirror refspec.
+    repo.remote_with_fetch("origin", url, "+refs/*:refs/*")
+        .with_context(|| format!("Failed to add mirror remote for {}", url))?;
+
+    // Fetch everything.
+    let mut remote = repo
+        .find_remote("origin")
+        .context("Failed to find origin remote")?;
+    let mut fetch_opts = make_fetch_options();
+    remote
+        .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
+        .with_context(|| format!("Failed to fetch mirror from {}", url))?;
+
+    // Set HEAD to the default branch so clones from this mirror work.
+    // Try common default branch names.
+    for branch in &["main", "master"] {
+        let ref_name = format!("refs/heads/{}", branch);
+        if repo.find_reference(&ref_name).is_ok() {
+            let _ = repo.set_head(&ref_name);
+            break;
+        }
+    }
+
+    Ok(ok_result())
 }
 
 /// Get the URL of a remote
 pub fn get_remote_url(repo_path: &Path, remote_name: &str) -> Result<String> {
-    let result = git_command(&["remote", "get-url", remote_name], Some(repo_path))?;
-    if result.is_success() {
-        Ok(result.stdout.trim().to_string())
-    } else {
-        Err(anyhow!("Failed to get URL for remote '{}'", remote_name))
-    }
+    log_git(Some(repo_path), &format!("remote get-url {}", remote_name));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let remote = repo
+        .find_remote(remote_name)
+        .with_context(|| format!("Remote '{}' not found", remote_name))?;
+    remote
+        .url()
+        .map(|u| u.to_string())
+        .ok_or_else(|| anyhow!("Remote '{}' has no URL", remote_name))
 }
 
 /// Normalize a git URL for comparison purposes.
@@ -509,97 +920,260 @@ pub fn extract_org_and_repo(url: &str) -> String {
 
 /// Set remote URL
 pub fn remote_set_url(repo_path: &Path, remote_name: &str, url: &str) -> Result<GitResult> {
-    git_command(&["remote", "set-url", remote_name, url], Some(repo_path))
+    log_git(
+        Some(repo_path),
+        &format!("remote set-url {} {}", remote_name, url),
+    );
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    repo.remote_set_url(remote_name, url)
+        .with_context(|| format!("Failed to set URL for remote '{}'", remote_name))?;
+    Ok(ok_result())
 }
 
 /// Add remote
 pub fn remote_add(repo_path: &Path, remote_name: &str, url: &str) -> Result<GitResult> {
-    git_command(&["remote", "add", remote_name, url], Some(repo_path))
+    log_git(
+        Some(repo_path),
+        &format!("remote add {} {}", remote_name, url),
+    );
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    repo.remote(remote_name, url)
+        .with_context(|| format!("Failed to add remote '{}'", remote_name))?;
+    Ok(ok_result())
 }
 
 /// Initialize git repository
 pub fn init_repo(path: &Path, bare: bool) -> Result<GitResult> {
-    let path_str = path.to_string_lossy().to_string();
-    let mut args = vec!["init"];
     if bare {
-        args.push("--bare");
+        log_git(None, &format!("init --bare {}", path.display()));
+    } else {
+        log_git(None, &format!("init {}", path.display()));
     }
-    // Set default branch to 'main' for consistency across different git configurations
-    args.push("-b");
-    args.push("main");
-    args.push(&path_str);
-    git_command(&args, None)
+
+    let mut opts = RepositoryInitOptions::new();
+    opts.initial_head("main");
+    if bare {
+        opts.bare(true);
+    }
+
+    Repository::init_opts(path, &opts)
+        .with_context(|| format!("Failed to init repo at {}", path.display()))?;
+
+    Ok(ok_result())
 }
 
 /// Add files to staging
 pub fn add_files(repo_path: &Path, files: &[&str]) -> Result<GitResult> {
-    let mut args = vec!["add"];
-    args.extend(files);
-    git_command(&args, Some(repo_path))
+    log_git(Some(repo_path), &format!("add {}", files.join(" ")));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let mut index = repo.index().context("Failed to get index")?;
+
+    for file in files {
+        index
+            .add_path(Path::new(file))
+            .with_context(|| format!("Failed to add '{}'", file))?;
+    }
+    index.write().context("Failed to write index")?;
+
+    Ok(ok_result())
 }
 
 /// Add all files to staging
 pub fn add_all(repo_path: &Path) -> Result<GitResult> {
-    git_command(&["add", "."], Some(repo_path))
+    log_git(Some(repo_path), "add --all");
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let mut index = repo.index().context("Failed to get index")?;
+
+    index
+        .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+        .context("Failed to add all files")?;
+    index.write().context("Failed to write index")?;
+
+    Ok(ok_result())
 }
 
 /// Commit changes
 pub fn commit(repo_path: &Path, message: &str) -> Result<GitResult> {
-    git_command(&["commit", "-m", message], Some(repo_path))
+    log_git(Some(repo_path), &format!("commit -m '{}'", message));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+
+    let sig = repo
+        .signature()
+        .context("Failed to get default signature")?;
+    let mut index = repo.index().context("Failed to get index")?;
+    let tree_oid = index
+        .write_tree()
+        .context("Failed to write tree from index")?;
+    let tree = repo.find_tree(tree_oid).context("Failed to find tree")?;
+
+    // Find parent commit (if any — handles initial commit case).
+    let parent_commit = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit<'_>> = parent_commit.iter().collect();
+
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+        .context("Commit failed")?;
+
+    Ok(ok_result())
 }
 
 /// Push changes
 pub fn push(repo_path: &Path, remote: Option<&str>, branch: Option<&str>) -> Result<GitResult> {
-    let mut args = vec!["push"];
-    if let Some(r) = remote {
-        args.push(r);
-    }
+    let r = remote.unwrap_or("origin");
     if let Some(b) = branch {
-        args.push(b);
+        log_git(Some(repo_path), &format!("push {} {}", r, b));
+    } else {
+        log_git(Some(repo_path), &format!("push {}", r));
     }
-    git_command(&args, Some(repo_path))
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let remote_name = remote.unwrap_or("origin");
+    let mut remote_obj = repo
+        .find_remote(remote_name)
+        .with_context(|| format!("Remote '{}' not found", remote_name))?;
+
+    let refspec = if let Some(b) = branch {
+        format!("refs/heads/{}:refs/heads/{}", b, b)
+    } else {
+        // Push current branch.
+        let head = repo.head().context("Failed to get HEAD")?;
+        let name = head
+            .name()
+            .ok_or_else(|| anyhow!("HEAD is detached, cannot push"))?;
+        format!("{}:{}", name, name)
+    };
+
+    let callbacks = make_remote_callbacks();
+    let mut push_opts = git2::PushOptions::new();
+    push_opts.remote_callbacks(callbacks);
+
+    remote_obj
+        .push(&[&refspec], Some(&mut push_opts))
+        .with_context(|| format!("Push to '{}' failed", remote_name))?;
+
+    Ok(ok_result())
 }
 
 /// Push all branches
 pub fn push_all(repo_path: &Path, remote: &str) -> Result<GitResult> {
-    git_command(&["push", remote, "--all"], Some(repo_path))
+    log_git(Some(repo_path), &format!("push --all {}", remote));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let mut remote_obj = repo
+        .find_remote(remote)
+        .with_context(|| format!("Remote '{}' not found", remote))?;
+
+    // Enumerate all local branches and push them.
+    let branches = repo.branches(Some(BranchType::Local))?;
+    let refspecs: Vec<String> = branches
+        .filter_map(|b| {
+            b.ok().and_then(|(branch, _)| {
+                branch
+                    .name()
+                    .ok()
+                    .flatten()
+                    .map(|n| format!("refs/heads/{}:refs/heads/{}", n, n))
+            })
+        })
+        .collect();
+
+    if refspecs.is_empty() {
+        return Ok(ok_result());
+    }
+
+    let str_refs: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
+    let callbacks = make_remote_callbacks();
+    let mut push_opts = git2::PushOptions::new();
+    push_opts.remote_callbacks(callbacks);
+
+    remote_obj
+        .push(&str_refs, Some(&mut push_opts))
+        .with_context(|| format!("Push --all to '{}' failed", remote))?;
+
+    Ok(ok_result())
 }
 
 /// Push all tags
 pub fn push_tags(repo_path: &Path, remote: &str) -> Result<GitResult> {
-    git_command(&["push", remote, "--tags"], Some(repo_path))
+    log_git(Some(repo_path), &format!("push --tags {}", remote));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let mut remote_obj = repo
+        .find_remote(remote)
+        .with_context(|| format!("Remote '{}' not found", remote))?;
+
+    // Enumerate all tags and push them.
+    let tag_names = repo.tag_names(None)?;
+    let refspecs: Vec<String> = tag_names
+        .iter()
+        .filter_map(|t| t.map(|name| format!("refs/tags/{}:refs/tags/{}", name, name)))
+        .collect();
+
+    if refspecs.is_empty() {
+        return Ok(ok_result());
+    }
+
+    let str_refs: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
+    let callbacks = make_remote_callbacks();
+    let mut push_opts = git2::PushOptions::new();
+    push_opts.remote_callbacks(callbacks);
+
+    remote_obj
+        .push(&str_refs, Some(&mut push_opts))
+        .with_context(|| format!("Push --tags to '{}' failed", remote))?;
+
+    Ok(ok_result())
 }
 
 /// Create tag
 pub fn create_tag(repo_path: &Path, tag_name: &str) -> Result<GitResult> {
-    git_command(&["tag", tag_name], Some(repo_path))
+    log_git(Some(repo_path), &format!("tag {}", tag_name));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let head = repo.head().context("Failed to get HEAD")?;
+    let commit = head
+        .peel(ObjectType::Commit)
+        .context("HEAD does not point to a commit")?;
+    repo.tag_lightweight(tag_name, &commit, false)
+        .with_context(|| format!("Failed to create tag '{}'", tag_name))?;
+    Ok(ok_result())
 }
 
 /// List tags
 pub fn list_tags(repo_path: &Path, pattern: Option<&str>) -> Result<Vec<String>> {
-    let mut args = vec!["tag", "-l"];
-    if let Some(p) = pattern {
-        args.push(p);
-    }
-
-    let result = git_command(&args, Some(repo_path))?;
-    if !result.success {
-        return Err(anyhow!("git tag -l failed: {}", result.stderr));
-    }
-
-    let tags: Vec<String> = result
-        .stdout
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect();
-
-    Ok(tags)
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let tag_names = repo.tag_names(pattern)?;
+    Ok(tag_names
+        .iter()
+        .filter_map(|t| t.map(String::from))
+        .collect())
 }
 
 /// Configure git setting
 pub fn config(repo_path: &Path, key: &str, value: &str) -> Result<GitResult> {
-    git_command(&["config", key, value], Some(repo_path))
+    log_git(Some(repo_path), &format!("config {} {}", key, value));
+
+    let repo = Repository::open(repo_path)
+        .with_context(|| format!("Cannot open {}", repo_path.display()))?;
+    let mut config = repo.config().context("Failed to get config")?;
+    config
+        .set_str(key, value)
+        .with_context(|| format!("Failed to set config {}={}", key, value))?;
+    Ok(ok_result())
 }
 
 /// Enhanced error message for git failures
@@ -617,20 +1191,6 @@ pub fn enhanced_git_error(operation: &str, result: &GitResult, context: Option<&
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_git_command_success() {
-        let result = git_command(&["--version"], None).unwrap();
-        assert!(result.is_success());
-        assert!(result.stdout.contains("git version"));
-    }
-
-    #[test]
-    fn test_git_command_failure() {
-        let result = git_command(&["invalid-command"], None).unwrap();
-        assert!(!result.is_success());
-        assert!(!result.stderr.is_empty());
-    }
 
     #[test]
     fn test_enhanced_git_error() {

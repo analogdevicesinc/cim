@@ -1661,13 +1661,16 @@ mod tests {
             None,
             None,
         );
-        // This should fail since it's not a real git repo, but the error should be about git clone
+        // This should fail since it's not a real git repo, but the error should be about clone
         assert!(result.is_err());
-        let error_msg = format!("{}", result.unwrap_err());
+        let error_msg = format!("{:?}", result.unwrap_err());
         assert!(
-            error_msg.contains("Local git clone failed")
+            error_msg.contains("clone")
+                || error_msg.contains("Clone")
                 || error_msg.contains("Git clone failed")
-                || error_msg.contains("Failed to run git clone")
+                || error_msg.contains("Failed to clone"),
+            "Expected clone-related error, got: {}",
+            error_msg
         );
     }
 
