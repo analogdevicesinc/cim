@@ -31,7 +31,6 @@ This `README.md` is the technical documentation for `cim`. For a more high level
 ### Requirements
 
 **Required:**
-- git 2.0+
 - make
 - tar and unzip
 - python3 3.8+, venv and pip
@@ -40,10 +39,12 @@ This `README.md` is the technical documentation for `cim`. For a more high level
 On Ubuntu for example, you can install those dependencies with:
 
 ```bash
-sudo apt install -y git make tar unzip python3 python3-pip python3-venv curl wget
+sudo apt install -y make tar unzip python3 python3-pip python3-venv curl wget
 ```
 
 **Optional:**
+- git 2.0+ (for manual git operations in the workspace; cim uses
+  libgit2 internally and does not require the git binary)
 - [Rust 1.56+](https://rust-lang.org/tools/install/) (to build from source)
 - Docker (for containerized development)
 
