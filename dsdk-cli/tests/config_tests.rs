@@ -375,7 +375,6 @@ fn test_user_config_list_all_simple_fields() {
         default_source: Some("https://example.com/manifests".to_string()),
         alternate_sources: None,
         no_mirror: Some(true),
-        docker_temp_dir: Some(PathBuf::from("/tmp/docker")),
         copy_files: None,
         shell: Some("/bin/zsh".to_string()),
         shell_arg: Some("-c".to_string()),
@@ -385,13 +384,12 @@ fn test_user_config_list_all_simple_fields() {
     };
 
     let list = config.list_all();
-    assert_eq!(list.len(), 9);
+    assert_eq!(list.len(), 8);
     assert!(list.contains(&"mirror=/custom/mirror".to_string()));
     assert!(list.contains(&"default_workspace=/home/user/workspace".to_string()));
     assert!(list.contains(&"workspace_prefix=myprefix-".to_string()));
     assert!(list.contains(&"default_source=https://example.com/manifests".to_string()));
     assert!(list.contains(&"no_mirror=true".to_string()));
-    assert!(list.contains(&"docker_temp_dir=/tmp/docker".to_string()));
     assert!(list.contains(&"shell=/bin/zsh".to_string()));
     assert!(list.contains(&"shell_arg=-c".to_string()));
     assert!(list.contains(&"documentation_dirs=docs,manuals".to_string()));
@@ -944,7 +942,6 @@ fn test_user_config_mirror_override_priority() {
         default_workspace: None,
         workspace_prefix: None,
         no_mirror: None,
-        docker_temp_dir: None,
         copy_files: None,
         shell: None,
         shell_arg: None,
@@ -993,7 +990,6 @@ fn test_user_config_mirror_override_with_multiple_overrides() {
         default_workspace: Some(fixture.path().join("workspace")),
         workspace_prefix: Some("test-".to_string()),
         no_mirror: Some(true),
-        docker_temp_dir: None,
         copy_files: Some(vec![CopyFileConfig {
             source: "test.txt".to_string(),
             dest: "test-dest.txt".to_string(),

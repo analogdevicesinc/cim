@@ -100,32 +100,6 @@ pub fn get_all_sources() -> Vec<String> {
     get_all_sources_from_config(uc.as_ref())
 }
 
-/// Get the docker temporary directory, considering user config
-/// Creates the directory if it doesn't exist
-pub fn get_docker_temp_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // Try to load user config to get docker_temp_dir
-    let temp_dir = if let Ok(Some(user_config)) = config::UserConfig::load() {
-        if let Some(ref docker_temp) = user_config.docker_temp_dir {
-            docker_temp.clone()
-        } else {
-            PathBuf::from("/tmp/cim-docker")
-        }
-    } else {
-        PathBuf::from("/tmp/cim-docker")
-    };
-
-    // Create directory if it doesn't exist
-    if !temp_dir.exists() {
-        fs::create_dir_all(&temp_dir)?;
-        messages::verbose(&format!(
-            "Created docker temp directory: {}",
-            temp_dir.display()
-        ));
-    }
-
-    Ok(temp_dir)
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WorkspaceMarker {
     pub workspace_version: String,

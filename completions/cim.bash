@@ -445,7 +445,7 @@ _cim_completions() {
             case "${prev}" in
                 --get|-g)
                     # Complete config key names
-                    COMPREPLY=( $(compgen -W "default_source docker_temp_dir cert_validation default_workspace workspace_prefix mirror_path documentation_dirs" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "default_source cert_validation default_workspace workspace_prefix mirror_path documentation_dirs" -- "${cur}") )
                     return 0
                     ;;
                 *)

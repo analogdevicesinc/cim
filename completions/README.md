@@ -164,7 +164,7 @@ cim config --<TAB>
 
 # Complete config keys
 cim config --get <TAB>
-# Shows: default_source docker_temp_dir
+# Shows: default_source cert_validation
 ```
 
 ## Testing
