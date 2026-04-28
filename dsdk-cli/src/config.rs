@@ -876,10 +876,6 @@ pub struct UserConfig {
     #[serde(default)]
     pub no_mirror: Option<bool>,
 
-    /// Directory for storing temporary files during docker create operations
-    #[serde(default)]
-    pub docker_temp_dir: Option<PathBuf>,
-
     /// Additional files to copy during initialization (merged with manifest)
     #[serde(default)]
     pub copy_files: Option<Vec<CopyFileConfig>>,
@@ -1058,25 +1054,6 @@ impl UserConfig {
 # Examples:
 # no_mirror = true
 # no_mirror = false
-
-# =============================================================================
-# Docker Temporary Directory
-# =============================================================================
-# Directory for storing temporary manifest files during 'docker create' operations.
-# These files are extracted from the manifest repository and used to generate
-# the Dockerfile, then cleaned up after successful generation.
-#
-# Default: /tmp/cim-docker
-# Use cases:
-#   - Control where temporary files are stored
-#   - Use a different partition with more space
-#   - Organize temp files in a predictable location
-#   - Debug manifest extraction issues
-#
-# Examples:
-# docker_temp_dir = "/tmp/cim-docker"
-# docker_temp_dir = "/Users/user/.cache/cim/docker"
-# docker_temp_dir = "/var/tmp/cim-docker"
 
 # =============================================================================
 # Additional Copy Files
@@ -1343,9 +1320,6 @@ impl UserConfig {
         if let Some(no_mirror) = self.no_mirror {
             lines.push(format!("no_mirror={}", no_mirror));
         }
-        if let Some(ref temp_dir) = self.docker_temp_dir {
-            lines.push(format!("docker_temp_dir={}", temp_dir.display()));
-        }
         if let Some(ref files) = self.copy_files {
             for (idx, file) in files.iter().enumerate() {
                 lines.push(format!("copy_files.{}.source={}", idx, file.source));
@@ -1383,10 +1357,6 @@ impl UserConfig {
             "workspace_prefix" => self.workspace_prefix.clone(),
             "default_source" => self.default_source.clone(),
             "no_mirror" => self.no_mirror.map(|b| b.to_string()),
-            "docker_temp_dir" => self
-                .docker_temp_dir
-                .as_ref()
-                .map(|p| p.display().to_string()),
             "shell" => self.shell.clone(),
             "shell_arg" => self.shell_arg.clone(),
             "documentation_dirs" => self.documentation_dirs.clone(),
