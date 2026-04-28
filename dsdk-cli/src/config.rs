@@ -187,12 +187,82 @@ where
     })
 }
 
+/// Structured form of `makefile_include` when both explicit include directives
+/// and an auto-discovery exclusion list are needed.
+///
+/// Corresponds to the YAML form:
+/// ```yaml
+/// makefile_include:
+///   files:
+///     - include extra.mk
+///   exclude:
+///     - qemu
+///     - trusted-services
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MakefileIncludeConfig {
+    /// Explicit `-include` directives to emit verbatim in the generated Makefile.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Repository names whose auto-discovered `build/<name>.mk` fragments should
+    /// be suppressed.  An empty list means no suppression.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+/// Represents the `makefile_include:` key in `sdk.yml`.
+///
+/// Supports two YAML shapes for backward compatibility:
+///
+/// **Legacy** — a plain sequence of include directives:
+/// ```yaml
+/// makefile_include:
+///   - include extra.mk
+/// ```
+///
+/// **Structured** — an object with optional `files` and `exclude` lists:
+/// ```yaml
+/// makefile_include:
+///   files:
+///     - include extra.mk
+///   exclude:
+///     - qemu
+///     - trusted-services
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum MakefileInclude {
+    /// Legacy form: a bare list of include directives.
+    Legacy(Vec<String>),
+    /// Structured form: explicit file includes and/or an exclusion list.
+    Structured(MakefileIncludeConfig),
+}
+
+impl MakefileInclude {
+    /// Returns the explicit include directive strings (e.g. `"include extra.mk"`).
+    pub fn files(&self) -> &[String] {
+        match self {
+            MakefileInclude::Legacy(v) => v,
+            MakefileInclude::Structured(c) => &c.files,
+        }
+    }
+
+    /// Returns the repository names whose auto-discovered `.mk` fragments should
+    /// be suppressed.  An empty slice means no suppression.
+    pub fn exclude(&self) -> &[String] {
+        match self {
+            MakefileInclude::Legacy(_) => &[],
+            MakefileInclude::Structured(c) => &c.exclude,
+        }
+    }
+}
+
 /// Trait for SDK configurations that provide core repository and mirror information
 pub trait SdkConfigCore {
     fn mirror(&self) -> &PathBuf;
     fn gits(&self) -> &Vec<GitConfig>;
     fn install(&self) -> &Option<Vec<InstallConfig>>;
-    fn makefile_include(&self) -> &Option<Vec<String>>;
+    fn makefile_include(&self) -> Option<&MakefileInclude>;
     /// Workspace-relative directory in which per-git `<name>.mk` fragments are
     /// auto-discovered.  When `None` the default location `build/` is used.
     fn build_folder(&self) -> &Option<String>;
@@ -499,7 +569,7 @@ pub struct SdkConfig {
     #[serde(default)]
     pub install: Option<Vec<InstallConfig>>,
     #[serde(default)]
-    pub makefile_include: Option<Vec<String>>,
+    pub makefile_include: Option<MakefileInclude>,
     /// Workspace-relative directory in which per-git `<name>.mk` fragments are
     /// auto-discovered by `cim makefile`.  When absent the default location
     /// `build/` is used.  This is an optional convenience key; omitting it
@@ -536,8 +606,8 @@ impl SdkConfigCore for SdkConfig {
         &self.install
     }
 
-    fn makefile_include(&self) -> &Option<Vec<String>> {
-        &self.makefile_include
+    fn makefile_include(&self) -> Option<&MakefileInclude> {
+        self.makefile_include.as_ref()
     }
 
     fn build_folder(&self) -> &Option<String> {

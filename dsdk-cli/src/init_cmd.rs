@@ -663,9 +663,6 @@ pub(crate) struct InitConfig<'a> {
     pub(crate) symlink: bool,
     pub(crate) yes: bool,
     pub(crate) _cert_validation: Option<&'a str>,
-    /// Parsed value of --no-includes: None = no suppression, Some(vec![]) =
-    /// suppress all, Some(names) = suppress only the named repos.
-    pub(crate) no_mk_includes: Option<Vec<String>>,
 }
 
 /// Initialize a new workspace
@@ -1211,12 +1208,8 @@ pub(crate) fn handle_init_command(config: InitConfig) {
                         .as_ref()
                         .and_then(|uc| uc.no_dividers)
                         .unwrap_or(false);
-                    let makefile_content = generate_makefile_content(
-                        &sdk_config,
-                        dividers,
-                        Some(&workspace_path),
-                        config.no_mk_includes.as_deref(),
-                    );
+                    let makefile_content =
+                        generate_makefile_content(&sdk_config, dividers, Some(&workspace_path));
                     match std::fs::write(&makefile_path, makefile_content) {
                         Ok(_) => {
                             messages::verbose(&format!(
@@ -1304,7 +1297,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
 pub(crate) struct FilteredSdkConfig {
     pub(crate) gits: Vec<config::GitConfig>,
     pub(crate) mirror: PathBuf,
-    pub(crate) makefile_include: Option<Vec<String>>,
+    pub(crate) makefile_include: Option<config::MakefileInclude>,
     pub(crate) build_folder: Option<String>,
     pub(crate) envsetup: Option<config::SdkTarget>,
     pub(crate) test: Option<config::SdkTarget>,
@@ -1323,8 +1316,8 @@ impl config::SdkConfigCore for FilteredSdkConfig {
         &None
     }
 
-    fn makefile_include(&self) -> &Option<Vec<String>> {
-        &self.makefile_include
+    fn makefile_include(&self) -> Option<&config::MakefileInclude> {
+        self.makefile_include.as_ref()
     }
 
     fn build_folder(&self) -> &Option<String> {
@@ -1415,7 +1408,7 @@ pub(crate) fn create_filtered_sdk_config<T: config::SdkConfigCore>(
     FilteredSdkConfig {
         gits: filtered_gits,
         mirror: sdk_config.mirror().to_path_buf(),
-        makefile_include: sdk_config.makefile_include().clone(),
+        makefile_include: sdk_config.makefile_include().cloned(),
         build_folder: sdk_config.build_folder().clone(),
         envsetup: sdk_config.envsetup().clone(),
         test: sdk_config.test().clone(),

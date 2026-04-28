@@ -74,7 +74,6 @@ fn main() {
             symlink,
             yes,
             cert_validation,
-            no_includes,
         } => {
             // Validate that target is provided
             let target_name = match target {
@@ -85,19 +84,6 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-
-            // Parse --no-includes: None = not provided, Some("") = all, Some("a,b") = named
-            let no_mk_includes = no_includes.as_deref().map(|s| {
-                if s.is_empty() {
-                    vec![]
-                } else {
-                    s.split(',')
-                        .map(str::trim)
-                        .filter(|n| !n.is_empty())
-                        .map(str::to_owned)
-                        .collect()
-                }
-            });
 
             handle_init_command(InitConfig {
                 target: target_name,
@@ -114,7 +100,6 @@ fn main() {
                 symlink: *symlink,
                 yes: *yes,
                 _cert_validation: cert_validation.as_deref(),
-                no_mk_includes,
             });
         }
         Commands::Foreach { command, r#match } => {
@@ -133,11 +118,8 @@ fn main() {
                 cert_validation.as_deref(),
             );
         }
-        Commands::Makefile {
-            no_dividers,
-            no_includes,
-        } => {
-            handle_makefile_command(*no_dividers, no_includes.as_deref());
+        Commands::Makefile { no_dividers } => {
+            handle_makefile_command(*no_dividers);
         }
         Commands::Add { name, url, commit } => {
             handle_add_command(name, url, commit);
