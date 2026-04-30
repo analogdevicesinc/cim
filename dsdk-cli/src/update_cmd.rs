@@ -1074,11 +1074,12 @@ pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
                         Some(&docker_temp_dir),
                     ) {
                         Ok(path) => {
-                            let version_info = format!(" (version: {})", version.as_ref().unwrap());
-                            messages::status(&format!(
-                                "Fetched config for target '{}'{}",
-                                target, version_info
-                            ));
+                            if let Some(ref ver) = version {
+                                messages::status(&format!(
+                                    "Fetched config for target '{}' (version: {})",
+                                    target, ver
+                                ));
+                            }
                             path
                         }
                         Err(e) => {
