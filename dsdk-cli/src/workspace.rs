@@ -790,38 +790,45 @@ pub fn load_config_with_user_overrides(
     }
 
     // Expand manifest ${{ VAR }} variables in path/URL fields
-    if let Some(raw_vars) = sdk_config.variables.clone() {
-        let vars = resolve_variables(&raw_vars);
+    expand_manifest_vars_in_config(&mut sdk_config);
 
-        // Expand in git URLs
-        for git in &mut sdk_config.gits {
-            git.url = expand_manifest_vars(&git.url, &vars);
-        }
+    Ok(sdk_config)
+}
 
-        // Expand in toolchain URL and destination
-        if let Some(ref mut toolchains) = sdk_config.toolchains {
-            for tc in toolchains.iter_mut() {
-                if let Some(ref name) = tc.name.clone() {
-                    tc.name = Some(expand_manifest_vars(name, &vars));
-                }
-                tc.url = expand_manifest_vars(&tc.url.clone(), &vars);
-                tc.destination = expand_manifest_vars(&tc.destination.clone(), &vars);
-                if let Some(ref md) = tc.mirror_destination.clone() {
-                    tc.mirror_destination = Some(expand_manifest_vars(md, &vars));
-                }
+/// Expand `${{ VAR }}` manifest variables in all relevant fields of an SdkConfig.
+///
+/// Expands variables in git URLs, toolchain URLs/destinations/names, and
+/// copy_files source/dest fields. Only operates when the config has a
+/// `variables` section defined.
+pub fn expand_manifest_vars_in_config(sdk_config: &mut config::SdkConfig) {
+    let Some(raw_vars) = sdk_config.variables.clone() else {
+        return;
+    };
+    let vars = resolve_variables(&raw_vars);
+
+    for git in &mut sdk_config.gits {
+        git.url = expand_manifest_vars(&git.url, &vars);
+    }
+
+    if let Some(ref mut toolchains) = sdk_config.toolchains {
+        for tc in toolchains.iter_mut() {
+            if let Some(ref name) = tc.name.clone() {
+                tc.name = Some(expand_manifest_vars(name, &vars));
             }
-        }
-
-        // Expand in copy_files source and dest
-        if let Some(ref mut copy_files) = sdk_config.copy_files {
-            for cf in copy_files.iter_mut() {
-                cf.source = expand_manifest_vars(&cf.source.clone(), &vars);
-                cf.dest = expand_manifest_vars(&cf.dest.clone(), &vars);
+            tc.url = expand_manifest_vars(&tc.url.clone(), &vars);
+            tc.destination = expand_manifest_vars(&tc.destination.clone(), &vars);
+            if let Some(ref md) = tc.mirror_destination.clone() {
+                tc.mirror_destination = Some(expand_manifest_vars(md, &vars));
             }
         }
     }
 
-    Ok(sdk_config)
+    if let Some(ref mut copy_files) = sdk_config.copy_files {
+        for cf in copy_files.iter_mut() {
+            cf.source = expand_manifest_vars(&cf.source.clone(), &vars);
+            cf.dest = expand_manifest_vars(&cf.dest.clone(), &vars);
+        }
+    }
 }
 
 /// Expand environment variables in the mirror path of a config
