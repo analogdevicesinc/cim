@@ -224,80 +224,17 @@ pub(crate) fn handle_add_command(name: &str, url: &str, commit: &str) {
         name, url, commit
     );
 
-    // Find the gits section and append the new entry
-    let updated_content = if let Some(gits_pos) = original_content.find("gits:") {
-        // Check if gits is an empty array on the same line (gits: [])
-        let gits_line_start = gits_pos;
-        let gits_line_end = original_content[gits_pos..]
-            .find('\n')
-            .map(|pos| gits_pos + pos)
-            .unwrap_or(original_content.len());
-        let gits_line = &original_content[gits_line_start..gits_line_end];
-
-        if gits_line.contains("[]") {
-            // Replace "gits: []" with "gits:" followed by the new entry
-            let replacement = format!("gits:{}", new_git_yaml);
-            format!(
-                "{}{}{}",
-                &original_content[..gits_line_start],
-                replacement,
-                &original_content[gits_line_end..]
-            )
-        } else {
-            // Find the end of the gits section by scanning line by line.
-            // Only a real YAML key at column 0 (non-whitespace, non-comment) ends the section.
-            // Empty lines and comment lines (#...) are skipped.
-            let after_gits = &original_content[gits_pos..];
-
-            // Skip past the "gits:" line itself
-            let gits_key_line_len = after_gits
-                .find('\n')
-                .map(|p| p + 1)
-                .unwrap_or(after_gits.len());
-
-            // Default insert position: right after the "gits:" line (handles empty gits section)
-            let mut insert_pos = gits_pos + gits_key_line_len;
-            let mut scan_pos = gits_pos + gits_key_line_len;
-
-            while scan_pos < original_content.len() {
-                let line_start = scan_pos;
-                let line_end = original_content[scan_pos..]
-                    .find('\n')
-                    .map(|p| scan_pos + p + 1)
-                    .unwrap_or(original_content.len());
-
-                let line = &original_content[line_start..line_end];
-                let first_byte = line.bytes().next();
-
-                match first_byte {
-                    None | Some(b'\n') | Some(b'\r') => {
-                        // Empty line — could be between entries or between sections, skip
-                    }
-                    Some(b' ') | Some(b'\t') => {
-                        // Indented line → belongs to the current gits entry; advance insert_pos
-                        insert_pos = line_end;
-                    }
-                    Some(b'#') => {
-                        // Comment line → skip; belongs to the next section's header block
-                    }
-                    _ => {
-                        // Non-indented, non-comment line = start of the next YAML key, stop
-                        break;
-                    }
-                }
-                scan_pos = line_end;
-            }
-
-            format!(
-                "{}{}{}",
-                &original_content[..insert_pos],
-                new_git_yaml,
-                &original_content[insert_pos..]
-            )
+    // Insert the new entry into the gits section
+    let updated_content = match dsdk_cli::workspace::insert_yaml_section_entry(
+        &original_content,
+        "gits",
+        &new_git_yaml,
+    ) {
+        Ok(content) => content,
+        Err(e) => {
+            messages::error(&e);
+            return;
         }
-    } else {
-        messages::error("Could not find 'gits:' section in config file");
-        return;
     };
 
     // Write back to file

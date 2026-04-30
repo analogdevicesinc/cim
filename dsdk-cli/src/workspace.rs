@@ -846,6 +846,89 @@ pub fn download_config_from_url(url: &str) -> Result<PathBuf, Box<dyn std::error
     Ok(temp_file_path)
 }
 
+/// Insert a YAML list entry at the end of a top-level section in a YAML document.
+///
+/// Preserves the original formatting and comments. The `section_key` should be a
+/// top-level key (e.g., "gits"). The `entry` should be the pre-formatted YAML text
+/// to insert (including any leading newline if desired).
+///
+/// Returns `Ok(modified_content)` or `Err(message)` if the section is not found.
+pub fn insert_yaml_section_entry(
+    content: &str,
+    section_key: &str,
+    entry: &str,
+) -> Result<String, String> {
+    let key_pattern = format!("{}:", section_key);
+    let Some(section_pos) = content.find(&key_pattern) else {
+        return Err(format!(
+            "Could not find '{}:' section in YAML content",
+            section_key
+        ));
+    };
+
+    let line_end = content[section_pos..]
+        .find('\n')
+        .map(|pos| section_pos + pos)
+        .unwrap_or(content.len());
+    let section_line = &content[section_pos..line_end];
+
+    // Handle empty array syntax (e.g., "gits: []")
+    if section_line.contains("[]") {
+        let replacement = format!("{}:{}", section_key, entry);
+        return Ok(format!(
+            "{}{}{}",
+            &content[..section_pos],
+            replacement,
+            &content[line_end..]
+        ));
+    }
+
+    // Find the end of the section by scanning line by line.
+    // Only a real YAML key at column 0 (non-whitespace, non-comment) ends the section.
+    let key_line_len = content[section_pos..]
+        .find('\n')
+        .map(|p| p + 1)
+        .unwrap_or(content.len() - section_pos);
+
+    let mut insert_pos = section_pos + key_line_len;
+    let mut scan_pos = section_pos + key_line_len;
+
+    while scan_pos < content.len() {
+        let line_end = content[scan_pos..]
+            .find('\n')
+            .map(|p| scan_pos + p + 1)
+            .unwrap_or(content.len());
+
+        let line = &content[scan_pos..line_end];
+        let first_byte = line.bytes().next();
+
+        match first_byte {
+            None | Some(b'\n') | Some(b'\r') => {
+                // Empty line — skip
+            }
+            Some(b' ') | Some(b'\t') => {
+                // Indented line → belongs to the current section; advance insert_pos
+                insert_pos = line_end;
+            }
+            Some(b'#') => {
+                // Comment line → skip; belongs to the next section
+            }
+            _ => {
+                // Non-indented, non-comment line = start of the next YAML key
+                break;
+            }
+        }
+        scan_pos = line_end;
+    }
+
+    Ok(format!(
+        "{}{}{}",
+        &content[..insert_pos],
+        entry,
+        &content[insert_pos..]
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1242,5 +1325,49 @@ mod tests {
             .join(format!("dsdk-{}", target));
         let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
         assert_eq!(result, PathBuf::from(home).join("dsdk-test-target"));
+    }
+
+    #[test]
+    fn test_insert_yaml_section_entry_appends_to_existing() {
+        let content = "name: test\ngits:\n  - name: repo1\n    url: http://a\n    commit: abc\nother_key: val\n";
+        let entry = "\n  - name: repo2\n    url: http://b\n    commit: def";
+        let result = insert_yaml_section_entry(content, "gits", entry).unwrap();
+        assert!(result.contains("repo1"));
+        assert!(result.contains("repo2"));
+        assert!(result.contains("other_key: val"));
+        // repo2 should appear after repo1 and before other_key
+        let pos_repo2 = result.find("repo2").unwrap();
+        let pos_other = result.find("other_key").unwrap();
+        assert!(pos_repo2 < pos_other);
+    }
+
+    #[test]
+    fn test_insert_yaml_section_entry_empty_array() {
+        let content = "name: test\ngits: []\nother_key: val\n";
+        let entry = "\n  - name: repo1\n    url: http://a\n    commit: abc";
+        let result = insert_yaml_section_entry(content, "gits", entry).unwrap();
+        assert!(result.contains("gits:"));
+        assert!(!result.contains("[]"));
+        assert!(result.contains("repo1"));
+        assert!(result.contains("other_key: val"));
+    }
+
+    #[test]
+    fn test_insert_yaml_section_entry_missing_section() {
+        let content = "name: test\nother: val\n";
+        let entry = "\n  - name: repo1";
+        let result = insert_yaml_section_entry(content, "gits", entry);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Could not find"));
+    }
+
+    #[test]
+    fn test_insert_yaml_section_entry_at_end_of_file() {
+        let content = "name: test\ngits:\n  - name: repo1\n    url: http://a\n    commit: abc\n";
+        let entry = "\n  - name: repo2\n    url: http://b\n    commit: def";
+        let result = insert_yaml_section_entry(content, "gits", entry).unwrap();
+        assert!(result.contains("repo2"));
+        // Should end with the entry (no trailing section to preserve)
+        assert!(result.ends_with("def"));
     }
 }
