@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(target_os = "windows")]
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -783,10 +784,8 @@ impl UserConfig {
             }
         }
 
-        let home = env::var("HOME")
-            .or_else(|_| env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
+        workspace::get_home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
             .join(".config")
             .join("cim")
             .join("config.toml")

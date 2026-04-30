@@ -21,7 +21,7 @@ use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::download::{copy_yaml_files_to_workspace, process_copy_files};
 use dsdk_cli::workspace::{
     create_workspace_marker, download_config_from_url, expand_config_mirror_path, expand_env_vars,
-    expand_manifest_vars, get_current_workspace, get_default_source, is_url,
+    expand_manifest_vars, get_current_workspace, get_default_source, get_home_dir, is_url,
     load_config_with_user_overrides, resolve_target_config_from_git, resolve_variables,
     CreateWorkspaceMarkerParams, OS_DEPS_FILE, PYTHON_DEPS_FILE, SDK_CONFIG_FILE,
     WORKSPACE_MARKER_FILE,
@@ -941,10 +941,8 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             .unwrap_or_else(|| "dsdk-".to_string());
         // Use {prefix}{target-name} as default workspace name
         let workspace_name = format!("{}{}", prefix, config.target);
-        env::var("HOME")
-            .or_else(|_| env::var("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
+        get_home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
             .join(workspace_name)
     });
 
