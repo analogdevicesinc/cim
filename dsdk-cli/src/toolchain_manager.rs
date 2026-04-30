@@ -11,7 +11,7 @@
 
 use crate::config::{self, ToolchainConfig};
 use crate::download;
-use crate::workspace::expand_env_vars;
+use crate::workspace::{expand_env_vars, expand_env_vars_with_overrides, get_home_dir};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -896,33 +896,36 @@ impl ToolchainManager {
     /// Both `$VAR` and `${VAR}` syntax are supported, as well as the cim template
     /// syntax `${{ VAR }}` (with optional whitespace inside the braces).
     fn expand_toolchain_env_vars(&self, value: &str, dest_path: &Path) -> String {
-        let mut result = value.to_string();
+        let pwd_value = dest_path.to_string_lossy().to_string();
+        let workspace_value = self.workspace_path.to_string_lossy().to_string();
+        let home_value = get_home_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
 
         // First, handle the ${{ VAR }} template syntax (cim-specific, inspired by GitHub Actions).
         // This must be processed before ${VAR} to avoid partial-match conflicts.
-        let pwd_value = dest_path.to_string_lossy().to_string();
-        let workspace_value = self.workspace_path.to_string_lossy().to_string();
-        {
-            let mut new_result = String::with_capacity(result.len());
-            let mut remaining = result.as_str();
+        let result = {
+            let mut new_result = String::with_capacity(value.len());
+            let mut remaining = value;
             while let Some(start) = remaining.find("${{") {
                 new_result.push_str(&remaining[..start]);
                 remaining = &remaining[start + 3..];
                 if let Some(end) = remaining.find("}}") {
                     let var_name = remaining[..end].trim();
-                    let replacement = match var_name {
-                        "PWD" => Some(pwd_value.clone()),
-                        "WORKSPACE" => Some(workspace_value.clone()),
-                        "HOME" => env::var("HOME").or_else(|_| env::var("USERPROFILE")).ok(),
-                        other => env::var(other).ok(),
-                    };
-                    if let Some(v) = replacement {
-                        new_result.push_str(&v);
-                    } else {
-                        // Unknown variable — preserve the original token unchanged
-                        new_result.push_str("${{");
-                        new_result.push_str(&remaining[..end]);
-                        new_result.push_str("}}");
+                    match var_name {
+                        "PWD" => new_result.push_str(&pwd_value),
+                        "WORKSPACE" => new_result.push_str(&workspace_value),
+                        "HOME" => new_result.push_str(&home_value),
+                        other => {
+                            if let Ok(v) = env::var(other) {
+                                new_result.push_str(&v);
+                            } else {
+                                // Unknown variable — preserve the original token unchanged
+                                new_result.push_str("${{");
+                                new_result.push_str(&remaining[..end]);
+                                new_result.push_str("}}");
+                            }
+                        }
                     }
                     remaining = &remaining[end + 2..];
                 } else {
@@ -932,117 +935,15 @@ impl ToolchainManager {
                 }
             }
             new_result.push_str(remaining);
-            result = new_result;
-        }
+            new_result
+        };
 
-        // Next, replace the remaining cim-specific variables using $VAR / ${VAR} syntax
-
-        // Replace $PWD and ${PWD} with dest_path
-        result = result.replace("${PWD}", &pwd_value);
-        result = result.replace("$PWD", &pwd_value);
-
-        // Replace $WORKSPACE and ${WORKSPACE} with workspace_path
-        result = result.replace("${WORKSPACE}", &workspace_value);
-        result = result.replace("$WORKSPACE", &workspace_value);
-
-        // Now handle standard environment variable expansion (including $HOME)
-        // This follows the same pattern as expand_env_vars in main.rs
-
-        // Handle tilde expansion first
-        if result.starts_with("~/") || result == "~" {
-            let home = env::var("HOME").or_else(|_| env::var("USERPROFILE"));
-            if let Ok(home) = home {
-                if result == "~" {
-                    result = home;
-                } else {
-                    let rest_of_path = &result[2..];
-                    result = PathBuf::from(home)
-                        .join(rest_of_path)
-                        .to_string_lossy()
-                        .to_string();
-                }
-            }
-        }
-
-        // Handle Windows %VAR% syntax
-        while let Some(start) = result.find('%') {
-            if let Some(end) = result[start + 1..].find('%') {
-                let var_name = &result[start + 1..start + 1 + end];
-                let value = if var_name == "HOME" {
-                    env::var("HOME").or_else(|_| env::var("USERPROFILE"))
-                } else {
-                    env::var(var_name)
-                };
-
-                if let Ok(value) = value {
-                    result.replace_range(start..start + end + 2, &value);
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
-        // Handle ${VAR} syntax for remaining variables
-        while let Some(start) = result.find("${") {
-            if let Some(end) = result[start..].find('}') {
-                let var_name = &result[start + 2..start + end];
-                let value = if var_name == "HOME" {
-                    env::var("HOME").or_else(|_| env::var("USERPROFILE"))
-                } else {
-                    env::var(var_name)
-                };
-
-                if let Ok(value) = value {
-                    result.replace_range(start..start + end + 1, &value);
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
-        // Handle $VAR syntax (without braces) for remaining variables
-        let mut chars: Vec<char> = result.chars().collect();
-        let mut i = 0;
-
-        while i < chars.len() {
-            if chars[i] == '$' && i + 1 < chars.len() {
-                let var_start = i + 1;
-                let mut var_end = var_start;
-
-                while var_end < chars.len()
-                    && (chars[var_end].is_alphanumeric() || chars[var_end] == '_')
-                {
-                    var_end += 1;
-                }
-
-                if var_end > var_start {
-                    let var_name: String = chars[var_start..var_end].iter().collect();
-                    let value = if var_name == "HOME" {
-                        env::var("HOME").or_else(|_| env::var("USERPROFILE"))
-                    } else {
-                        env::var(&var_name)
-                    };
-
-                    if let Ok(value) = value {
-                        let replacement: Vec<char> = value.chars().collect();
-                        chars.splice(i..var_end, replacement);
-                        i += value.len();
-                    } else {
-                        i = var_end;
-                    }
-                } else {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        chars.into_iter().collect()
+        // Delegate standard env var expansion ($VAR, ${VAR}, %VAR%, ~/) to the
+        // shared implementation, with PWD and WORKSPACE as overrides.
+        let mut overrides = HashMap::new();
+        overrides.insert("PWD", pwd_value.as_str());
+        overrides.insert("WORKSPACE", workspace_value.as_str());
+        expand_env_vars_with_overrides(&result, &overrides)
     }
 
     /// Create symlink from mirror to workspace

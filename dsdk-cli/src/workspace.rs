@@ -461,13 +461,41 @@ pub fn is_url(input: &str) -> bool {
 /// expand_env_vars("%HOME%/workspace") => "C:\\Users\\alice/workspace"
 /// ```
 pub fn expand_env_vars(path: &str) -> String {
+    expand_env_vars_with_overrides(path, &std::collections::HashMap::new())
+}
+
+/// Expand environment variables in a path string, with caller-supplied overrides.
+///
+/// Overrides are checked before the process environment. This allows callers to
+/// inject context-specific variables (e.g. PWD, WORKSPACE) that shadow any
+/// real environment variable with the same name.
+///
+/// Supports Unix-style `$VAR` and `${VAR}`, Windows-style `%VAR%`, and tilde
+/// (`~`) expansion.  Unknown variables are left unchanged.
+pub fn expand_env_vars_with_overrides(
+    path: &str,
+    overrides: &std::collections::HashMap<&str, &str>,
+) -> String {
     let mut result = path.to_string();
+
+    /// Resolve a variable name: check overrides first, then env, with HOME fallback.
+    fn resolve_var(
+        name: &str,
+        overrides: &std::collections::HashMap<&str, &str>,
+    ) -> Option<String> {
+        if let Some(&val) = overrides.get(name) {
+            return Some(val.to_string());
+        }
+        if name == "HOME" {
+            env::var("HOME").or_else(|_| env::var("USERPROFILE")).ok()
+        } else {
+            env::var(name).ok()
+        }
+    }
 
     // Handle tilde expansion first
     if result.starts_with("~/") || result == "~" {
-        // Try HOME first (Unix), then USERPROFILE (Windows)
-        let home = env::var("HOME").or_else(|_| env::var("USERPROFILE"));
-        if let Ok(home) = home {
+        if let Some(home) = resolve_var("HOME", overrides) {
             if result == "~" {
                 result = home;
             } else {
@@ -484,15 +512,8 @@ pub fn expand_env_vars(path: &str) -> String {
     // Handle Windows %VAR% syntax
     while let Some(start) = result.find('%') {
         if let Some(end) = result[start + 1..].find('%') {
-            let var_name = &result[start + 1..start + 1 + end];
-            // Special handling for HOME: try HOME first, then USERPROFILE on Windows
-            let value = if var_name == "HOME" {
-                env::var("HOME").or_else(|_| env::var("USERPROFILE"))
-            } else {
-                env::var(var_name)
-            };
-
-            if let Ok(value) = value {
+            let var_name = &result[start + 1..start + 1 + end].to_string();
+            if let Some(value) = resolve_var(var_name, overrides) {
                 result.replace_range(start..start + end + 2, &value);
             } else {
                 // If variable not found, break to avoid infinite loop
@@ -506,15 +527,8 @@ pub fn expand_env_vars(path: &str) -> String {
     // Handle ${VAR} syntax
     while let Some(start) = result.find("${") {
         if let Some(end) = result[start..].find('}') {
-            let var_name = &result[start + 2..start + end];
-            // Special handling for HOME: try HOME first, then USERPROFILE on Windows
-            let value = if var_name == "HOME" {
-                env::var("HOME").or_else(|_| env::var("USERPROFILE"))
-            } else {
-                env::var(var_name)
-            };
-
-            if let Ok(value) = value {
+            let var_name = &result[start + 2..start + end].to_string();
+            if let Some(value) = resolve_var(var_name, overrides) {
                 result.replace_range(start..start + end + 1, &value);
             } else {
                 // If variable not found, break to avoid infinite loop
@@ -543,14 +557,7 @@ pub fn expand_env_vars(path: &str) -> String {
 
             if var_end > var_start {
                 let var_name: String = chars[var_start..var_end].iter().collect();
-                // Special handling for HOME: try HOME first, then USERPROFILE on Windows
-                let value = if var_name == "HOME" {
-                    env::var("HOME").or_else(|_| env::var("USERPROFILE"))
-                } else {
-                    env::var(&var_name)
-                };
-
-                if let Ok(value) = value {
+                if let Some(value) = resolve_var(&var_name, overrides) {
                     // Replace $VAR with the actual value
                     let replacement: Vec<char> = value.chars().collect();
                     chars.splice(i..var_end, replacement);
