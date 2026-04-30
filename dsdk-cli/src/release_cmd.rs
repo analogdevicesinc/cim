@@ -14,8 +14,8 @@ use dsdk_cli::download::{
     DownloadConfig,
 };
 use dsdk_cli::workspace::{
-    copy_dir_recursive, expand_config_mirror_path, expand_env_vars, expand_manifest_vars, is_url,
-    require_workspace_config, resolve_config_source_dir_from_marker, resolve_variables,
+    copy_dir_recursive, expand_config_mirror_path, expand_env_vars, expand_manifest_vars_in_config,
+    is_url, require_workspace_config, resolve_config_source_dir_from_marker,
 };
 
 #[cfg(test)]
@@ -704,16 +704,8 @@ pub(crate) fn handle_copy_files_hash_command(
         }
     };
 
-    // Expand manifest ${{ VAR }} variables in copy_files source and dest
-    if let Some(raw_vars) = sdk_config.variables.clone() {
-        let vars = resolve_variables(&raw_vars);
-        if let Some(ref mut copy_files) = sdk_config.copy_files {
-            for cf in copy_files.iter_mut() {
-                cf.source = expand_manifest_vars(&cf.source.clone(), &vars);
-                cf.dest = expand_manifest_vars(&cf.dest.clone(), &vars);
-            }
-        }
-    }
+    // Expand manifest ${{ VAR }} variables
+    expand_manifest_vars_in_config(&mut sdk_config);
 
     // Get copy_files configuration (direct field access)
     let Some(copy_files) = &sdk_config.copy_files else {
@@ -1094,15 +1086,8 @@ pub(crate) fn handle_sync_files_hash_command(
     };
 
     // Expand manifest ${{ VAR }} variables in copy_files source and dest
-    if let Some(raw_vars) = sdk_config.variables.clone() {
-        let vars = resolve_variables(&raw_vars);
-        if let Some(ref mut copy_files) = sdk_config.copy_files {
-            for cf in copy_files.iter_mut() {
-                cf.source = expand_manifest_vars(&cf.source.clone(), &vars);
-                cf.dest = expand_manifest_vars(&cf.dest.clone(), &vars);
-            }
-        }
-    }
+    // Expand manifest ${{ VAR }} variables
+    expand_manifest_vars_in_config(&mut sdk_config);
 
     // Get copy_files configuration
     let Some(copy_files) = &sdk_config.copy_files else {
