@@ -108,26 +108,26 @@ fn create_vscode_tasks(targets: &[String]) -> Vec<Value> {
 
     // Add install-* targets (excluding install-all which is already handled above)
     for target_name in targets {
-        if target_name.starts_with("install-") && target_name != "install-all" {
-            // Extract component name from install-<name>
-            let component = target_name.strip_prefix("install-").unwrap();
-            let label = format!("Install: {}", component);
+        if target_name != "install-all" {
+            if let Some(component) = target_name.strip_prefix("install-") {
+                let label = format!("Install: {}", component);
 
-            let task = json!({
-                "label": label,
-                "type": "shell",
-                "command": "make",
-                "args": [target_name],
-                "presentation": {
-                    "reveal": "always",
-                    "panel": "shared",
-                    "clear": false,
-                    "showReuseMessage": true,
-                    "group": "sdk-terminal"
-                }
-            });
+                let task = json!({
+                    "label": label,
+                    "type": "shell",
+                    "command": "make",
+                    "args": [target_name],
+                    "presentation": {
+                        "reveal": "always",
+                        "panel": "shared",
+                        "clear": false,
+                        "showReuseMessage": true,
+                        "group": "sdk-terminal"
+                    }
+                });
 
-            tasks.push(task);
+                tasks.push(task);
+            }
         }
     }
 

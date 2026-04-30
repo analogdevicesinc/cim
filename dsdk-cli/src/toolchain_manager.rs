@@ -1090,13 +1090,10 @@ impl ToolchainManager {
         toolchain: &ToolchainConfig,
         dest_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if toolchain.post_install_commands.is_none()
-            || toolchain.post_install_commands.as_ref().unwrap().is_empty()
-        {
-            return Ok(());
-        }
-
-        let commands = toolchain.post_install_commands.as_ref().unwrap();
+        let commands = match toolchain.post_install_commands.as_ref() {
+            Some(cmds) if !cmds.is_empty() => cmds,
+            _ => return Ok(()),
+        };
 
         // Build environment variables map from toolchain configuration
         let mut env_vars = HashMap::new();
