@@ -242,7 +242,7 @@ pub(crate) fn handle_foreach_command(command: &str, match_pattern: Option<&str>)
         workspace_path.display()
     ));
 
-    let mut sdk_config = match config::load_config(&config_path) {
+    let sdk_config = match load_config_with_user_overrides(&config_path, false) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Error loading config: {}", e));
@@ -252,17 +252,6 @@ pub(crate) fn handle_foreach_command(command: &str, match_pattern: Option<&str>)
             return;
         }
     };
-
-    // Load and apply user config overrides if present
-    match config::UserConfig::load() {
-        Ok(Some(user_config)) => {
-            user_config.apply_to_sdk_config(&mut sdk_config, false);
-        }
-        Ok(None) => {}
-        Err(e) => {
-            messages::error(&format!("Warning: Failed to load user config: {}", e));
-        }
-    }
 
     // Compile regex pattern if provided
     let match_regex = if let Some(pattern) = match_pattern {

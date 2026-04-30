@@ -470,53 +470,42 @@ pub(crate) fn ensure_file_in_mirror(
 }
 
 /// Update sdk.yml with computed SHA256 hash for a specific copy_files entry
-pub(crate) fn update_sdk_yaml_hash(
+/// Update or insert a sha256 hash for a YAML entry in a config file.
+///
+/// The `entry_matcher` closure receives (line_index, trimmed_line_content) for each line
+/// and should return `true` when it finds the entry whose sha256 should be updated.
+/// It also receives a mutable reference to a range end so it can indicate where to
+/// start looking for the sha256 field.
+fn update_yaml_entry_hash(
     config_path: &Path,
-    dest_or_source: &str,
+    entry_name: &str,
+    entry_type: &str,
     new_hash: &str,
     dry_run: bool,
     add_missing: bool,
+    entry_matcher: impl Fn(&[&str], usize) -> bool,
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
     let mut content = fs::read_to_string(config_path)?;
 
-    // Find the copy_files entry matching the destination or source
     let lines: Vec<&str> = content.lines().collect();
     let mut found_entry = false;
     let mut updated_line_idx = None;
-    // Track the start of the matched entry block for --add-missing insertion
     let mut entry_start_idx: Option<usize> = None;
 
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if !found_entry
-            && (trimmed.starts_with("- source:")
-                || trimmed.starts_with("- url:")
-                || trimmed == "source:"
-                || trimmed == "url:")
-        {
-            // Check next few lines for matching dest or source
-            for j in idx..std::cmp::min(idx + 5, lines.len()) {
-                let check_line = lines[j];
-                if check_line.contains(&format!("dest: {}", dest_or_source))
-                    || (check_line.contains("source:") && check_line.contains(dest_or_source))
-                {
-                    // Found the entry - mark as found
-                    found_entry = true;
-                    entry_start_idx = Some(idx);
+    for (idx, _line) in lines.iter().enumerate() {
+        if !found_entry && entry_matcher(&lines, idx) {
+            found_entry = true;
+            entry_start_idx = Some(idx);
 
-                    // Now find sha256 line within this entry
-                    for (k, sha_line) in lines
-                        .iter()
-                        .enumerate()
-                        .take(std::cmp::min(j + 10, lines.len()))
-                        .skip(j)
-                    {
-                        if sha_line.trim().starts_with("sha256:") {
-                            updated_line_idx = Some(k);
-                            break;
-                        }
-                    }
-                    // Break inner loop once we've found the matching entry
+            // Find sha256 line within this entry (scan up to 15 lines ahead)
+            for (k, sha_line) in lines
+                .iter()
+                .enumerate()
+                .take(std::cmp::min(idx + 15, lines.len()))
+                .skip(idx)
+            {
+                if sha_line.trim().starts_with("sha256:") {
+                    updated_line_idx = Some(k);
                     break;
                 }
             }
@@ -524,11 +513,10 @@ pub(crate) fn update_sdk_yaml_hash(
     }
 
     if !found_entry {
-        return Err(format!("Could not find copy_files entry for: {}", dest_or_source).into());
+        return Err(format!("Could not find {} entry for: {}", entry_type, entry_name).into());
     }
 
     if let Some(line_idx) = updated_line_idx {
-        // Extract current hash value from the line
         let current_line = lines[line_idx];
         let current_hash_in_file = current_line
             .trim()
@@ -536,9 +524,7 @@ pub(crate) fn update_sdk_yaml_hash(
             .map(|s| s.trim())
             .unwrap_or("");
 
-        // Check if hash has actually changed
         if current_hash_in_file == new_hash {
-            // Hash unchanged, no need to update
             return Ok(Some(false));
         }
 
@@ -550,35 +536,25 @@ pub(crate) fn update_sdk_yaml_hash(
                 new_hash
             ));
         } else {
-            // Update the sha256 value while preserving formatting
             let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
             let current_line = &updated_lines[line_idx];
-
-            // Extract indentation from the line
             let indent: String = current_line
                 .chars()
                 .take_while(|c| c.is_whitespace())
                 .collect();
-
             updated_lines[line_idx] = format!("{}sha256: {}", indent, new_hash);
-
             content = updated_lines.join("\n");
             fs::write(config_path, &content)?;
-            messages::status(&format!(
-                "Updated sha256 for {}: {}",
-                dest_or_source, new_hash
-            ));
+            messages::status(&format!("Updated sha256 for {}: {}", entry_name, new_hash));
         }
 
         return Ok(Some(true));
     }
 
-    // File doesn't have an existing sha256 field
+    // No sha256 field exists
     if add_missing {
-        // Insert a new sha256 field at the end of the entry block
         let entry_start = entry_start_idx.unwrap_or(0);
 
-        // Determine field indentation from the line immediately after the entry marker
         let field_indent = if entry_start + 1 < lines.len() {
             lines[entry_start + 1]
                 .chars()
@@ -588,8 +564,6 @@ pub(crate) fn update_sdk_yaml_hash(
             "    ".to_string()
         };
 
-        // Find the last line that belongs to this entry by scanning forward
-        // while lines remain at least as indented as the field level
         let field_indent_len = field_indent.len();
         let mut last_entry_line = entry_start;
         for (scan_idx, scan_line) in lines.iter().enumerate().skip(entry_start + 1) {
@@ -607,7 +581,7 @@ pub(crate) fn update_sdk_yaml_hash(
         if dry_run {
             messages::status(&format!(
                 "Would add sha256 for {}: {}",
-                dest_or_source, new_hash
+                entry_name, new_hash
             ));
         } else {
             let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
@@ -617,21 +591,89 @@ pub(crate) fn update_sdk_yaml_hash(
             );
             content = updated_lines.join("\n");
             fs::write(config_path, &content)?;
-            messages::status(&format!(
-                "Added sha256 for {}: {}",
-                dest_or_source, new_hash
-            ));
+            messages::status(&format!("Added sha256 for {}: {}", entry_name, new_hash));
         }
 
         return Ok(Some(true));
     }
 
-    // No sha256 field and --add-missing not requested - skip this entry
     messages::info(&format!(
         "Skipping {}: no sha256 field in entry",
-        dest_or_source
+        entry_name
     ));
-    Ok(None) // Return Ok(None) to indicate skipped
+    Ok(None)
+}
+
+pub(crate) fn update_sdk_yaml_hash(
+    config_path: &Path,
+    dest_or_source: &str,
+    new_hash: &str,
+    dry_run: bool,
+    add_missing: bool,
+) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+    update_yaml_entry_hash(
+        config_path,
+        dest_or_source,
+        "copy_files",
+        new_hash,
+        dry_run,
+        add_missing,
+        |lines, idx| {
+            let trimmed = lines[idx].trim();
+            if trimmed.starts_with("- source:")
+                || trimmed.starts_with("- url:")
+                || trimmed == "source:"
+                || trimmed == "url:"
+            {
+                // Check next few lines for matching dest or source,
+                // stopping at the next entry boundary to avoid matching a sibling entry.
+                for line in lines
+                    .iter()
+                    .take(std::cmp::min(idx + 5, lines.len()))
+                    .skip(idx + 1)
+                {
+                    let tl = line.trim();
+                    if tl.starts_with("- source:") || tl.starts_with("- url:") {
+                        break;
+                    }
+                    if line.contains(&format!("dest: {}", dest_or_source))
+                        || (line.contains("source:") && line.contains(dest_or_source))
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        },
+    )
+}
+
+fn update_sdk_yaml_toolchain_hash(
+    config_path: &Path,
+    toolchain_name: &str,
+    new_hash: &str,
+    dry_run: bool,
+    add_missing: bool,
+) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+    update_yaml_entry_hash(
+        config_path,
+        toolchain_name,
+        "toolchain",
+        new_hash,
+        dry_run,
+        add_missing,
+        |lines, idx| {
+            let trimmed = lines[idx].trim();
+            if trimmed.starts_with("- name:") {
+                let entry_name = trimmed
+                    .strip_prefix("- name:")
+                    .map(|s| s.trim())
+                    .unwrap_or("");
+                return entry_name == toolchain_name;
+            }
+            false
+        },
+    )
 }
 
 /// Handle the copy-files-hash command
@@ -725,6 +767,19 @@ pub(crate) fn handle_copy_files_hash_command(
             messages::verbose("No existing hash found");
             String::new()
         });
+
+        // Glob/wildcard sources cannot be hashed — skip with an informational message.
+        if copy_file.source.contains('*')
+            || copy_file.source.contains('?')
+            || copy_file.source.contains('[')
+        {
+            messages::info(&format!(
+                "Skipping wildcard source '{}': glob patterns cannot be hashed",
+                copy_file.source
+            ));
+            skipped_count += 1;
+            continue;
+        }
 
         // Ensure file is available (download if needed)
         let file_path = match ensure_file_in_mirror(copy_file, &config_source_dir, &mirror_path) {
@@ -836,146 +891,6 @@ pub(crate) fn handle_copy_files_hash_command(
 /// Update sdk.yml with computed SHA256 hash for a specific toolchain entry
 ///
 /// Matches entries under the `toolchains:` section by the `name:` field.
-fn update_sdk_yaml_toolchain_hash(
-    config_path: &Path,
-    toolchain_name: &str,
-    new_hash: &str,
-    dry_run: bool,
-    add_missing: bool,
-) -> Result<Option<bool>, Box<dyn std::error::Error>> {
-    let mut content = fs::read_to_string(config_path)?;
-
-    let lines: Vec<&str> = content.lines().collect();
-    let mut found_entry = false;
-    let mut updated_line_idx = None;
-    let mut entry_start_idx: Option<usize> = None;
-
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        // Match toolchain entries by "- name:"
-        if !found_entry && trimmed.starts_with("- name:") {
-            let entry_name = trimmed
-                .strip_prefix("- name:")
-                .map(|s| s.trim())
-                .unwrap_or("");
-
-            if entry_name == toolchain_name {
-                found_entry = true;
-                entry_start_idx = Some(idx);
-
-                // Find sha256 line within this entry
-                for (k, sha_line) in lines
-                    .iter()
-                    .enumerate()
-                    .take(std::cmp::min(idx + 15, lines.len()))
-                    .skip(idx)
-                {
-                    if sha_line.trim().starts_with("sha256:") {
-                        updated_line_idx = Some(k);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if !found_entry {
-        return Err(format!("Could not find toolchain entry for: {}", toolchain_name).into());
-    }
-
-    let display_name = toolchain_name;
-
-    if let Some(line_idx) = updated_line_idx {
-        let current_line = lines[line_idx];
-        let current_hash_in_file = current_line
-            .trim()
-            .strip_prefix("sha256:")
-            .map(|s| s.trim())
-            .unwrap_or("");
-
-        if current_hash_in_file == new_hash {
-            return Ok(Some(false));
-        }
-
-        if dry_run {
-            messages::status(&format!(
-                "Would update line {} from '{}' to 'sha256: {}'",
-                line_idx + 1,
-                lines[line_idx],
-                new_hash
-            ));
-        } else {
-            let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
-            let current_line = &updated_lines[line_idx];
-            let indent: String = current_line
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect();
-            updated_lines[line_idx] = format!("{}sha256: {}", indent, new_hash);
-            content = updated_lines.join("\n");
-            fs::write(config_path, &content)?;
-            messages::status(&format!(
-                "Updated sha256 for {}: {}",
-                display_name, new_hash
-            ));
-        }
-
-        return Ok(Some(true));
-    }
-
-    // No sha256 field exists
-    if add_missing {
-        let entry_start = entry_start_idx.unwrap_or(0);
-
-        let field_indent = if entry_start + 1 < lines.len() {
-            lines[entry_start + 1]
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>()
-        } else {
-            "    ".to_string()
-        };
-
-        let field_indent_len = field_indent.len();
-        let mut last_entry_line = entry_start;
-        for (scan_idx, scan_line) in lines.iter().enumerate().skip(entry_start + 1) {
-            if scan_line.trim().is_empty() {
-                break;
-            }
-            let scan_indent_len = scan_line.chars().take_while(|c| c.is_whitespace()).count();
-            if scan_indent_len >= field_indent_len {
-                last_entry_line = scan_idx;
-            } else {
-                break;
-            }
-        }
-
-        if dry_run {
-            messages::status(&format!(
-                "Would add sha256 for {}: {}",
-                display_name, new_hash
-            ));
-        } else {
-            let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
-            updated_lines.insert(
-                last_entry_line + 1,
-                format!("{field_indent}sha256: {new_hash}"),
-            );
-            content = updated_lines.join("\n");
-            fs::write(config_path, &content)?;
-            messages::status(&format!("Added sha256 for {}: {}", display_name, new_hash));
-        }
-
-        return Ok(Some(true));
-    }
-
-    messages::info(&format!(
-        "Skipping {}: no sha256 field in entry",
-        display_name
-    ));
-    Ok(None)
-}
-
 /// Handle the hash-toolchains command
 pub(crate) fn handle_toolchains_hash_command(
     file_filter: Option<&str>,
