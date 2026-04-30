@@ -1342,37 +1342,8 @@ pub(crate) fn list_targets_from_git_repo(git_url: &str) -> Result<Vec<String>, a
         return Err(anyhow::anyhow!("Git clone failed: {}", clone_result.stderr));
     }
 
-    // List targets from the cloned repository
-    let targets_dir = temp_path.join("targets");
-    if !targets_dir.exists() {
-        return Err(anyhow::anyhow!(
-            "No 'targets' directory found in git repository"
-        ));
-    }
-
-    let mut targets = Vec::new();
-    for entry in std::fs::read_dir(&targets_dir)
-        .map_err(|e| anyhow::anyhow!("Failed to read targets directory: {}", e))?
-    {
-        let entry = entry.map_err(|e| anyhow::anyhow!("Failed to read directory entry: {}", e))?;
-
-        if entry
-            .file_type()
-            .map_err(|e| anyhow::anyhow!("Failed to get file type: {}", e))?
-            .is_dir()
-        {
-            let target_name = entry.file_name().to_string_lossy().to_string();
-            let config_path = entry.path().join(SDK_CONFIG_FILE);
-
-            // Only include directories that have sdk.yml
-            if config_path.exists() {
-                targets.push(target_name);
-            }
-        }
-    }
-
-    targets.sort();
-    Ok(targets)
+    // Reuse the shared targets directory scanner
+    list_available_targets(temp_path)
 }
 
 /// List available versions for a specific target from git repository
