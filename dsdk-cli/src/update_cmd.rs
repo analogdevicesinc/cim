@@ -19,7 +19,8 @@ use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
 use dsdk_cli::workspace::{
     expand_config_mirror_path, get_current_workspace, get_default_source, get_docker_temp_dir,
-    is_url, resolve_target_config_from_git, WorkspaceMarker,
+    is_url, resolve_target_config_from_git, WorkspaceMarker, PYTHON_DEPS_FILE, SDK_CONFIG_FILE,
+    WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{config, docker_manager, git_operations, messages};
 use std::fs;
@@ -337,7 +338,7 @@ pub(crate) fn handle_update_command(
     messages::workspace(&workspace_path);
 
     // Use sdk.yml from workspace root
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in {}",
@@ -399,7 +400,7 @@ pub(crate) fn handle_update_command(
     let filtered_config = create_filtered_sdk_config(&sdk_config, &match_regex);
 
     // Read workspace marker to get stored no_mirror preference
-    let marker_path = workspace_path.join(".workspace");
+    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
     let workspace_no_mirror = if marker_path.exists() {
         match fs::read_to_string(&marker_path) {
             Ok(content) => serde_yaml::from_str::<WorkspaceMarker>(&content)
@@ -1134,7 +1135,7 @@ pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
             let config_dir = config_path
                 .parent()
                 .expect("Config path should have parent directory");
-            let python_deps_path = config_dir.join("python-dependencies.yml");
+            let python_deps_path = config_dir.join(PYTHON_DEPS_FILE);
             let python_deps = match config::load_python_dependencies(&python_deps_path) {
                 Ok(deps) => deps,
                 Err(e) => {

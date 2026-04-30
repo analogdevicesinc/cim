@@ -10,7 +10,10 @@
 // limitations under the License.
 
 use crate::cli::InstallCommand;
-use dsdk_cli::workspace::{get_current_workspace, load_config_with_user_overrides};
+use dsdk_cli::workspace::{
+    get_current_workspace, load_config_with_user_overrides, OS_DEPS_FILE, PYTHON_DEPS_FILE,
+    SDK_CONFIG_FILE,
+};
 use dsdk_cli::{config, messages, toolchain_manager};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -27,7 +30,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
     };
 
     // Use sdk.yml from workspace root
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",
@@ -53,7 +56,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
     match install_command {
         InstallCommand::OsDeps { yes, no_sudo } => {
             // Look for os-dependencies.yml file in workspace (copied via copy_files)
-            let os_deps_path = workspace_path.join("os-dependencies.yml");
+            let os_deps_path = workspace_path.join(OS_DEPS_FILE);
             if os_deps_path.exists() {
                 match config::load_os_dependencies(&os_deps_path) {
                     Ok(os_deps) => {
@@ -75,7 +78,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             list_profiles,
         } => {
             // Look for python-dependencies.yml file in workspace (copied via copy_files)
-            let python_deps_path = workspace_path.join("python-dependencies.yml");
+            let python_deps_path = workspace_path.join(PYTHON_DEPS_FILE);
             if python_deps_path.exists() {
                 // Show available profiles if user requested the list
                 if *list_profiles {
@@ -594,7 +597,7 @@ pub(crate) fn ensure_docs_dependencies(
     create_virtual_environment(workspace_path)?;
 
     // Install required packages
-    let python_deps_path = workspace_path.join("python-dependencies.yml");
+    let python_deps_path = workspace_path.join(PYTHON_DEPS_FILE);
 
     // Load Python dependencies configuration and determine which profile to use
     let (packages, profile_source) = match config::load_python_dependencies(&python_deps_path) {

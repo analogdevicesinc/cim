@@ -16,6 +16,26 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Filename for the main SDK configuration manifest
+pub const SDK_CONFIG_FILE: &str = "sdk.yml";
+/// Filename for OS/system dependency definitions
+pub const OS_DEPS_FILE: &str = "os-dependencies.yml";
+/// Filename for Python dependency definitions
+pub const PYTHON_DEPS_FILE: &str = "python-dependencies.yml";
+/// Filename for the workspace marker
+pub const WORKSPACE_MARKER_FILE: &str = ".workspace";
+
+/// Get the user's home directory path.
+///
+/// Tries `HOME` first (Unix/macOS), falls back to `USERPROFILE` (Windows).
+/// Returns `None` if neither variable is set.
+pub fn get_home_dir() -> Option<PathBuf> {
+    env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from)
+}
+
 /// Get the default manifest source location, considering user config
 pub fn get_default_source() -> String {
     // Try to load user config to get default_source
@@ -26,12 +46,7 @@ pub fn get_default_source() -> String {
     }
 
     // Fall back to hardcoded default with legacy path support
-    // On Windows, use USERPROFILE if HOME is not set
-    let home = env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-
-    let home_path = PathBuf::from(&home);
+    let home_path = get_home_dir().unwrap_or_else(|| PathBuf::from("."));
     let devel_dir = home_path.join("devel");
 
     // Check for new path: $HOME/devel/cim-manifests
@@ -105,7 +120,7 @@ pub fn find_workspace_root() -> Option<PathBuf> {
     let mut current = env::current_dir().ok()?;
 
     loop {
-        let marker_path = current.join(".workspace");
+        let marker_path = current.join(WORKSPACE_MARKER_FILE);
         if marker_path.exists() {
             return Some(current);
         }
@@ -174,7 +189,7 @@ pub fn create_workspace_marker(
             .map(|p| p.to_string_lossy().to_string())
     };
 
-    let marker_path = params.workspace_path.join(".workspace");
+    let marker_path = params.workspace_path.join(WORKSPACE_MARKER_FILE);
     let marker = WorkspaceMarker {
         workspace_version: "1".to_string(),
         created_at: std::time::SystemTime::now()
@@ -284,7 +299,7 @@ pub fn resolve_target_config_from_git(
 
     // Check if target exists and has sdk.yml
     let target_dir = temp_path.join("targets").join(target);
-    let config_path = target_dir.join("sdk.yml");
+    let config_path = target_dir.join(SDK_CONFIG_FILE);
 
     if !config_path.exists() {
         return Err(anyhow::anyhow!(
@@ -334,7 +349,7 @@ pub fn resolve_target_config_from_git(
     copy_dir_recursive(&target_dir, &extraction_path)
         .map_err(|e| anyhow::anyhow!("Failed to copy target directory contents: {}", e))?;
 
-    let persistent_config = extraction_path.join("sdk.yml");
+    let persistent_config = extraction_path.join(SDK_CONFIG_FILE);
 
     // If using tempfile, keep the directory alive by forgetting it (init command behavior)
     if let Some(temp_keeper) = temp_dir_keeper {
@@ -352,7 +367,7 @@ pub fn resolve_config_source_dir_from_marker(
     workspace_path: &Path,
     config_path: &Path,
 ) -> (PathBuf, Option<tempfile::TempDir>) {
-    let marker_path = workspace_path.join(".workspace");
+    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
     if !marker_path.exists() {
         return (workspace_path.to_path_buf(), None);
     }
@@ -883,7 +898,7 @@ mod tests {
         let test_config_content = "test: config\ndata: value";
         fs::write(&original_config_path, test_config_content).expect("Failed to write test config");
 
-        let config_name = "sdk.yml";
+        let config_name = SDK_CONFIG_FILE;
         let mirror_path = Path::new("/tmp/test-mirror");
 
         let result = create_workspace_marker(CreateWorkspaceMarkerParams {
@@ -898,7 +913,7 @@ mod tests {
         });
         assert!(result.is_ok());
 
-        let marker_path = workspace_path.join(".workspace");
+        let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
         assert!(marker_path.exists());
 
         let marker_content = fs::read_to_string(&marker_path).expect("Failed to read marker");

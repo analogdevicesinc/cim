@@ -16,6 +16,7 @@ use dsdk_cli::download::{
 use dsdk_cli::workspace::{
     copy_dir_recursive, expand_config_mirror_path, expand_env_vars, expand_manifest_vars,
     get_current_workspace, is_url, resolve_config_source_dir_from_marker, resolve_variables,
+    SDK_CONFIG_FILE,
 };
 use dsdk_cli::{config, git_operations, messages};
 use regex::Regex;
@@ -40,7 +41,7 @@ pub(crate) fn handle_release_command(
     };
 
     // Use sdk.yml from workspace root
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",
@@ -662,7 +663,7 @@ pub(crate) fn handle_copy_files_hash_command(
     };
 
     // Use sdk.yml from workspace root (ignore user overrides for hash computation)
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",
@@ -1011,7 +1012,7 @@ pub(crate) fn handle_toolchains_hash_command(
         }
     };
 
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",
@@ -1198,7 +1199,7 @@ pub(crate) fn handle_sync_files_hash_command(
     };
 
     // Use sdk.yml from workspace root
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",
@@ -1462,7 +1463,7 @@ gits:
     build:
       - "@echo Building test-repo"
 "#;
-        let config_path = temp_dir.join("sdk.yml");
+        let config_path = temp_dir.join(SDK_CONFIG_FILE);
         fs::write(&config_path, config_content).expect("Failed to write test config");
         config_path
     }
@@ -1516,7 +1517,7 @@ gits:
     url: https://github.com/test/another.git
     commit: develop
 "#;
-        let config_path = workspace_path.join("sdk.yml");
+        let config_path = workspace_path.join(SDK_CONFIG_FILE);
         fs::write(&config_path, config_content).expect("Failed to write test config");
 
         let tag = "v2.0.0";
@@ -1616,7 +1617,7 @@ gits:
     url: https://github.com/test/simple.git
     commit: feature-xyz
 "#;
-        let config_path = workspace_path.join("sdk.yml");
+        let config_path = workspace_path.join(SDK_CONFIG_FILE);
         fs::write(&config_path, config_content).expect("Failed to write test config");
 
         let tag = "v3.0.0";
@@ -1687,7 +1688,7 @@ gits:
 mirror: /tmp/test-mirror
 gits:
 "#;
-        let config_path = workspace_path.join("sdk.yml");
+        let config_path = workspace_path.join(SDK_CONFIG_FILE);
         fs::write(&config_path, minimal_config).expect("Failed to write minimal config");
 
         let result = generate_release_config(&config_path, Some("v1.0.0"), &None, &[], &[]);
@@ -1714,7 +1715,7 @@ gits:
     depends_on:
       - repo1
 "#;
-        let config_path = workspace_path.join("sdk.yml");
+        let config_path = workspace_path.join(SDK_CONFIG_FILE);
         fs::write(&config_path, config_content).expect("Failed to write indented config");
 
         let result = generate_release_config(&config_path, Some("v1.0.0"), &None, &[], &[]);
@@ -1897,7 +1898,7 @@ copy_files:\n\
   - source: /home/user/.bashrc\n\
     dest: .bashrc\n";
 
-        let config_path = temp_dir.path().join("sdk.yml");
+        let config_path = temp_dir.path().join(SDK_CONFIG_FILE);
         fs::write(&config_path, yaml).expect("Failed to write sdk.yml");
 
         let fake_hash = "abc123def456";
@@ -1948,7 +1949,7 @@ copy_files:\n\
   - source: /home/user/.bashrc\n\
     dest: .bashrc\n";
 
-        let config_path = temp_dir.path().join("sdk.yml");
+        let config_path = temp_dir.path().join(SDK_CONFIG_FILE);
         fs::write(&config_path, yaml).expect("Failed to write sdk.yml");
 
         let result = update_sdk_yaml_hash(&config_path, ".bashrc", "deadbeef", true, true).unwrap();

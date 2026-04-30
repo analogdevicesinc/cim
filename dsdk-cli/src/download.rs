@@ -9,7 +9,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::workspace::{expand_env_vars, is_url};
+use crate::workspace::{expand_env_vars, is_url, OS_DEPS_FILE, PYTHON_DEPS_FILE, SDK_CONFIG_FILE};
 use crate::{config, messages};
 use glob::glob;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -55,15 +55,9 @@ pub fn copy_yaml_files_from_local(
     let config_dir = original_config_path.parent().unwrap_or(Path::new("."));
 
     let files_to_copy = [
-        ("sdk.yml", original_config_path),
-        (
-            "os-dependencies.yml",
-            &config_dir.join("os-dependencies.yml"),
-        ),
-        (
-            "python-dependencies.yml",
-            &config_dir.join("python-dependencies.yml"),
-        ),
+        (SDK_CONFIG_FILE, original_config_path),
+        (OS_DEPS_FILE, &config_dir.join(OS_DEPS_FILE)),
+        (PYTHON_DEPS_FILE, &config_dir.join(PYTHON_DEPS_FILE)),
     ];
 
     for (filename, source_path) in files_to_copy {
@@ -100,7 +94,7 @@ pub fn copy_yaml_files_from_url(
     // Extract base URL directory (remove the filename)
     let base_dir_url = if base_url.ends_with("/sdk.yml") {
         base_url.strip_suffix("/sdk.yml").unwrap()
-    } else if base_url.ends_with("sdk.yml") {
+    } else if base_url.ends_with(SDK_CONFIG_FILE) {
         base_url
             .rsplit_once('/')
             .map(|(base, _)| base)
@@ -110,18 +104,15 @@ pub fn copy_yaml_files_from_url(
     };
 
     let files_to_download = [
+        (OS_DEPS_FILE, format!("{}/{}", base_dir_url, OS_DEPS_FILE)),
         (
-            "os-dependencies.yml",
-            format!("{}/os-dependencies.yml", base_dir_url),
-        ),
-        (
-            "python-dependencies.yml",
-            format!("{}/python-dependencies.yml", base_dir_url),
+            PYTHON_DEPS_FILE,
+            format!("{}/{}", base_dir_url, PYTHON_DEPS_FILE),
         ),
     ];
 
     // Copy the already downloaded sdk.yml file
-    let dest_config_path = workspace_path.join("sdk.yml");
+    let dest_config_path = workspace_path.join(SDK_CONFIG_FILE);
     fs::copy(original_config_path, &dest_config_path)?;
     messages::verbose("Copied sdk.yml to workspace");
 

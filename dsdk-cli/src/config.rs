@@ -16,6 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::messages;
+use crate::workspace;
 
 /// Custom deserializer for commit field that handles both strings and numbers
 /// This allows YAML values like `2025.05` to be converted to strings
@@ -1259,7 +1260,7 @@ pub fn load_config_with_os_deps<P: AsRef<Path>>(
 
     // Try to load os-dependencies.yml from the same directory as sdk.yml
     let os_deps = if let Some(config_dir) = path_buf.parent() {
-        let os_deps_path = config_dir.join("os-dependencies.yml");
+        let os_deps_path = config_dir.join(workspace::OS_DEPS_FILE);
         if os_deps_path.exists() {
             match load_os_dependencies(&os_deps_path) {
                 Ok(deps) => Some(deps),
@@ -1448,7 +1449,7 @@ gits:
     #[test]
     fn test_load_config_valid() {
         let dir = tempdir().unwrap();
-        let file_path = dir.path().join("sdk.yml");
+        let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
         let mut file = File::create(&file_path).unwrap();
         file.write_all(YAML.as_bytes()).unwrap();
         let config = load_config(&file_path).unwrap();

@@ -9,7 +9,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use dsdk_cli::workspace::get_current_workspace;
+use dsdk_cli::workspace::{get_current_workspace, SDK_CONFIG_FILE};
 use dsdk_cli::{config, messages, vscode_tasks_manager};
 
 const WORKSPACE_VARIABLE: &str = "WORKSPACE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))";
@@ -28,7 +28,7 @@ pub(crate) fn handle_makefile_command(no_dividers: bool) {
     let output_path = workspace_path.join("Makefile");
 
     // Use sdk.yml from workspace root
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",

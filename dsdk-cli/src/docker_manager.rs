@@ -11,6 +11,7 @@
 
 use crate::config::{OsDependencies, PythonDependencies, SdkConfig};
 use crate::messages;
+use crate::workspace::SDK_CONFIG_FILE;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
@@ -464,7 +465,7 @@ impl DockerManager {
             .as_secs();
 
         // Calculate SHA256 of the config file
-        let config_file_path = self.config_dir.join("sdk.yml");
+        let config_file_path = self.config_dir.join(SDK_CONFIG_FILE);
         let config_sha256 = match fs::read(&config_file_path) {
             Ok(config_content) => {
                 let mut hasher = Sha256::new();
@@ -929,7 +930,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let docker_manager = DockerManager::new(
             temp_dir.path().to_path_buf(),
-            temp_dir.path().join("sdk.yml"),
+            temp_dir.path().join(SDK_CONFIG_FILE),
         );
 
         let images = vec![

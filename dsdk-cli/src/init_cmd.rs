@@ -23,7 +23,8 @@ use dsdk_cli::workspace::{
     create_workspace_marker, download_config_from_url, expand_config_mirror_path, expand_env_vars,
     expand_manifest_vars, get_current_workspace, get_default_source, is_url,
     load_config_with_user_overrides, resolve_target_config_from_git, resolve_variables,
-    CreateWorkspaceMarkerParams,
+    CreateWorkspaceMarkerParams, OS_DEPS_FILE, PYTHON_DEPS_FILE, SDK_CONFIG_FILE,
+    WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{
     config, doc_manager, git_operations, messages, toolchain_manager, vscode_tasks_manager,
@@ -46,7 +47,7 @@ pub(crate) fn handle_docs_command(docs_command: &DocsCommand) {
     };
 
     // Use sdk.yml from workspace root
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",
@@ -172,7 +173,7 @@ pub(crate) fn handle_add_command(name: &str, url: &str, commit: &str) {
     };
 
     // Use sdk.yml from workspace root
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",
@@ -326,7 +327,7 @@ pub(crate) fn handle_foreach_command(command: &str, match_pattern: Option<&str>)
     };
 
     // Use sdk.yml from workspace root
-    let config_path = workspace_path.join("sdk.yml");
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
     if !config_path.exists() {
         messages::error(&format!(
             "sdk.yml not found in workspace root: {}",
@@ -428,12 +429,12 @@ pub(crate) fn resolve_target_config(
 ) -> Result<PathBuf, anyhow::Error> {
     if is_url(target_name_or_url) {
         // Handle URL target - download the config file
-        let config_url = if target_name_or_url.ends_with("sdk.yml") {
+        let config_url = if target_name_or_url.ends_with(SDK_CONFIG_FILE) {
             target_name_or_url.to_string()
         } else if target_name_or_url.ends_with('/') {
-            format!("{}sdk.yml", target_name_or_url)
+            format!("{}{}", target_name_or_url, SDK_CONFIG_FILE)
         } else {
-            format!("{}/sdk.yml", target_name_or_url)
+            format!("{}/{}", target_name_or_url, SDK_CONFIG_FILE)
         };
 
         download_config_from_url(&config_url)
@@ -441,7 +442,7 @@ pub(crate) fn resolve_target_config(
     } else {
         // Handle local target name
         let target_dir = config_root.join("targets").join(target_name_or_url);
-        let main_config = target_dir.join("sdk.yml");
+        let main_config = target_dir.join(SDK_CONFIG_FILE);
 
         if !main_config.exists() {
             return Err(anyhow::anyhow!(
@@ -472,7 +473,7 @@ pub(crate) fn list_available_targets(config_root: &Path) -> Result<Vec<String>, 
         let entry = entry?;
         if entry.file_type()?.is_dir() {
             let target_name = entry.file_name().to_string_lossy().to_string();
-            let config_path = entry.path().join("sdk.yml");
+            let config_path = entry.path().join(SDK_CONFIG_FILE);
 
             // Only include directories that have sdk.yml
             if config_path.exists() {
@@ -493,7 +494,7 @@ pub(crate) fn install_os_deps_if_available(
     no_sudo: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Check if os-dependencies.yml exists
-    let os_deps_path = workspace_path.join("os-dependencies.yml");
+    let os_deps_path = workspace_path.join(OS_DEPS_FILE);
     if !os_deps_path.exists() {
         messages::status(
             "No os-dependencies.yml found in workspace, skipping OS dependencies installation",
@@ -594,7 +595,7 @@ pub(crate) fn install_pip_packages_if_available(
     };
 
     // Check if python-dependencies.yml exists
-    let python_deps_path = workspace_path.join("python-dependencies.yml");
+    let python_deps_path = workspace_path.join(PYTHON_DEPS_FILE);
     if !python_deps_path.exists() {
         messages::status(
             "No python-dependencies.yml found in workspace, skipping pip installation",
@@ -1003,7 +1004,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             }
             messages::success("Removed existing workspace directory");
         } else {
-            let marker_path = workspace_path.join(".workspace");
+            let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
             if marker_path.exists() {
                 messages::error(&format!(
                     "Workspace already initialized at {}",
@@ -1027,7 +1028,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     }
 
     // Copy config file to workspace as sdk.yml
-    let dest_config_path = workspace_path.join("sdk.yml");
+    let dest_config_path = workspace_path.join(SDK_CONFIG_FILE);
     if let Err(e) = fs::copy(&config_path, &dest_config_path) {
         messages::error(&format!("Error copying config to workspace: {}", e));
         return;
@@ -1046,7 +1047,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     // Always use target name as original identifier for both URL-based and local targets
     if let Err(e) = create_workspace_marker(CreateWorkspaceMarkerParams {
         workspace_path: &workspace_path,
-        config_name: "sdk.yml",
+        config_name: SDK_CONFIG_FILE,
         original_config_path: &config_path,
         mirror_path: &sdk_config.mirror,
         original_identifier: Some(&config.target),
@@ -1462,7 +1463,7 @@ pub(crate) fn list_targets_from_git_repo(git_url: &str) -> Result<Vec<String>, a
             .is_dir()
         {
             let target_name = entry.file_name().to_string_lossy().to_string();
-            let config_path = entry.path().join("sdk.yml");
+            let config_path = entry.path().join(SDK_CONFIG_FILE);
 
             // Only include directories that have sdk.yml
             if config_path.exists() {
@@ -1577,13 +1578,19 @@ mod tests {
         // Create valid target directories with sdk.yml
         let target1_dir = targets_dir.join("target1");
         fs::create_dir_all(&target1_dir).expect("Failed to create target1 dir");
-        fs::write(target1_dir.join("sdk.yml"), "mirror: /tmp/mirror\ngits: []")
-            .expect("Failed to write target1 config");
+        fs::write(
+            target1_dir.join(SDK_CONFIG_FILE),
+            "mirror: /tmp/mirror\ngits: []",
+        )
+        .expect("Failed to write target1 config");
 
         let target2_dir = targets_dir.join("target2");
         fs::create_dir_all(&target2_dir).expect("Failed to create target2 dir");
-        fs::write(target2_dir.join("sdk.yml"), "mirror: /tmp/mirror\ngits: []")
-            .expect("Failed to write target2 config");
+        fs::write(
+            target2_dir.join(SDK_CONFIG_FILE),
+            "mirror: /tmp/mirror\ngits: []",
+        )
+        .expect("Failed to write target2 config");
 
         // Create invalid target directory without sdk.yml
         let invalid_dir = targets_dir.join("invalid");
@@ -1643,8 +1650,11 @@ mod tests {
         // Create one valid target
         let valid_target_dir = targets_dir.join("valid-target");
         fs::create_dir_all(&valid_target_dir).expect("Failed to create valid target dir");
-        fs::write(valid_target_dir.join("sdk.yml"), "mirror: /tmp\ngits: []")
-            .expect("Failed to write valid config");
+        fs::write(
+            valid_target_dir.join(SDK_CONFIG_FILE),
+            "mirror: /tmp\ngits: []",
+        )
+        .expect("Failed to write valid config");
 
         // Test with invalid target name - this will fail because we're not using real git
         // but we can test the error handling
@@ -1710,7 +1720,7 @@ gits:
     url: https://github.com/test/repo.git
     commit: main
 "#;
-        let config_path = target_dir.join("sdk.yml");
+        let config_path = target_dir.join(SDK_CONFIG_FILE);
         fs::write(&config_path, config_content).expect("Failed to write config");
 
         // Test resolve_target_config with valid target name
@@ -1737,7 +1747,7 @@ gits:
     url: https://github.com/test/repo.git
     commit: main
 "#;
-        let config_path = target_dir.join("sdk.yml");
+        let config_path = target_dir.join(SDK_CONFIG_FILE);
         fs::write(&config_path, config_content).expect("Failed to write config");
 
         let result = resolve_target_config("test-target", &workspace_path);
@@ -1773,7 +1783,7 @@ gits:
         // Valid target with sdk.yml
         let valid_dir = targets_dir.join("valid-target");
         fs::create_dir_all(&valid_dir).expect("Failed to create valid dir");
-        fs::write(valid_dir.join("sdk.yml"), "mirror: /tmp\ngits: []")
+        fs::write(valid_dir.join(SDK_CONFIG_FILE), "mirror: /tmp\ngits: []")
             .expect("Failed to write valid config");
 
         // Directory without sdk.yml
@@ -1786,7 +1796,7 @@ gits:
         // Hidden directory (should be ignored)
         let hidden_dir = targets_dir.join(".hidden");
         fs::create_dir_all(&hidden_dir).expect("Failed to create hidden dir");
-        fs::write(hidden_dir.join("sdk.yml"), "mirror: /tmp\ngits: []")
+        fs::write(hidden_dir.join(SDK_CONFIG_FILE), "mirror: /tmp\ngits: []")
             .expect("Failed to write hidden config");
 
         let result = list_available_targets(&workspace_path);
