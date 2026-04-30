@@ -21,10 +21,10 @@ use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::download::{copy_yaml_files_to_workspace, process_copy_files};
 use dsdk_cli::workspace::{
     create_workspace_marker, download_config_from_url, expand_config_mirror_path, expand_env_vars,
-    expand_manifest_vars, get_current_workspace, get_default_source, get_home_dir, is_url,
-    load_config_with_user_overrides, resolve_target_config_from_git, resolve_variables,
-    CreateWorkspaceMarkerParams, OS_DEPS_FILE, PYTHON_DEPS_FILE, SDK_CONFIG_FILE,
-    WORKSPACE_MARKER_FILE,
+    expand_manifest_vars, get_default_source, get_home_dir, is_url,
+    load_config_with_user_overrides, require_workspace_config, resolve_target_config_from_git,
+    resolve_variables, CreateWorkspaceMarkerParams, OS_DEPS_FILE, PYTHON_DEPS_FILE,
+    SDK_CONFIG_FILE, WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{
     config, doc_manager, git_operations, messages, toolchain_manager, vscode_tasks_manager,
@@ -37,25 +37,13 @@ use std::process::Command;
 
 /// Handle documentation commands
 pub(crate) fn handle_docs_command(docs_command: &DocsCommand) {
-    // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
-
-    // Use sdk.yml from workspace root
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        messages::error("The workspace may be corrupted. Try running 'cim init' to reinitialize.");
-        return;
-    }
 
     // Ensure documentation dependencies are available before any docs operations
     if let Err(e) = ensure_docs_dependencies(&workspace_path) {
@@ -163,25 +151,13 @@ pub(crate) fn handle_docs_command(docs_command: &DocsCommand) {
 
 /// Add a new git repository entry to the config file
 pub(crate) fn handle_add_command(name: &str, url: &str, commit: &str) {
-    // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (_workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
-
-    // Use sdk.yml from workspace root
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        messages::error("The workspace may be corrupted. Try running 'cim init' to reinitialize.");
-        return;
-    }
 
     // First load the config to check for duplicates
     let sdk_config = match config::load_config(&config_path) {
@@ -254,25 +230,13 @@ pub(crate) fn handle_add_command(name: &str, url: &str, commit: &str) {
 
 /// Execute a command in each git repository workspace
 pub(crate) fn handle_foreach_command(command: &str, match_pattern: Option<&str>) {
-    // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
-
-    // Use sdk.yml from workspace root
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        messages::error("The workspace may be corrupted. Try running 'cim init' to reinitialize.");
-        return;
-    }
     messages::status(&format!(
         "Executing command in workspace: {}",
         workspace_path.display()

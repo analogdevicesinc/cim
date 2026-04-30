@@ -437,6 +437,24 @@ pub fn get_current_workspace() -> Result<PathBuf, String> {
     })
 }
 
+/// Resolve the current workspace and verify that sdk.yml exists.
+///
+/// Returns the workspace path and the config file path. This is a convenience
+/// function that combines the common pattern of getting the workspace, constructing
+/// the config path, and checking that it exists.
+pub fn require_workspace_config() -> Result<(PathBuf, PathBuf), String> {
+    let workspace_path = get_current_workspace()?;
+    let config_path = workspace_path.join(SDK_CONFIG_FILE);
+    if !config_path.exists() {
+        return Err(format!(
+            "sdk.yml not found in workspace root: {}. \
+             The workspace may be corrupted. Try running 'cim init' to reinitialize.",
+            workspace_path.display()
+        ));
+    }
+    Ok((workspace_path, config_path))
+}
+
 /// Check if a string represents a URL (http:// or https://)
 pub fn is_url(input: &str) -> bool {
     input.starts_with("http://") || input.starts_with("https://")

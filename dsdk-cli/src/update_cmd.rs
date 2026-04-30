@@ -18,8 +18,8 @@ use crate::init_cmd::{
 use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
 use dsdk_cli::workspace::{
-    expand_config_mirror_path, get_current_workspace, get_default_source, get_docker_temp_dir,
-    is_url, resolve_target_config_from_git, WorkspaceMarker, PYTHON_DEPS_FILE, SDK_CONFIG_FILE,
+    expand_config_mirror_path, get_default_source, get_docker_temp_dir, is_url,
+    require_workspace_config, resolve_target_config_from_git, WorkspaceMarker, PYTHON_DEPS_FILE,
     WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{config, docker_manager, git_operations, messages};
@@ -326,9 +326,8 @@ pub(crate) fn handle_update_command(
     // Set verbose mode for this command
     messages::set_verbose(verbose);
 
-    // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
             messages::error(&e);
             return;
@@ -336,17 +335,6 @@ pub(crate) fn handle_update_command(
     };
 
     messages::workspace(&workspace_path);
-
-    // Use sdk.yml from workspace root
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in {}",
-            workspace_path.display()
-        ));
-        messages::info("Try running 'cim init' to reinitialize");
-        return;
-    }
 
     let mut sdk_config = match config::load_config(&config_path) {
         Ok(config) => config,

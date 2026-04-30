@@ -14,10 +14,12 @@ use dsdk_cli::download::{
     DownloadConfig,
 };
 use dsdk_cli::workspace::{
-    copy_dir_recursive, expand_config_mirror_path, expand_env_vars, expand_manifest_vars,
-    get_current_workspace, is_url, resolve_config_source_dir_from_marker, resolve_variables,
-    SDK_CONFIG_FILE,
+    copy_dir_recursive, expand_config_mirror_path, expand_env_vars, expand_manifest_vars, is_url,
+    require_workspace_config, resolve_config_source_dir_from_marker, resolve_variables,
 };
+
+#[cfg(test)]
+use dsdk_cli::workspace::SDK_CONFIG_FILE;
 use dsdk_cli::{config, git_operations, messages};
 use regex::Regex;
 use std::fs;
@@ -32,24 +34,13 @@ pub(crate) fn handle_release_command(
     dry_run: bool,
 ) {
     // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
-
-    // Use sdk.yml from workspace root
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        messages::error("The workspace may be corrupted. Try running 'cim init' to reinitialize.");
-        return;
-    }
 
     // Validate arguments
     if tag.is_none() && !genconfig {
@@ -654,23 +645,13 @@ pub(crate) fn handle_copy_files_hash_command(
     messages::set_verbose(verbose);
 
     // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
-
-    // Use sdk.yml from workspace root (ignore user overrides for hash computation)
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        return;
-    }
 
     // Load SDK config (without user overrides)
     let mut sdk_config = match config::load_config(&config_path) {
@@ -1004,22 +985,13 @@ pub(crate) fn handle_toolchains_hash_command(
 ) {
     messages::set_verbose(verbose);
 
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (_workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
-
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        return;
-    }
 
     let sdk_config = match config::load_config(&config_path) {
         Ok(config) => config,
@@ -1189,24 +1161,13 @@ pub(crate) fn handle_sync_files_hash_command(
     // Set verbose mode for this command
     messages::set_verbose(verbose);
 
-    // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
-
-    // Use sdk.yml from workspace root
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        return;
-    }
 
     // Load SDK config (without user overrides for sync operation)
     let mut sdk_config = match config::load_config(&config_path) {

@@ -11,8 +11,8 @@
 
 use crate::cli::InstallCommand;
 use dsdk_cli::workspace::{
-    get_current_workspace, load_config_with_user_overrides, OS_DEPS_FILE, PYTHON_DEPS_FILE,
-    SDK_CONFIG_FILE,
+    get_current_workspace, load_config_with_user_overrides, require_workspace_config, OS_DEPS_FILE,
+    PYTHON_DEPS_FILE,
 };
 use dsdk_cli::{config, messages, toolchain_manager};
 use std::io;
@@ -20,25 +20,13 @@ use std::path::{Path, PathBuf};
 
 /// Install system dependencies based on the type specified
 pub(crate) fn handle_install_command(install_command: &InstallCommand) {
-    // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
-
-    // Use sdk.yml from workspace root
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        messages::error("The workspace may be corrupted. Try running 'cim init' to reinitialize.");
-        return;
-    }
 
     // Load SDK config with user config overrides applied
     let _sdk_config = match load_config_with_user_overrides(&config_path, false) {

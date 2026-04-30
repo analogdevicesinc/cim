@@ -9,34 +9,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use dsdk_cli::workspace::{get_current_workspace, SDK_CONFIG_FILE};
+use dsdk_cli::workspace::require_workspace_config;
 use dsdk_cli::{config, messages, vscode_tasks_manager};
 
 const WORKSPACE_VARIABLE: &str = "WORKSPACE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))";
 
 /// Generate a Makefile from the SDK configuration
 pub(crate) fn handle_makefile_command(no_dividers: bool) {
-    // Must be run from within a workspace
-    let workspace_path = match get_current_workspace() {
-        Ok(path) => path,
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
         Err(e) => {
-            messages::error(&format!("Error: {}", e));
+            messages::error(&e);
             return;
         }
     };
 
     let output_path = workspace_path.join("Makefile");
-
-    // Use sdk.yml from workspace root
-    let config_path = workspace_path.join(SDK_CONFIG_FILE);
-    if !config_path.exists() {
-        messages::error(&format!(
-            "sdk.yml not found in workspace root: {}",
-            workspace_path.display()
-        ));
-        messages::error("The workspace may be corrupted. Try running 'cim init' to reinitialize.");
-        return;
-    }
 
     let mut sdk_config = match config::load_config(&config_path) {
         Ok(config) => config,
