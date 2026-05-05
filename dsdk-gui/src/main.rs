@@ -79,7 +79,7 @@ impl CimInstallerApp {
             .to_string();
 
         let mut app = Self {
-            target_url: "https://github.com/analogdevicesinc/cim-manifests".to_string(),
+            target_url: "https://github.com/joabech/cim-manifests".to_string(),
             workspace_path: home_dir,
             force_wipe: false,
             use_mirror: true, // Default to using mirror
