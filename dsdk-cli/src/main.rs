@@ -56,7 +56,12 @@ fn main() {
     };
 
     match command {
-        Commands::ListTargets { source, target } => {
+        Commands::ListTargets {
+            source,
+            target,
+            verbose,
+        } => {
+            messages::set_verbose(*verbose);
             handle_list_targets_command(source.as_deref(), target.as_deref());
         }
         Commands::Init {

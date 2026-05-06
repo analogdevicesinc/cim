@@ -99,7 +99,63 @@ As of now we host a public manifest repository here [https://github.com/joabech/
 cim list-targets
 cim list-targets --source https://github.com/<path-to-a>/cim-manifests
 cim list-targets -t optee-qemu-v8  # show versions
+cim list-targets --source https://github.com/org/private-manifests --verbose  # diagnose auth issues
 ```
+
+### Authentication for private repositories
+
+`cim` uses **libgit2** for all git operations and does not invoke the system `git`
+binary. For public repositories no credentials are needed. For private repositories
+(e.g. GitHub Enterprise or private GitHub repos), `cim` resolves credentials in
+this order:
+
+1. **SSH agent** — works automatically if your SSH agent is running (`ssh-add -l`
+   should list a key).
+2. **SSH key files** — `~/.ssh/id_ed25519`, `id_rsa`, or `id_ecdsa` are tried in
+   order when the SSH agent has no matching key.
+3. **Git credential helper** — the `credential.helper` from `~/.gitconfig` is
+   invoked (macOS Keychain, Windows Credential Manager, Linux `store`/`cache`).
+4. **`GITHUB_TOKEN` environment variable** — set this as a fallback when the
+   credential helper is unavailable (common in CI).
+
+#### HTTPS authentication via credential helper
+
+The recommended approach for HTTPS access to a private GitHub or GitHub Enterprise
+host is to authenticate once through the `gh` CLI:
+
+```bash
+# Public GitHub
+gh auth login
+
+# GitHub Enterprise
+gh auth login --hostname github.your-company.com
+```
+
+This stores a token in your system credential store and configures
+`~/.gitconfig` so the credential helper (`gh auth git-credential`) is used
+automatically. `cim`'s libgit2 credential callback picks this up via
+`Cred::credential_helper()`.
+
+> **Tip:** If you see `Failed to shallow-clone ...` on a private repo, run with
+> `--verbose` to see which credential methods were attempted and whether the
+> helper returned a token:
+>
+> ```bash
+> cim list-targets --source https://github.com/org/private-manifests --verbose
+> ```
+
+#### GITHUB_TOKEN environment variable
+
+As an alternative — especially useful in CI — export a personal access token
+with `repo` scope:
+
+```bash
+export GITHUB_TOKEN=ghp_...
+cim list-targets --source https://github.com/org/private-manifests
+```
+
+`cim` checks `GITHUB_TOKEN` as a final fallback before giving up on HTTPS
+authentication.
 
 ### Initialize a Workspace
 
