@@ -66,6 +66,7 @@ fn make_remote_callbacks<'a>() -> RemoteCallbacks<'a> {
         // 1. SSH agent
         if allowed_types.contains(CredentialType::SSH_KEY) {
             if let Some(username) = username_from_url {
+                crate::messages::verbose("  credential: trying SSH agent");
                 if let Ok(cred) = Cred::ssh_key_from_agent(username) {
                     return Ok(cred);
                 }
@@ -75,6 +76,10 @@ fn make_remote_callbacks<'a>() -> RemoteCallbacks<'a> {
                     for key_name in &["id_ed25519", "id_rsa", "id_ecdsa"] {
                         let key_path = home.join(".ssh").join(key_name);
                         if key_path.exists() {
+                            crate::messages::verbose(&format!(
+                                "  credential: trying key file {}",
+                                key_path.display()
+                            ));
                             if let Ok(cred) = Cred::ssh_key(username, None, &key_path, None) {
                                 return Ok(cred);
                             }
@@ -86,6 +91,7 @@ fn make_remote_callbacks<'a>() -> RemoteCallbacks<'a> {
 
         // 3. Credential helper from .gitconfig (GCM, osxkeychain, store, etc.)
         if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            crate::messages::verbose("  credential: trying git credential helper");
             if let Ok(config) = git2::Config::open_default() {
                 if let Ok(cred) = Cred::credential_helper(&config, url, username_from_url) {
                     return Ok(cred);
@@ -98,6 +104,17 @@ fn make_remote_callbacks<'a>() -> RemoteCallbacks<'a> {
             return Cred::default();
         }
 
+        // 5. GITHUB_TOKEN environment variable (CI / enterprise escape hatch)
+        if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+                crate::messages::verbose("  credential: using GITHUB_TOKEN env var");
+                if let Ok(cred) = Cred::userpass_plaintext("git", &token) {
+                    return Ok(cred);
+                }
+            }
+        }
+
+        crate::messages::verbose("  credential: no suitable credentials found");
         Err(git2::Error::from_str("no suitable credentials found"))
     });
     callbacks
@@ -235,13 +252,25 @@ pub fn clone_repo_shallow(url: &str, path: &Path, depth: u32) -> Result<GitResul
     let mut builder = git2::build::RepoBuilder::new();
     builder.fetch_options(fetch_opts);
 
-    builder.clone(url, path).with_context(|| {
-        format!(
-            "Failed to shallow-clone {} (depth {}) to {}",
-            url,
-            depth,
-            path.display()
-        )
+    builder.clone(url, path).map_err(|e| {
+        if crate::messages::is_verbose() {
+            anyhow!(
+                "Failed to shallow-clone {} (depth {}) to {}: {} (code {:?}, class {:?})",
+                url,
+                depth,
+                path.display(),
+                e.message(),
+                e.code(),
+                e.class()
+            )
+        } else {
+            anyhow!(
+                "Failed to shallow-clone {} (depth {}) to {}",
+                url,
+                depth,
+                path.display()
+            )
+        }
     })?;
 
     Ok(ok_result())

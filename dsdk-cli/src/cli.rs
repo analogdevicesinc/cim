@@ -47,6 +47,9 @@ pub enum Commands {
             help = "Show available versions for this target"
         )]
         target: Option<String>,
+        /// Show detailed output (credential attempts, git operations)
+        #[arg(long)]
+        verbose: bool,
     },
     /// Initialize a new workspace from a configuration file
     Init {
@@ -548,9 +551,14 @@ mod tests {
 
         let cli = cli_result.unwrap();
         match &cli.command {
-            Some(Commands::ListTargets { source, target }) => {
+            Some(Commands::ListTargets {
+                source,
+                target,
+                verbose,
+            }) => {
                 assert!(source.is_none());
                 assert!(target.is_none());
+                assert!(!verbose);
             }
             _ => panic!("Expected ListTargets command"),
         }
@@ -562,9 +570,14 @@ mod tests {
 
         let cli = cli_result.unwrap();
         match &cli.command {
-            Some(Commands::ListTargets { source, target }) => {
+            Some(Commands::ListTargets {
+                source,
+                target,
+                verbose,
+            }) => {
                 assert_eq!(source, &Some("/path/to/source".to_string()));
                 assert!(target.is_none());
+                assert!(!verbose);
             }
             _ => panic!("Expected ListTargets command"),
         }
