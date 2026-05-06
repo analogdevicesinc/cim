@@ -48,6 +48,61 @@ fn home_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+/// Invoke `git credential fill` with the given URL and return
+/// `(username, password)` on success.
+///
+/// libgit2's `Cred::credential_helper` only reads the global
+/// `credential.helper` config key and ignores URL-specific
+/// `[credential "https://..."]` sections.  Running the system `git`
+/// binary's credential subsystem handles URL matching, SAML SSO tokens,
+/// and all credential helpers correctly.  This is a best-effort
+/// fallback: if `git` is not installed or returns nothing, we return
+/// `None` and let the caller try the next method.
+fn credential_via_git_binary(url: &str) -> Option<(String, String)> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    // Extract protocol, host, and path so that URL-specific credential
+    // sections like [credential "https://github.com/org/"] are matched.
+    let (protocol, rest) = url.split_once("://")?;
+    let host_end = rest.find('/').unwrap_or(rest.len());
+    let host = &rest[..host_end];
+    let path = rest.get(host_end + 1..).filter(|p| !p.is_empty());
+
+    let input = match path {
+        Some(p) => format!("protocol={protocol}\nhost={host}\npath={p}\n\n"),
+        None => format!("protocol={protocol}\nhost={host}\n\n"),
+    };
+
+    let mut child = Command::new("git")
+        .args(["credential", "fill"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    child.stdin.as_mut()?.write_all(input.as_bytes()).ok()?;
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let mut username = None;
+    let mut password = None;
+    for line in stdout.lines() {
+        if let Some(u) = line.strip_prefix("username=") {
+            username = Some(u.to_string());
+        } else if let Some(p) = line.strip_prefix("password=") {
+            password = Some(p.to_string());
+        }
+    }
+    Some((username?, password?))
+}
+
 /// Build `RemoteCallbacks` with credential handling.
 ///
 /// libgit2 does not automatically resolve credentials the way the git
@@ -57,12 +112,33 @@ fn home_dir() -> Option<std::path::PathBuf> {
 /// The callback inspects `allowed_types` and tries, in order:
 /// 1. SSH agent (works on Linux, macOS, Windows with OpenSSH agent)
 /// 2. SSH key from default locations (~/.ssh/id_ed25519, id_rsa, …)
-/// 3. `credential.helper` from `.gitconfig` (handles OS-specific stores:
-///    macOS Keychain, Windows GCM, Linux store/cache)
-/// 4. Default credentials (e.g. NTLM/Kerberos for local URLs)
+/// 3. `credential.helper` via libgit2 — supports host-level URL sections
+///    (e.g. `[credential "https://github.com"]`) and shell command helpers
+///    (`!`-prefix), but does not match path-specific sections such as
+///    `[credential "https://github.com/org/"]`
+/// 4. `git credential fill` via system git binary — full credential support
+///    including path-specific URL sections, all helper types, and SAML SSO
+/// 5. `GITHUB_TOKEN` environment variable (CI / enterprise escape hatch)
+/// 6. Default credentials (e.g. NTLM/Kerberos for local URLs)
 fn make_remote_callbacks<'a>() -> RemoteCallbacks<'a> {
     let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|url, username_from_url, allowed_types| {
+    // libgit2 re-invokes the credential callback each time the server
+    // rejects the credentials we returned.  Without this guard that
+    // produces an infinite loop until libgit2 gives up with "too many
+    // authentication replays".  We try all methods exactly once; if the
+    // server still rejects them we bail out immediately on the second call.
+    let mut already_tried = false;
+    callbacks.credentials(move |url, username_from_url, allowed_types| {
+        if already_tried {
+            crate::messages::verbose(
+                "  credential: previous credentials were rejected by the server",
+            );
+            return Err(git2::Error::from_str(
+                "authentication failed (credentials rejected by server)",
+            ));
+        }
+        already_tried = true;
+
         // 1. SSH agent
         if allowed_types.contains(CredentialType::SSH_KEY) {
             if let Some(username) = username_from_url {
@@ -92,19 +168,52 @@ fn make_remote_callbacks<'a>() -> RemoteCallbacks<'a> {
         // 3. Credential helper from .gitconfig (GCM, osxkeychain, store, etc.)
         if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) {
             crate::messages::verbose("  credential: trying git credential helper");
-            if let Ok(config) = git2::Config::open_default() {
-                if let Ok(cred) = Cred::credential_helper(&config, url, username_from_url) {
-                    return Ok(cred);
-                }
+            match git2::Config::open_default() {
+                Ok(config) => match Cred::credential_helper(&config, url, username_from_url) {
+                    Ok(cred) => return Ok(cred),
+                    Err(e) => crate::messages::verbose(&format!(
+                        "  credential: helper failed: {} (code {:?}, class {:?})",
+                        e.message(),
+                        e.code(),
+                        e.class()
+                    )),
+                },
+                Err(e) => crate::messages::verbose(&format!(
+                    "  credential: failed to open git config: {}",
+                    e.message()
+                )),
             }
         }
 
-        // 4. Default credentials (e.g. for local file:// URLs)
+        // 4. system `git credential fill` — handles URL-specific credential
+        //    sections that libgit2's own helper lookup ignores
+        if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            crate::messages::verbose("  credential: trying system git credential fill");
+            if let Some((username, password)) = credential_via_git_binary(url) {
+                crate::messages::verbose(&format!(
+                    "  credential: git credential fill returned username={}",
+                    username
+                ));
+                match Cred::userpass_plaintext(&username, &password) {
+                    Ok(cred) => return Ok(cred),
+                    Err(e) => crate::messages::verbose(&format!(
+                        "  credential: git credential fill failed: {}",
+                        e.message()
+                    )),
+                }
+            } else {
+                crate::messages::verbose(
+                    "  credential: git binary unavailable or returned no credentials",
+                );
+            }
+        }
+
+        // 5. Default credentials (e.g. for local file:// URLs)
         if allowed_types.contains(CredentialType::DEFAULT) {
             return Cred::default();
         }
 
-        // 5. GITHUB_TOKEN environment variable (CI / enterprise escape hatch)
+        // 6. GITHUB_TOKEN environment variable (CI / enterprise escape hatch)
         if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) {
             if let Ok(token) = std::env::var("GITHUB_TOKEN") {
                 crate::messages::verbose("  credential: using GITHUB_TOKEN env var");
