@@ -422,11 +422,13 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
     }
 
     // Add individual git targets
-    if !sdk_config.gits().is_empty() && dividers {
-        makefile.push_str(&makefile_divider("Git repository targets"));
-    }
+    let repo_targets_start = makefile.len();
     for git in sdk_config.gits() {
         add_makefile_target(&mut makefile, git);
+    }
+    if repo_targets_start < makefile.len() && dividers {
+        let divider = makefile_divider("Git repository targets");
+        makefile.insert_str(repo_targets_start, &divider);
     }
 
     makefile
@@ -457,8 +459,17 @@ pub(crate) fn render_command_for_makefile(cmd: &str) -> String {
     result
 }
 
-/// Add a single target to the Makefile
-pub(crate) fn add_makefile_target(makefile: &mut String, git: &config::GitConfig) {
+/// Add a single per-repo target to the Makefile.
+///
+/// Returns `true` if anything was emitted. When the repo has neither
+/// `build:` commands nor `build_depends_on:` the function is a no-op
+/// so that empty stubs don't clutter the generated Makefile.
+pub(crate) fn add_makefile_target(makefile: &mut String, git: &config::GitConfig) -> bool {
+    // Skip repos that have no build configuration at all
+    if git.build.is_none() && git.build_depends_on.is_none() {
+        return false;
+    }
+
     // Add .PHONY declaration for this target
     makefile.push_str(&format!(".PHONY: {}\n", git.name));
 
@@ -494,6 +505,7 @@ pub(crate) fn add_makefile_target(makefile: &mut String, git: &config::GitConfig
         makefile.push_str(&format!("\t@echo Building {}\n", git.name));
     }
     makefile.push('\n');
+    true
 }
 
 /// Add a generic sdk-<phase> target to the Makefile.
@@ -882,10 +894,12 @@ mod tests {
             documentation_dir: None,
         };
 
-        add_makefile_target(&mut makefile, &git_config);
+        let emitted = add_makefile_target(&mut makefile, &git_config);
 
-        assert!(makefile.contains("simple-repo:"));
-        assert!(makefile.contains("\t@echo Building simple-repo"));
+        // When a repo has neither build: nor build_depends_on:,
+        // nothing is emitted to keep the Makefile clean.
+        assert!(!emitted);
+        assert!(makefile.is_empty());
     }
 
     #[test]
