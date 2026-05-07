@@ -1236,6 +1236,7 @@ mod tests {
             build: None,
             flash: None,
             variables: None,
+            phases: None,
             toolchains: None,
             install: None,
             copy_files: None,

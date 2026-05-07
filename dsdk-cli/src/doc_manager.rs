@@ -763,6 +763,7 @@ mod tests {
             build: None,
             flash: None,
             variables: None,
+            phases: None,
             direnv: None,
         };
 

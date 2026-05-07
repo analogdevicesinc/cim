@@ -874,6 +874,7 @@ mod tests {
             clean: None,
             flash: None,
             variables: None,
+            phases: None,
             direnv: None,
         };
 
@@ -901,6 +902,7 @@ mod tests {
             clean: None,
             flash: None,
             variables: None,
+            phases: None,
             direnv: None,
         };
 
@@ -1003,6 +1005,7 @@ mod tests {
             clean: None,
             flash: None,
             variables: None,
+            phases: None,
             direnv: None,
         };
 

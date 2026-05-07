@@ -1175,6 +1175,7 @@ pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
                     build: full_sdk_config.build.clone(),
                     flash: full_sdk_config.flash.clone(),
                     variables: full_sdk_config.variables.clone(),
+                    phases: full_sdk_config.phases.clone(),
                     direnv: full_sdk_config.direnv.clone(),
                 }
             } else {

@@ -1252,6 +1252,18 @@ impl config::SdkConfigCore for FilteredSdkConfig {
         &None
     }
 
+    fn phases(&self) -> Vec<String> {
+        config::default_phases()
+    }
+
+    fn phase_target(&self, phase: &str) -> Option<&config::SdkTarget> {
+        match phase {
+            "envsetup" => self.envsetup.as_ref(),
+            "test" => self.test.as_ref(),
+            _ => None,
+        }
+    }
+
     fn direnv(&self) -> Option<&config::DirenvConfig> {
         None
     }

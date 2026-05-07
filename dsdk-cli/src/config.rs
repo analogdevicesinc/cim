@@ -290,6 +290,17 @@ impl DirenvConfig {
 }
 
 /// Trait for SDK configurations that provide core repository and mirror information
+/// Default phases used when `phases:` is absent from sdk.yml.
+pub fn default_phases() -> Vec<String> {
+    vec![
+        "envsetup".to_string(),
+        "build".to_string(),
+        "clean".to_string(),
+        "test".to_string(),
+        "flash".to_string(),
+    ]
+}
+
 pub trait SdkConfigCore {
     fn mirror(&self) -> &PathBuf;
     fn gits(&self) -> &Vec<GitConfig>;
@@ -298,6 +309,16 @@ pub trait SdkConfigCore {
     /// Workspace-relative directory in which per-git `<name>.mk` fragments are
     /// auto-discovered.  When `None` the default location `build/` is used.
     fn build_folder(&self) -> &Option<String>;
+    /// Ordered list of phase names.  Controls which `sdk-<phase>` targets are
+    /// generated and which `<repo>-<phase>` overlay targets are discovered.
+    ///
+    /// The five standard phases (`envsetup`, `build`, `clean`, `test`, `flash`)
+    /// are always included.  The `phases:` key in `sdk.yml` is used to add
+    /// *extra* custom phases (e.g. `deploy`, `lint`) on top of the standard set.
+    fn phases(&self) -> Vec<String>;
+    /// Look up the top-level SDK target for a given phase name.
+    /// Returns `None` when the phase is not defined in `sdk.yml`.
+    fn phase_target(&self, phase: &str) -> Option<&SdkTarget>;
     fn envsetup(&self) -> &Option<SdkTarget>;
     fn test(&self) -> &Option<SdkTarget>;
     fn clean(&self) -> &Option<SdkTarget>;
@@ -624,6 +645,12 @@ pub struct SdkConfig {
     /// In YAML commands, use `${{ VAR }}` to reference these variables.
     #[serde(default)]
     pub variables: Option<HashMap<String, String>>,
+    /// Ordered list of phase names.
+    /// Controls which `sdk-<phase>` targets are generated and which
+    /// `<repo>-<phase>` overlay targets are auto-discovered.
+    /// When absent the default `[envsetup, build, clean, test, flash]` is used.
+    #[serde(default)]
+    pub phases: Option<Vec<String>>,
     /// Optional direnv integration — generates .envrc and creates a Python venv.
     #[serde(default)]
     pub direnv: Option<DirenvConfig>,
@@ -648,6 +675,29 @@ impl SdkConfigCore for SdkConfig {
 
     fn build_folder(&self) -> &Option<String> {
         &self.build_folder
+    }
+
+    fn phases(&self) -> Vec<String> {
+        let mut result = default_phases();
+        if let Some(extra) = &self.phases {
+            for phase in extra {
+                if !result.contains(phase) {
+                    result.push(phase.clone());
+                }
+            }
+        }
+        result
+    }
+
+    fn phase_target(&self, phase: &str) -> Option<&SdkTarget> {
+        match phase {
+            "envsetup" => self.envsetup.as_ref(),
+            "test" => self.test.as_ref(),
+            "clean" => self.clean.as_ref(),
+            "build" => self.build.as_ref(),
+            "flash" => self.flash.as_ref(),
+            _ => None,
+        }
     }
 
     fn envsetup(&self) -> &Option<SdkTarget> {
