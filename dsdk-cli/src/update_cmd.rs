@@ -13,10 +13,11 @@ use crate::cli::{Cli, DockerCommand};
 use crate::init_cmd::{
     compile_match_regex, create_filtered_sdk_config, filter_git_configs,
     get_latest_commit_for_branch, is_branch_reference, list_available_targets,
-    list_target_versions, list_targets_from_source, resolve_target_config,
+    list_target_versions, list_targets_from_source, resolve_target_config, setup_direnv,
 };
 use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
+use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::workspace::{
     expand_config_mirror_path, get_default_source, get_docker_temp_dir, is_url,
     require_workspace_config, resolve_target_config_from_git, WorkspaceMarker, PYTHON_DEPS_FILE,
@@ -432,6 +433,15 @@ pub(crate) fn handle_update_command(
 
         // Update workspace repositories (single-threaded to avoid conflicts)
         update_workspace_repos(&filtered_config, &workspace_path, false, false);
+    }
+
+    // Idempotently set up direnv if configured and .envrc is not yet present.
+    if let Some(direnv_cfg) = sdk_config.direnv() {
+        if direnv_cfg.used && !workspace_path.join(".envrc").exists() {
+            if let Err(e) = setup_direnv(&workspace_path, direnv_cfg) {
+                messages::info(&format!("Note: direnv setup encountered an issue: {}", e));
+            }
+        }
     }
 
     // Print any available update notice after the main work is done
@@ -1165,6 +1175,7 @@ pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
                     build: full_sdk_config.build.clone(),
                     flash: full_sdk_config.flash.clone(),
                     variables: full_sdk_config.variables.clone(),
+                    direnv: full_sdk_config.direnv.clone(),
                 }
             } else {
                 // No filtering, use original config

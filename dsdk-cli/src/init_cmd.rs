@@ -556,6 +556,37 @@ pub(crate) struct InitConfig<'a> {
     pub(crate) _cert_validation: Option<&'a str>,
 }
 
+/// Write .envrc and trust the workspace with direnv.
+///
+/// Venv creation is intentionally left to `install_pip_packages_if_available` (which runs as
+/// Step 2, before `make install-all`) so that symlink semantics are respected.  The .envrc
+/// itself contains the creation guard for users who activate the workspace via direnv directly.
+pub(crate) fn setup_direnv(
+    workspace_path: &std::path::Path,
+    direnv_cfg: &dsdk_cli::config::DirenvConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let venv = direnv_cfg.venv_path_or_default();
+
+    let envrc_content = format!(
+        "if [ ! -d \"{venv}\" ] ; then\n  python3 -m venv {venv}\nfi\n. {venv}/bin/activate\n"
+    );
+    std::fs::write(workspace_path.join(".envrc"), &envrc_content)?;
+
+    // Trust the workspace with direnv (best-effort; direnv may not be installed yet).
+    let _ = std::process::Command::new("direnv")
+        .arg("allow")
+        .arg(".")
+        .current_dir(workspace_path)
+        .status();
+
+    messages::status("");
+    messages::success("direnv: wrote .envrc");
+    messages::status("   To activate direnv automatically, add to your ~/.bashrc (or ~/.zshrc):");
+    messages::status("    eval \"$(direnv hook bash)\"   # replace 'bash' with zsh/fish as needed");
+
+    Ok(())
+}
+
 /// Initialize a new workspace
 pub(crate) fn handle_init_command(config: InitConfig) {
     // Start background version check so it runs concurrently with the rest of init
@@ -1007,6 +1038,16 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             let _ = clipboard.set_text(workspace_path.display().to_string());
         }
 
+        // Set up direnv (write .envrc + create venv) before any install targets run,
+        // so install commands that activate the venv find it ready.
+        if let Some(direnv_cfg) = sdk_config.direnv() {
+            if direnv_cfg.used {
+                if let Err(e) = setup_direnv(&workspace_path, direnv_cfg) {
+                    messages::info(&format!("Note: direnv setup encountered an issue: {}", e));
+                }
+            }
+        }
+
         // Determine if we should run installation steps
         // --full implies --install
         let should_install = config.install || config.full;
@@ -1209,6 +1250,10 @@ impl config::SdkConfigCore for FilteredSdkConfig {
 
     fn variables(&self) -> &Option<std::collections::HashMap<String, String>> {
         &None
+    }
+
+    fn direnv(&self) -> Option<&config::DirenvConfig> {
+        None
     }
 }
 

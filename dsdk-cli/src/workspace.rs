@@ -1159,6 +1159,7 @@ mod tests {
             copy_files: None,
             mirror: PathBuf::from("$TEST_MIRROR_VAR/repos"),
             gits: vec![],
+            direnv: None,
         };
 
         let expanded = expand_config_mirror_path(&test_config);
