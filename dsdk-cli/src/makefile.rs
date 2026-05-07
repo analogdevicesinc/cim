@@ -175,6 +175,29 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
     makefile.push_str(WORKSPACE_VARIABLE);
     makefile.push_str("\n\n");
 
+    // Auto-generate _DIR variables from gits section
+    let git_dir_vars = match dsdk_cli::workspace::generate_git_dir_vars(
+        sdk_config.gits(),
+        sdk_config.variables().as_ref(),
+    ) {
+        Ok(dv) => dv,
+        Err(e) => {
+            dsdk_cli::messages::error(&e);
+            std::collections::HashMap::new()
+        }
+    };
+
+    if !git_dir_vars.is_empty() {
+        makefile.push_str("# Auto-generated directory variables from gits\n");
+        let mut sorted_dir_vars: Vec<_> = git_dir_vars.iter().collect();
+        sorted_dir_vars.sort_by_key(|(k, _)| k.as_str());
+        for (key, value) in sorted_dir_vars {
+            let make_value = render_command_for_makefile(value);
+            makefile.push_str(&format!("{} := {}\n", key, make_value));
+        }
+        makefile.push('\n');
+    }
+
     // Emit manifest variables as Make ?= assignments so host env vars override them
     let vars: std::collections::HashMap<String, String> =
         if let Some(raw_vars) = sdk_config.variables() {
@@ -2656,5 +2679,192 @@ mod tests {
                 panic!("Expected Structured variant for exclude-only YAML form");
             }
         }
+    }
+
+    #[test]
+    fn test_generate_makefile_with_auto_dir_vars() {
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![
+                config::GitConfig {
+                    name: "u-boot".to_string(),
+                    url: "https://example.com/u-boot.git".to_string(),
+                    commit: "master".to_string(),
+                    build_depends_on: None,
+                    git_depends_on: None,
+                    build: None,
+                    documentation_dir: None,
+                },
+                config::GitConfig {
+                    name: "linux-stable".to_string(),
+                    url: "https://example.com/linux.git".to_string(),
+                    commit: "v6.1".to_string(),
+                    build_depends_on: None,
+                    git_depends_on: None,
+                    build: None,
+                    documentation_dir: None,
+                },
+            ],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+            direnv: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, None);
+        assert!(
+            makefile.contains("U_BOOT_DIR := $(WORKSPACE)/u-boot"),
+            "Missing U_BOOT_DIR in:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("LINUX_STABLE_DIR := $(WORKSPACE)/linux-stable"),
+            "Missing LINUX_STABLE_DIR in:\n{}",
+            makefile
+        );
+        assert!(
+            makefile.contains("# Auto-generated directory variables from gits"),
+            "Missing auto-generated comment in:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_generate_makefile_dir_vars_before_user_vars() {
+        let mut user_vars = std::collections::HashMap::new();
+        user_vars.insert(
+            "MY_VAR".to_string(),
+            "${{ WORKSPACE }}/something".to_string(),
+        );
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "master".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(user_vars),
+            direnv: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, None);
+        let dir_var_pos = makefile
+            .find("U_BOOT_DIR :=")
+            .expect("U_BOOT_DIR not found");
+        let user_var_pos = makefile.find("MY_VAR ?=").expect("MY_VAR not found");
+        assert!(
+            dir_var_pos < user_var_pos,
+            "Auto-generated DIR vars should appear before user-defined vars"
+        );
+    }
+
+    #[test]
+    fn test_generate_makefile_dir_var_user_override_suppresses() {
+        let mut user_vars = std::collections::HashMap::new();
+        user_vars.insert(
+            "U_BOOT_DIR".to_string(),
+            "${{ WORKSPACE }}/custom/u-boot".to_string(),
+        );
+
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "master".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: Some(user_vars),
+            direnv: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, None);
+        // Should NOT have auto-generated section since user overrides
+        assert!(
+            !makefile.contains("# Auto-generated directory variables from gits"),
+            "Auto-generated section should be suppressed when user overrides all DIR vars"
+        );
+        // User-defined var should be present with ?= syntax
+        assert!(
+            makefile.contains("U_BOOT_DIR ?= $(WORKSPACE)/custom/u-boot"),
+            "User-defined U_BOOT_DIR should use ?= syntax:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_generate_makefile_dir_var_uses_immediate_assignment() {
+        let config = config::SdkConfig {
+            toolchains: None,
+            install: None,
+            mirror: PathBuf::from("/tmp/mirror"),
+            gits: vec![config::GitConfig {
+                name: "zephyrproject/zephyr".to_string(),
+                url: "https://example.com/zephyr.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            }],
+            copy_files: None,
+            makefile_include: None,
+            build_folder: None,
+            envsetup: None,
+            test: None,
+            clean: None,
+            build: None,
+            flash: None,
+            variables: None,
+            direnv: None,
+        };
+
+        let makefile = generate_makefile_content(&config, false, None);
+        assert!(
+            makefile.contains("ZEPHYR_DIR := $(WORKSPACE)/zephyrproject/zephyr"),
+            "Expected path-based name to produce correct DIR var:\n{}",
+            makefile
+        );
+        // Verify it uses := not ?=
+        assert!(
+            !makefile.contains("ZEPHYR_DIR ?="),
+            "Auto-generated DIR vars should use := not ?="
+        );
     }
 }

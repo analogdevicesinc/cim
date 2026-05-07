@@ -667,6 +667,75 @@ pub fn resolve_variables(
         .collect()
 }
 
+/// Convert a git entry name to its `_DIR` variable name.
+///
+/// Rules:
+/// - Take the last path component (e.g., "zephyrproject/zephyr" -> "zephyr")
+/// - Uppercase the result
+/// - Replace hyphens and dots with underscores
+/// - Append `_DIR`
+///
+/// # Examples
+///
+/// ```
+/// use dsdk_cli::workspace::git_name_to_dir_var;
+///
+/// assert_eq!(git_name_to_dir_var("u-boot"), "U_BOOT_DIR");
+/// assert_eq!(git_name_to_dir_var("linux-stable"), "LINUX_STABLE_DIR");
+/// assert_eq!(git_name_to_dir_var("zephyrproject/zephyr"), "ZEPHYR_DIR");
+/// ```
+pub fn git_name_to_dir_var(name: &str) -> String {
+    let component = name.rsplit('/').next().unwrap_or(name);
+    let upper = component.to_uppercase();
+    let sanitized = upper.replace(['-', '.'], "_");
+    format!("{}_DIR", sanitized)
+}
+
+/// Generate auto-derived `_DIR` variables from git entries.
+///
+/// Returns a map of variable names (e.g., `U_BOOT_DIR`) to their raw values
+/// (e.g., `${{ WORKSPACE }}/u-boot`). The values use the `${{ WORKSPACE }}`
+/// placeholder so they can be expanded by [`expand_manifest_vars`] or rendered
+/// into Make syntax by `render_command_for_makefile`.
+///
+/// User-defined variables (from the `variables:` section) take precedence:
+/// if a user already defines `U_BOOT_DIR`, the auto-generated one is skipped.
+///
+/// Returns `Err` with a descriptive message if two git entries produce the
+/// same variable name (a naming conflict).
+pub fn generate_git_dir_vars(
+    gits: &[config::GitConfig],
+    user_vars: Option<&std::collections::HashMap<String, String>>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut dir_vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for git in gits {
+        let var_name = git_name_to_dir_var(&git.name);
+
+        if let Some(uv) = user_vars {
+            if uv.contains_key(&var_name) {
+                continue;
+            }
+        }
+
+        if let Some(existing_value) = dir_vars.get(&var_name) {
+            let existing_name = existing_value
+                .strip_prefix("${{ WORKSPACE }}/")
+                .unwrap_or(existing_value);
+            return Err(format!(
+                "Git name conflict: '{}' and '{}' both produce variable '{}'. \
+                 Resolve by adding an explicit entry in the 'variables:' section.",
+                existing_name, git.name, var_name
+            ));
+        }
+
+        let value = format!("${{{{ WORKSPACE }}}}/{}", git.name);
+        dir_vars.insert(var_name, value);
+    }
+
+    Ok(dir_vars)
+}
+
 /// Expand `${{ VAR }}` manifest variable references in a string.
 ///
 /// Looks up each `VAR` in the provided resolved variables map.  Unknown
@@ -798,13 +867,26 @@ pub fn load_config_with_user_overrides(
 /// Expand `${{ VAR }}` manifest variables in all relevant fields of an SdkConfig.
 ///
 /// Expands variables in git URLs, toolchain URLs/destinations/names, and
-/// copy_files source/dest fields. Only operates when the config has a
-/// `variables` section defined.
+/// copy_files source/dest fields. The expansion context includes both
+/// user-defined variables from the `variables:` section and auto-generated
+/// `_DIR` variables derived from git entry names.
 pub fn expand_manifest_vars_in_config(sdk_config: &mut config::SdkConfig) {
-    let Some(raw_vars) = sdk_config.variables.clone() else {
-        return;
+    let mut vars = if let Some(ref raw_vars) = sdk_config.variables {
+        resolve_variables(raw_vars)
+    } else {
+        std::collections::HashMap::new()
     };
-    let vars = resolve_variables(&raw_vars);
+
+    // Merge auto-generated DIR vars (user-defined take precedence)
+    if let Ok(dir_vars) = generate_git_dir_vars(&sdk_config.gits, sdk_config.variables.as_ref()) {
+        for (k, v) in dir_vars {
+            vars.entry(k).or_insert(v);
+        }
+    }
+
+    if vars.is_empty() {
+        return;
+    }
 
     for git in &mut sdk_config.gits {
         git.url = expand_manifest_vars(&git.url, &vars);
@@ -1395,5 +1477,108 @@ mod tests {
         assert!(result.contains("repo2"));
         // Should end with the entry (no trailing section to preserve)
         assert!(result.ends_with("def"));
+    }
+
+    #[test]
+    fn test_git_name_to_dir_var_simple() {
+        assert_eq!(git_name_to_dir_var("u-boot"), "U_BOOT_DIR");
+        assert_eq!(git_name_to_dir_var("linux-stable"), "LINUX_STABLE_DIR");
+        assert_eq!(git_name_to_dir_var("optee_os"), "OPTEE_OS_DIR");
+    }
+
+    #[test]
+    fn test_git_name_to_dir_var_with_path() {
+        assert_eq!(git_name_to_dir_var("zephyrproject/zephyr"), "ZEPHYR_DIR");
+        assert_eq!(git_name_to_dir_var("foo/bar/baz"), "BAZ_DIR");
+    }
+
+    #[test]
+    fn test_git_name_to_dir_var_with_dots() {
+        assert_eq!(git_name_to_dir_var("my.project"), "MY_PROJECT_DIR");
+        assert_eq!(git_name_to_dir_var("v2.0-release"), "V2_0_RELEASE_DIR");
+    }
+
+    #[test]
+    fn test_generate_git_dir_vars_basic() {
+        let gits = vec![
+            config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "master".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+            config::GitConfig {
+                name: "linux-stable".to_string(),
+                url: "https://example.com/linux.git".to_string(),
+                commit: "v6.1".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+        ];
+
+        let result = generate_git_dir_vars(&gits, None).unwrap();
+        assert_eq!(result.get("U_BOOT_DIR").unwrap(), "${{ WORKSPACE }}/u-boot");
+        assert_eq!(
+            result.get("LINUX_STABLE_DIR").unwrap(),
+            "${{ WORKSPACE }}/linux-stable"
+        );
+    }
+
+    #[test]
+    fn test_generate_git_dir_vars_conflict() {
+        let gits = vec![
+            config::GitConfig {
+                name: "foo/zephyr".to_string(),
+                url: "https://example.com/foo/zephyr.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+            config::GitConfig {
+                name: "bar/zephyr".to_string(),
+                url: "https://example.com/bar/zephyr.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+            },
+        ];
+
+        let result = generate_git_dir_vars(&gits, None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("foo/zephyr"));
+        assert!(err.contains("bar/zephyr"));
+        assert!(err.contains("ZEPHYR_DIR"));
+    }
+
+    #[test]
+    fn test_generate_git_dir_vars_user_override() {
+        let gits = vec![config::GitConfig {
+            name: "u-boot".to_string(),
+            url: "https://example.com/u-boot.git".to_string(),
+            commit: "master".to_string(),
+            build_depends_on: None,
+            git_depends_on: None,
+            build: None,
+            documentation_dir: None,
+        }];
+
+        let mut user_vars = std::collections::HashMap::new();
+        user_vars.insert(
+            "U_BOOT_DIR".to_string(),
+            "${{ WORKSPACE }}/custom/u-boot".to_string(),
+        );
+
+        let result = generate_git_dir_vars(&gits, Some(&user_vars)).unwrap();
+        assert!(!result.contains_key("U_BOOT_DIR"));
     }
 }
