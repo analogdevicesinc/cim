@@ -874,6 +874,7 @@ mod tests {
             clean: None,
             flash: None,
             variables: None,
+            direnv: None,
         };
 
         assert!(DockerManager::has_ssh_repositories(&config_with_ssh));
@@ -900,6 +901,7 @@ mod tests {
             clean: None,
             flash: None,
             variables: None,
+            direnv: None,
         };
 
         assert!(!DockerManager::has_ssh_repositories(&config_no_ssh));
@@ -1001,6 +1003,7 @@ mod tests {
             clean: None,
             flash: None,
             variables: None,
+            direnv: None,
         };
 
         let os_deps = OsDependencies {

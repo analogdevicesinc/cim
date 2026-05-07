@@ -259,6 +259,21 @@ impl MakefileInclude {
     }
 }
 
+/// Configuration for direnv integration in the workspace.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DirenvConfig {
+    pub used: bool,
+    /// Python venv path relative to workspace root (default: ".venv")
+    #[serde(default)]
+    pub venv_path: Option<String>,
+}
+
+impl DirenvConfig {
+    pub fn venv_path_or_default(&self) -> &str {
+        self.venv_path.as_deref().unwrap_or(".venv")
+    }
+}
+
 /// Trait for SDK configurations that provide core repository and mirror information
 pub trait SdkConfigCore {
     fn mirror(&self) -> &PathBuf;
@@ -274,6 +289,7 @@ pub trait SdkConfigCore {
     fn build(&self) -> &Option<SdkTarget>;
     fn flash(&self) -> &Option<SdkTarget>;
     fn variables(&self) -> &Option<HashMap<String, String>>;
+    fn direnv(&self) -> Option<&DirenvConfig>;
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -593,6 +609,9 @@ pub struct SdkConfig {
     /// In YAML commands, use `${{ VAR }}` to reference these variables.
     #[serde(default)]
     pub variables: Option<HashMap<String, String>>,
+    /// Optional direnv integration — generates .envrc and creates a Python venv.
+    #[serde(default)]
+    pub direnv: Option<DirenvConfig>,
 }
 
 impl SdkConfigCore for SdkConfig {
@@ -638,6 +657,10 @@ impl SdkConfigCore for SdkConfig {
 
     fn variables(&self) -> &Option<HashMap<String, String>> {
         &self.variables
+    }
+
+    fn direnv(&self) -> Option<&DirenvConfig> {
+        self.direnv.as_ref()
     }
 }
 

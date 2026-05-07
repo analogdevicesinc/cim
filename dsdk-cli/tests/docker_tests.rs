@@ -146,6 +146,7 @@ fn test_dockerfile_with_https_urls() {
         build: None,
         flash: None,
         variables: None,
+        direnv: None,
     };
 
     let yaml = serde_yaml::to_string(&config).unwrap();

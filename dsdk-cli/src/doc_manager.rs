@@ -763,6 +763,7 @@ mod tests {
             build: None,
             flash: None,
             variables: None,
+            direnv: None,
         };
 
         let doc_manager = DocManager::new(workspace_path.to_path_buf());
