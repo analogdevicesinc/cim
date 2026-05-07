@@ -131,6 +131,11 @@ where
             #[serde(default)]
             depends_on: Option<Vec<String>>,
         },
+        // Matches `{ depends_on: [...] }` with no `commands` key.
+        // Must come after Object so that a mapping with both keys still matches Object first.
+        DependsOnly {
+            depends_on: Vec<String>,
+        },
     }
 
     #[derive(Deserialize)]
@@ -182,6 +187,16 @@ where
                 Some(SdkTarget::CommandsWithDeps {
                     commands: cmd_vec,
                     depends_on,
+                })
+            }
+        }
+        Some(SdkTargetValue::DependsOnly { depends_on }) => {
+            if depends_on.is_empty() {
+                None
+            } else {
+                Some(SdkTarget::CommandsWithDeps {
+                    commands: vec![],
+                    depends_on: Some(depends_on),
                 })
             }
         }
@@ -664,6 +679,54 @@ impl SdkConfigCore for SdkConfig {
     }
 }
 
+/// Try to produce a more specific error message when `serde_yaml` fails to parse an `SdkConfig`.
+///
+/// Re-parses the YAML as a raw `Value` and checks known sections for unrecognized fields,
+/// falling back to the original error when no specific cause can be identified.
+fn enhance_config_error(
+    yaml_content: &str,
+    path: &Path,
+    original_error: &serde_yaml::Error,
+) -> String {
+    let Ok(raw) = serde_yaml::from_str::<serde_yaml::Value>(yaml_content) else {
+        return format!(
+            "Config validation error in {}: {}",
+            path.display(),
+            original_error
+        );
+    };
+
+    let sections = ["build", "envsetup", "test", "clean", "flash"];
+    if let serde_yaml::Value::Mapping(ref map) = raw {
+        for &section in &sections {
+            let key = serde_yaml::Value::String(section.to_string());
+            if let Some(serde_yaml::Value::Mapping(ref sec_map)) = map.get(&key) {
+                let known = ["commands", "depends_on"];
+                let unknown: Vec<&str> = sec_map
+                    .keys()
+                    .filter_map(|k| k.as_str())
+                    .filter(|k| !known.contains(k))
+                    .collect();
+                if !unknown.is_empty() {
+                    return format!(
+                        "Config validation error in {}: '{}' section has unrecognized \
+                         field(s): {}. Valid fields are: commands, depends_on",
+                        path.display(),
+                        section,
+                        unknown.join(", "),
+                    );
+                }
+            }
+        }
+    }
+
+    format!(
+        "Config validation error in {}: {}",
+        path.display(),
+        original_error
+    )
+}
+
 /// Load SDK configuration from a YAML file with include support.
 ///
 /// # Errors
@@ -690,7 +753,7 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<SdkConfig, Box<dyn std::er
         .map_err(|e| format!("Cannot read config file {}: {}", path_buf.display(), e))?;
 
     let config: SdkConfig = serde_yaml::from_str(&file_content)
-        .map_err(|e| format!("Config validation error in {}: {e}", path_buf.display()))?;
+        .map_err(|e| enhance_config_error(&file_content, &path_buf, &e))?;
     Ok(config)
 }
 
@@ -1561,6 +1624,56 @@ gits:
 
         assert_eq!(build[0], "@echo This must be quoted");
         assert_eq!(build[1], "make test");
+    }
+
+    #[test]
+    fn test_build_depends_on_only() {
+        let yaml = r#"
+mirror: /tmp/mirror
+gits: []
+build:
+  depends_on:
+    - zephyrproject/zephyr
+    - some-other-repo
+"#;
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(yaml.as_bytes()).unwrap();
+
+        let config = load_config(&file_path).unwrap();
+        let build = config
+            .build
+            .as_ref()
+            .expect("build section should be present");
+        assert_eq!(build.commands(), &[] as &[String]);
+        let expected: Vec<String> = vec![
+            "zephyrproject/zephyr".to_string(),
+            "some-other-repo".to_string(),
+        ];
+        assert_eq!(build.depends_on(), Some(expected.as_slice()));
+    }
+
+    #[test]
+    fn test_build_unknown_field_error() {
+        let yaml = r#"
+mirror: /tmp/mirror
+gits: []
+build:
+  typo_field: value
+"#;
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(yaml.as_bytes()).unwrap();
+
+        let result = load_config(&file_path);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("unrecognized field") && msg.contains("typo_field"),
+            "expected error mentioning 'unrecognized field' and 'typo_field', got: {msg}"
+        );
     }
 
     #[test]
