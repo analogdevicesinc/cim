@@ -7,9 +7,9 @@
 all: build test clippy fmt install
 	@echo "✓ All tasks completed successfully!"
 
-# Build both binaries in release mode
+# Build cim in release mode
 build:
-	@echo "Building cim and cim-installer..."
+	@echo "Building cim..."
 	cargo build --release
 
 # Run all tests
@@ -44,7 +44,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make         - Run all (build, test, clippy, fmt, install)"
 	@echo "  make all     - Same as 'make'"
-	@echo "  make build   - Build both binaries in release mode"
+	@echo "  make build   - Build cim in release mode"
 	@echo "  make test    - Run all tests"
 	@echo "  make clippy  - Run clippy linter"
 	@echo "  make fmt     - Format code"

@@ -46,16 +46,15 @@ fi
 
 echo "Updating version to $VERSION..."
 
-# Update both Cargo.toml files
+# Update Cargo.toml version
 sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" dsdk-cli/Cargo.toml
-sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" dsdk-gui/Cargo.toml
 
 # Regenerate Cargo.lock with new versions
 echo "Updating Cargo.lock..."
 cargo check --quiet
 
 # Stage changes
-git add dsdk-cli/Cargo.toml dsdk-gui/Cargo.toml Cargo.lock
+git add dsdk-cli/Cargo.toml Cargo.lock
 
 # Commit with sign-off
 git commit -s -m "chore: release $VERSION"
