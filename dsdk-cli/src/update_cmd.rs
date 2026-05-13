@@ -699,7 +699,7 @@ pub(crate) fn handle_existing_workspace_repo(
         let _ = git_operations::remote_add(
             repo_path,
             "mirror",
-            &format!("file://{}", mirror_repo_path.display()),
+            &git_operations::path_to_file_url(&mirror_repo_path),
         );
 
         if mirror_repo_path.exists() {
@@ -859,7 +859,7 @@ pub(crate) fn clone_repo_to_workspace(
                     git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
             }
 
-            let mirror_url = format!("file://{}", mirror_repo_path.display());
+            let mirror_url = git_operations::path_to_file_url(&mirror_repo_path);
             let result =
                 git_operations::clone_repo(&mirror_url, repo_path, Some(&mirror_repo_path));
             match result {
@@ -869,7 +869,7 @@ pub(crate) fn clone_repo_to_workspace(
                     let _ = git_operations::remote_add(
                         repo_path,
                         "mirror",
-                        &format!("file://{}", mirror_repo_path.display()),
+                        &git_operations::path_to_file_url(&mirror_repo_path),
                     );
                     return checkout_commit(git_cfg, repo_path);
                 }

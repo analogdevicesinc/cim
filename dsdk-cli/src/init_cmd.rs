@@ -844,9 +844,11 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     // Expand environment variables in workspace path (e.g., $HOME, ~/path)
     let workspace_path = PathBuf::from(expand_env_vars(&workspace_path.to_string_lossy()));
 
-    // Canonicalize the workspace path if it exists, or make it absolute if it's relative
+    // Canonicalize the workspace path if it exists, or make it absolute if it's relative.
+    // Strip the Windows extended-length prefix \\?\ that canonicalize() adds on Windows,
+    // since libgit2 does not accept that prefix in destination paths.
     let workspace_path = if workspace_path.exists() {
-        workspace_path.canonicalize().unwrap_or(workspace_path)
+        git_operations::strip_unc_prefix(workspace_path.canonicalize().unwrap_or(workspace_path))
     } else if workspace_path.is_relative() {
         env::current_dir()
             .ok()

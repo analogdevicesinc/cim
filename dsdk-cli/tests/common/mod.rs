@@ -92,6 +92,10 @@ impl MockGitRepo {
         git_operations::config(&repo_path, "user.email", "test@example.com")
             .expect("Failed to configure git user.email");
 
+        // Force LF line endings so tests behave identically on Windows
+        let gitattributes_path = repo_path.join(".gitattributes");
+        fs::write(&gitattributes_path, "* text eol=lf\n").expect("Failed to write .gitattributes");
+
         Self {
             path: repo_path,
             fixture,
@@ -137,7 +141,7 @@ impl MockGitRepo {
     /// Get file:// URL for this repository
     #[allow(dead_code)]
     pub fn file_url(&self) -> String {
-        format!("file://{}", self.path.display())
+        git_operations::path_to_file_url(&self.path)
     }
 }
 

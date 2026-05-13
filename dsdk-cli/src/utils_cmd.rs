@@ -142,7 +142,6 @@ pub(crate) fn handle_utils_update_command() {
              Please download and install manually from: \
              https://github.com/analogdevicesinc/cim/releases/latest",
         );
-        return;
     }
 
     // Extract the `cim` binary from the archive and replace the current binary

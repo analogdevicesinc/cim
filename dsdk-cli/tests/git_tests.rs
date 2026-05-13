@@ -310,7 +310,7 @@ fn test_mirror_workflow() {
     // 3. Clone from mirror to workspace
     let workspace_path = fixture.path().join("workspace/test-repo");
     let clone_result = git_operations::clone_repo(
-        &format!("file://{}", mirror_path.display()),
+        &git_operations::path_to_file_url(&mirror_path),
         &workspace_path,
         None,
     )

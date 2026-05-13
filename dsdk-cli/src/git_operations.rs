@@ -248,6 +248,41 @@ fn ok_result() -> GitResult {
     }
 }
 
+/// Convert a local filesystem path to a `file://` URL suitable for libgit2.
+///
+/// On Unix the path starts with `/`, so `"file://" + path` gives the correct
+/// three-slash form (`file:///path`).  On Windows `Path::display()` produces
+/// `C:\...` which yields the invalid `file://C:\...`.  The correct form is
+/// `file:///C:/...` with forward slashes.  The Windows extended-length prefix
+/// `\\?\` produced by `std::fs::canonicalize` is also stripped beforehand.
+pub fn path_to_file_url(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy();
+        let clean = s.strip_prefix(r"\\?\").unwrap_or(&s);
+        let forward = clean.replace('\\', "/");
+        format!("file:///{}", forward)
+    }
+    #[cfg(not(windows))]
+    format!("file://{}", path.display())
+}
+
+/// Strip the Windows extended-length path prefix `\\?\`.
+///
+/// `std::fs::canonicalize` on Windows returns `\\?\`-prefixed paths.
+/// libgit2 and most other tools do not accept this prefix, so we strip it
+/// back to a plain absolute path before passing it to git operations.
+pub fn strip_unc_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return std::path::PathBuf::from(stripped.to_string());
+        }
+    }
+    path
+}
+
 /// Log a git-equivalent command in verbose mode, matching the old
 /// `$ cd /path && git <args>` format for debugging and user visibility.
 fn log_git(cwd: Option<&Path>, args: &str) {
@@ -1505,7 +1540,7 @@ mod tests {
         create_tag(&upstream_dir, "v1.0.0").unwrap();
 
         // Create bare clone (mirror)
-        clone_bare(&format!("file://{}", upstream_dir.display()), &mirror_dir).unwrap();
+        clone_bare(&path_to_file_url(&upstream_dir), &mirror_dir).unwrap();
 
         // Verify tag was cloned
         let tags = list_local_tags(&mirror_dir).unwrap();

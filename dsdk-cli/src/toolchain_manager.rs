@@ -1029,7 +1029,7 @@ impl ToolchainManager {
         #[cfg(target_os = "windows")]
         {
             if let Ok(output) = Command::new("git")
-                .args(&["credential-manager", "--version"])
+                .args(["credential-manager", "--version"])
                 .output()
             {
                 if !output.status.success() {
