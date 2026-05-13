@@ -1,3 +1,3 @@
 [workspace]
-members = ["dsdk-cli", "dsdk-gui"]
+members = ["dsdk-cli"]
 resolver = "2"
