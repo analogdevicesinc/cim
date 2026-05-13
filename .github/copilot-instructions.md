@@ -1,7 +1,7 @@
 # Copilot Instructions for Code in Motion Tool Suite
 
 ## Project Context
-This project is a Rust-based SDK management tool designed to manage multiple git repositories that make up a dynamic SDK. The tool uses a config file, `sdk.yml` to define the repositories, their URLs, commits/tags, makefile targets, toolchains and dependencies. `sdk.yml` can be found in target specific folder in the git called cim-manifests.git by default, however manifests can live in any git, the name doesn't matter. `cim` supports local mirroring, delta updates, repository management (add/remove), documentation generation, release work, listing target and Docker integration. The project creates two binaries, a CLI tool named cim and a GUI version cim-installer. The CLI tool is responsible for all work, the GUI is just a front-end to the CLI. Overall the tool shares similarities with repo tool from Google and west from the Zephyr project.
+This project is a Rust-based SDK management tool designed to manage multiple git repositories that make up a dynamic SDK. The tool uses a config file, `sdk.yml` to define the repositories, their URLs, commits/tags, makefile targets, toolchains and dependencies. `sdk.yml` can be found in target specific folder in the git called cim-manifests.git by default, however manifests can live in any git, the name doesn't matter. `cim` supports local mirroring, delta updates, repository management (add/remove), documentation generation, release work, listing target and Docker integration. The project creates a CLI tool named `cim`. Overall the tool shares similarities with repo tool from Google and west from the Zephyr project.
 
 ## Project and directory Structure
 .
@@ -9,8 +9,6 @@ This project is a Rust-based SDK management tool designed to manage multiple git
 ├── completions   : Bash completions
 ├── dsdk-cli      : The main CLI tool
 │   └── src       : Source code for the CLI tool
-├── dsdk-gui      : The GUI front-end for the CLI tool
-│   └── src       : Source code for the GUI tool
 ├── dsdk-vscode   : VSCode extension for the SDK tool
 │   ├── README.md : Readme for the VSCode extension
 │   ├── dist
@@ -104,7 +102,7 @@ Key functions in `dsdk-cli/src/`:
 ## Makefile Targets
 The repository includes a Makefile to streamline common development tasks:
 - `make` or `make all` - Run the complete workflow: build, test, clippy, fmt, and install (default target)
-- `make build` - Build both binaries (cim and cim-installer) in release mode
+- `make build` - Build cim in release mode
 - `make test` - Run all tests
 - `make clippy` - Run clippy linter
 - `make fmt` - Format code

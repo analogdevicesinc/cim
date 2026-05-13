@@ -62,11 +62,6 @@ M:	Joakim Bech <Joakim.Bech@analog.com>
 S:	Maintained
 F:	dsdk-cli/
 
-GUI (dsdk-gui)
-M:	Joakim Bech <Joakim.Bech@analog.com>
-S:	Maintained
-F:	dsdk-gui/
-
 VSCODE EXTENSION (dsdk-vscode)
 M:	Joakim Bech <Joakim.Bech@analog.com>
 S:	Maintained
