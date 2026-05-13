@@ -104,36 +104,25 @@ jobs:
       - name: Build archive
         shell: bash
         run: |
-          # Package both cim CLI and GUI binaries
           package_name="cim-suite"
           cli_binary="cim"
-          gui_binary="cim-installer"
 
           dirname="$package_name-${{ env.VERSION }}-${{ matrix.target }}"
           mkdir "$dirname"
 
-          # Move binaries and verify they exist
+          # Move binary and verify it exists
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cli_path="target/${{ matrix.target }}/release/$cli_binary.exe"
-            gui_path="target/${{ matrix.target }}/release/$gui_binary.exe"
           else
             cli_path="target/${{ matrix.target }}/release/$cli_binary"
-            gui_path="target/${{ matrix.target }}/release/$gui_binary"
           fi
 
-          # Verify both binaries exist
           if [ ! -f "$cli_path" ]; then
             echo "Error: CLI binary not found at $cli_path"
             exit 1
           fi
-          if [ ! -f "$gui_path" ]; then
-            echo "Error: GUI binary not found at $gui_path"
-            exit 1
-          fi
 
-          # Move binaries to archive directory
           mv "$cli_path" "$dirname/"
-          mv "$gui_path" "$dirname/"
 
           # Copy VS Code extension (platform-agnostic)
           if [ -f "dsdk-vscode/${{ env.VSIX_FILE }}" ]; then
@@ -148,11 +137,10 @@ jobs:
           Code in Motion
           ==============
 
-          This archive contains the complete cim toolkit:
+          This archive contains the cim toolkit:
 
           Binaries:
           - cim: Command-line interface for workspace management
-          - cim-installer: Graphical PoC installer interface
 
           Extensions:
           - cim-*.vsix: VS Code extension for cim task integration
@@ -161,14 +149,13 @@ jobs:
           Usage:
           ------
           For CLI usage: ./cim --help
-          For GUI usage: ./cim-installer
           For VS Code: Install the .vsix file via the Extensions menu
 
           For more information, visit:
           https://github.com/analogdevicesinc/cim
           EOF
 
-          # Verify binaries were moved successfully
+          # Verify binary was moved successfully
           echo "Archive contents:"
           ls -la "$dirname"
 
