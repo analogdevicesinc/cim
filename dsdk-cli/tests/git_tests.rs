@@ -266,13 +266,11 @@ fn test_config_operations() {
     git_operations::config(&repo_path, "user.email", "test@example.com")
         .expect("Should set user.email");
 
-    // Verify config was set by reading it back via git2
-    let repo = git2::Repository::open(&repo_path).expect("Should open repo");
-    let config = repo.config().expect("Should get config");
-    let name = config
-        .get_string("user.name")
-        .expect("Should get user.name");
-    assert_eq!(name, "Test User");
+    // Verify config was set by reading it back via git command
+    let result =
+        git_operations::git_command(&["config", "--get", "user.name"], Some(&repo_path)).unwrap();
+    assert!(result.is_success());
+    assert_eq!(result.stdout.trim(), "Test User");
 }
 
 #[test]
