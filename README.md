@@ -31,6 +31,7 @@ This `README.md` is the technical documentation for `cim`. For a more high level
 ### Requirements
 
 **Required:**
+- git 2.0+
 - make
 - tar and unzip
 - python3 3.8+, venv and pip
@@ -39,13 +40,10 @@ This `README.md` is the technical documentation for `cim`. For a more high level
 On Ubuntu for example, you can install those dependencies with:
 
 ```bash
-sudo apt install -y make tar unzip python3 python3-pip python3-venv curl wget
+sudo apt install -y git make tar unzip python3 python3-pip python3-venv curl wget
 ```
 
 **Optional:**
-- git 2.0+ (used as a fallback for credential resolution when libgit2
-  cannot access URL-specific credential helpers or SAML SSO tokens;
-  not required for public repositories or when `GITHUB_TOKEN` is set)
 - [Rust 1.56+](https://rust-lang.org/tools/install/) (to build from source)
 - Docker (for containerized development)
 
@@ -105,32 +103,23 @@ cim list-targets --source https://github.com/org/private-manifests --verbose  # 
 
 ### Authentication for private repositories
 
-`cim` uses **libgit2** for all git operations. For public repositories no
-credentials are needed. For private repositories — especially those behind
-GitHub Enterprise with SAML SSO — authentication requires explicit setup.
+`cim` uses the host system's **git** binary for all git operations.
+For public repositories no credentials are needed. For private
+repositories — especially those behind GitHub Enterprise with SAML
+SSO — authentication is handled by git's own credential helpers.
 
-#### Credential resolution order
+Since `cim` delegates to `git`, any credential method your system git
+supports (Git Credential Manager, SSH agent, credential helpers,
+keychains) works automatically.
 
-`cim` tries these methods in order, stopping at the first success:
+Add `--verbose` to any `cim` command to trace which git commands are
+executed.
 
-1. SSH agent
-2. SSH key files (`~/.ssh/id_ed25519`, `id_rsa`, `id_ecdsa`)
-3. libgit2 credential helper — supports host-level URL sections (e.g.
-   `[credential "https://github.com"]`) and shell command helpers, but
-   does not match path-specific sections (e.g. `[credential "https://github.com/org/"]`)
-4. System `git credential fill` (full credential helper support including
-   URL-specific sections, `gh auth git-credential`, and SAML SSO tokens;
-   requires the `git` binary to be installed)
-5. `GITHUB_TOKEN` environment variable
+#### Regular users: gh CLI (recommended for SAML SSO organizations)
 
-Add `--verbose` to any `cim` command to trace which method was attempted
-and why it succeeded or failed.
-
-#### Regular users: gh CLI (required for SAML SSO organizations)
-
-`gh auth login` is the recommended setup for any private GitHub repository,
-and the only reliable method for organizations that enforce SAML SSO (such
-as enterprise GitHub organizations).
+`gh auth login` is the recommended setup for any private GitHub
+repository, and the only reliable method for organizations that
+enforce SAML SSO (such as enterprise GitHub organizations).
 
 ```bash
 # Install gh: https://cli.github.com
@@ -142,19 +131,18 @@ gh auth login
 gh auth login --hostname github.your-company.com
 ```
 
-On Linux, `gh auth login` adds `gh auth git-credential` as a credential
-helper to `~/.gitconfig`. On macOS it stores the OAuth token in the system
-Keychain instead. Either way, `cim`'s `git credential fill` fallback (step 4
-above) picks it up automatically.
+On Linux, `gh auth login` adds `gh auth git-credential` as a
+credential helper to `~/.gitconfig`. On macOS it stores the OAuth
+token in the system Keychain instead.
 
-For SAML SSO organizations, after logging in you must also authorize your
-token for the org. Visit `https://github.com/settings/tokens`, find your
-token, and click **Configure SSO → Authorize**.
+For SAML SSO organizations, after logging in you must also authorize
+your token for the org. Visit `https://github.com/settings/tokens`,
+find your token, and click **Configure SSO → Authorize**.
 
 #### SSH
 
-SSH keys bypass the HTTPS credential system entirely and work with all
-GitHub organizations without any SAML SSO setup:
+SSH keys bypass the HTTPS credential system entirely and work with
+all GitHub organizations without any SAML SSO setup:
 
 ```bash
 # Add your public key at https://github.com/settings/keys
@@ -165,29 +153,26 @@ GitHub organizations without any SAML SSO setup:
 
 #### CI: GITHUB_TOKEN environment variable
 
-In headless CI environments, set a personal access token with `repo` scope.
-For SAML SSO organizations the token must be authorized for the org (visit
-`https://github.com/settings/tokens` → Configure SSO → Authorize).
+In headless CI environments, set a personal access token with `repo`
+scope. For SAML SSO organizations the token must be authorized for
+the org (visit `https://github.com/settings/tokens` → Configure
+SSO → Authorize).
 
 ```bash
 export GITHUB_TOKEN=ghp_...
 cim list-targets --source https://github.com/org/private-manifests
 ```
 
-On standard Linux CI runners (e.g. GitHub Actions `ubuntu-latest`) no
-additional configuration is needed — `git credential fill` finds no helper,
-falls through, and `GITHUB_TOKEN` is used automatically.
-
-On macOS CI runners, or any system whose `/etc/gitconfig` configures a
-credential helper that could prompt interactively, add:
+On macOS CI runners, or any system whose `/etc/gitconfig` configures
+a credential helper that could prompt interactively, add:
 
 ```bash
 export GIT_CONFIG_NOSYSTEM=1
 export GITHUB_TOKEN=ghp_...
 ```
 
-This bypasses the system-level credential helper and ensures `GITHUB_TOKEN`
-is used without any interactive prompts.
+This bypasses the system-level credential helper and ensures
+`GITHUB_TOKEN` is used without any interactive prompts.
 
 ### Initialize a Workspace
 
