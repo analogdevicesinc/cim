@@ -12,20 +12,19 @@
 use crate::cli::{Cli, DockerCommand};
 use crate::init_cmd::{
     compile_match_regex, create_filtered_sdk_config, filter_git_configs,
-    get_latest_commit_for_branch, is_branch_reference, list_available_targets,
-    list_target_versions, list_targets_from_source, resolve_target_config, setup_direnv,
+    get_latest_commit_for_branch, is_branch_reference, list_target_versions,
+    list_targets_from_source, resolve_target_from_sources, setup_direnv, source_label,
 };
 use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
 use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::workspace::{
-    expand_config_mirror_path, get_default_source, get_docker_temp_dir, is_url,
-    require_workspace_config, resolve_target_config_from_git, WorkspaceMarker, PYTHON_DEPS_FILE,
-    WORKSPACE_MARKER_FILE,
+    expand_config_mirror_path, get_all_sources, get_all_sources_from_config, get_docker_temp_dir,
+    require_workspace_config, WorkspaceMarker, PYTHON_DEPS_FILE, WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{config, docker_manager, git_operations, messages};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use threadpool::ThreadPool;
@@ -242,72 +241,132 @@ fn create_config_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Handle the list-targets command
 pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: Option<&str>) {
-    let default_source = get_default_source();
-    let (source_path, using_user_default) = if let Some(src) = source {
-        (src.to_string(), false)
-    } else {
-        // Check if using user config default
-        let using_default = if let Ok(Some(uc)) = config::UserConfig::load() {
-            uc.default_source.is_some()
-        } else {
-            false
-        };
-        (default_source, using_default)
-    };
-
-    if let Some(target_name) = target_filter {
-        // List versions for specific target
-        match list_target_versions(&source_path, target_name) {
-            Ok(versions) => {
-                if versions.is_empty() {
-                    messages::status(&format!("No versions found for target '{}'", target_name));
-                } else {
-                    if using_user_default {
-                        messages::status(&format!("Available versions for target '{}' (using default_source from user config):", target_name));
-                        messages::status(&format!("  Source: {}", source_path));
-                    } else {
+    // If --source is explicitly given, use only that single source (no alternates)
+    if let Some(src) = source {
+        let source_path = src.to_string();
+        if let Some(target_name) = target_filter {
+            match list_target_versions(&source_path, target_name) {
+                Ok(versions) => {
+                    if versions.is_empty() {
                         messages::status(&format!(
-                            "Available versions for target '{}':",
+                            "No versions found for target '{}'",
                             target_name
                         ));
-                    }
-                    for version in versions {
-                        messages::status(&format!("  - {}", version));
+                    } else {
+                        messages::status(&format!(
+                            "Available versions for target '{}' from {}:",
+                            target_name, source_path
+                        ));
+                        for version in versions {
+                            messages::status(&format!("  - {}", version));
+                        }
                     }
                 }
+                Err(e) => {
+                    messages::error(&format!(
+                        "Error listing versions for target '{}': {}",
+                        target_name, e
+                    ));
+                    std::process::exit(1);
+                }
             }
-            Err(e) => {
-                messages::error(&format!(
-                    "Error listing versions for target '{}': {}",
-                    target_name, e
-                ));
-                std::process::exit(1);
-            }
-        }
-    } else {
-        // List all available targets
-        match list_targets_from_source(&source_path) {
-            Ok(targets) => {
-                if targets.is_empty() {
-                    messages::status(&format!("No targets found in {}", source_path));
-                } else {
-                    if using_user_default {
-                        messages::status(&format!(
-                            "Available targets from {} (user config default_source):",
-                            source_path
-                        ));
+        } else {
+            match list_targets_from_source(&source_path) {
+                Ok(targets) => {
+                    if targets.is_empty() {
+                        messages::status(&format!("No targets found in {}", source_path));
                     } else {
                         messages::status(&format!("Available targets from {}:", source_path));
+                        for target in targets {
+                            messages::status(&format!("  - {}", target));
+                        }
                     }
-                    for target in targets {
-                        messages::status(&format!("  - {}", target));
+                }
+                Err(e) => {
+                    messages::error(&format!("Error listing targets: {}", e));
+                    std::process::exit(1);
+                }
+            }
+        }
+        return;
+    }
+
+    // No --source: use all configured sources (default + alternates)
+    let sources = get_all_sources();
+    let has_alternates = sources.len() > 1;
+
+    if let Some(target_name) = target_filter {
+        let mut any_versions = false;
+        for (i, source_path) in sources.iter().enumerate() {
+            match list_target_versions(source_path, target_name) {
+                Ok(versions) => {
+                    if !versions.is_empty() {
+                        any_versions = true;
+                        if has_alternates {
+                            messages::status(&format!(
+                                "  Source: {} ({})",
+                                source_path,
+                                source_label(i)
+                            ));
+                        } else {
+                            messages::status(&format!("  Source: {}", source_path));
+                        }
+                        for version in versions {
+                            messages::status(&format!("    - {}", version));
+                        }
+                    }
+                }
+                Err(e) => {
+                    if has_alternates {
+                        messages::verbose(&format!("  Skipping {} (error: {})", source_path, e));
+                    } else {
+                        messages::error(&format!(
+                            "Error listing versions for target '{}': {}",
+                            target_name, e
+                        ));
+                        std::process::exit(1);
                     }
                 }
             }
-            Err(e) => {
-                messages::error(&format!("Error listing targets: {}", e));
-                std::process::exit(1);
+        }
+        if !any_versions {
+            messages::status(&format!("No versions found for target '{}'", target_name));
+        }
+    } else {
+        let mut any_targets = false;
+        for (i, source_path) in sources.iter().enumerate() {
+            match list_targets_from_source(source_path) {
+                Ok(targets) => {
+                    if !targets.is_empty() {
+                        any_targets = true;
+                        if has_alternates {
+                            messages::status(&format!(
+                                "  Source: {} ({})",
+                                source_path,
+                                source_label(i)
+                            ));
+                        } else {
+                            messages::status(&format!("Available targets from {}:", source_path));
+                        }
+                        for target in targets {
+                            messages::status(&format!("    - {}", target));
+                        }
+                    } else if !has_alternates {
+                        messages::status(&format!("No targets found in {}", source_path));
+                    }
+                }
+                Err(e) => {
+                    if has_alternates {
+                        messages::verbose(&format!("  Skipping {} (error: {})", source_path, e));
+                    } else {
+                        messages::error(&format!("Error listing targets: {}", e));
+                        std::process::exit(1);
+                    }
+                }
             }
+        }
+        if !any_targets {
+            messages::status("No targets found in any configured manifest source");
         }
     }
 }
@@ -853,10 +912,22 @@ pub(crate) fn clone_repo_to_workspace(
 
             // Ensure the commit is present in the mirror, fetching it if needed
             if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
-                let _ =
-                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1));
-                let _ =
-                    git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
+                let fetch_ok =
+                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1))
+                        .is_ok_and(|r| r.is_success());
+                if fetch_ok {
+                    let _ = git_operations::update_ref(
+                        &mirror_repo_path,
+                        &update_ref_name,
+                        "FETCH_HEAD",
+                    );
+                } else {
+                    messages::error(&format!(
+                        "{} (commit {} not found in remote — check the commit hash in sdk.yml)",
+                        git_cfg.name, target_sha
+                    ));
+                    return false;
+                }
             }
 
             let mirror_url = git_operations::path_to_file_url(&mirror_repo_path);
@@ -1024,82 +1095,44 @@ pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
                     .and_then(|uc| uc.no_mirror)
                     .unwrap_or(false);
 
-            // Determine source path (use user config default if available)
-            let default_source = get_default_source();
-            let source_path = source
-                .as_ref()
-                .map(String::as_str)
-                .unwrap_or(&default_source);
+            // Determine sources to search for the target
+            let sources: Vec<String> = if let Some(ref src) = source {
+                // Explicit --source: use only that source
+                vec![src.clone()]
+            } else {
+                get_all_sources_from_config(user_config.as_ref())
+            };
 
             // Resolve config path using the same approach as init command
             // For git sources, extract to docker_temp_dir instead of using mem::forget
-            let config_path = if is_url(source_path) {
-                // Git-based source - clone entire target directory structure to docker temp dir
-                match resolve_target_config_from_git(
-                    source_path,
-                    target,
-                    version.as_deref(),
-                    Some(&docker_temp_dir),
-                ) {
-                    Ok(path) => {
-                        let version_info = if let Some(v) = &version {
-                            format!(" (version: {})", v)
-                        } else {
-                            " (latest)".to_string()
-                        };
-                        messages::status(&format!(
-                            "Fetched config for target '{}'{}",
-                            target, version_info
-                        ));
-                        path
-                    }
-                    Err(e) => {
-                        messages::error(&e.to_string());
-                        std::process::exit(1);
-                    }
+            let config_path = match resolve_target_from_sources(
+                target,
+                version.as_deref(),
+                &sources,
+                Some(&docker_temp_dir),
+            ) {
+                Ok(resolved) => {
+                    let version_info = if let Some(v) = &version {
+                        format!(" (version: {})", v)
+                    } else if resolved.is_git_source {
+                        " (latest)".to_string()
+                    } else {
+                        String::new()
+                    };
+                    let label = if sources.len() > 1 {
+                        format!(" ({} source)", source_label(resolved.source_index))
+                    } else {
+                        String::new()
+                    };
+                    messages::status(&format!(
+                        "Fetched config for target '{}'{}{} from: {}",
+                        target, version_info, label, resolved.source_path
+                    ));
+                    resolved.config_path
                 }
-            } else {
-                // Local source directory
-                let source_path_buf = PathBuf::from(&source_path);
-
-                // Check if version is specified and source is a git repository
-                if version.is_some() && source_path_buf.join(".git").exists() {
-                    // Local git with version - extract to docker temp dir
-                    match resolve_target_config_from_git(
-                        source_path,
-                        target,
-                        version.as_deref(),
-                        Some(&docker_temp_dir),
-                    ) {
-                        Ok(path) => {
-                            if let Some(ref ver) = version {
-                                messages::status(&format!(
-                                    "Fetched config for target '{}' (version: {})",
-                                    target, ver
-                                ));
-                            }
-                            path
-                        }
-                        Err(e) => {
-                            messages::error(&e.to_string());
-                            std::process::exit(1);
-                        }
-                    }
-                } else {
-                    // No version or not a git repo - use direct path
-                    match resolve_target_config(target, &source_path_buf) {
-                        Ok(path) => path,
-                        Err(e) => {
-                            messages::error(&e.to_string());
-                            messages::status("Available targets:");
-                            if let Ok(targets) = list_available_targets(&source_path_buf) {
-                                for target_name in targets {
-                                    messages::status(&format!("  - {}", target_name));
-                                }
-                            }
-                            std::process::exit(1);
-                        }
-                    }
+                Err(e) => {
+                    messages::error(&e);
+                    std::process::exit(1);
                 }
             };
 

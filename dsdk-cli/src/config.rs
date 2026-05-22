@@ -455,6 +455,11 @@ impl ToolchainConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct AlternateSourceConfig {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CopyFileConfig {
     pub source: String,
     pub dest: String,
@@ -863,6 +868,10 @@ pub struct UserConfig {
     #[serde(default)]
     pub default_source: Option<String>,
 
+    /// Additional manifest sources to search alongside default_source
+    #[serde(default)]
+    pub alternate_sources: Option<Vec<AlternateSourceConfig>>,
+
     /// Skip mirror operations (behaves as if --no-mirror flag is always specified)
     #[serde(default)]
     pub no_mirror: Option<bool>,
@@ -1009,6 +1018,29 @@ impl UserConfig {
 # default_source = "git@github.com:myteam/custom-manifests.git"
 # default_source = "/home/user/projects/my-manifests"
 # default_source = "https://github.com/analogdevicesinc/cim-manifests"
+
+# =============================================================================
+# Alternate Manifest Sources
+# =============================================================================
+# Additional manifest repositories or directories to search alongside
+# default_source. When listing targets, results from all sources are merged
+# and displayed grouped by source. For 'init', the first source containing
+# the requested target wins (default_source is tried first).
+#
+# Use cases:
+#   - Use company manifests + personal fork with custom targets
+#   - Combine manifests from multiple teams or product lines
+#   - Test new targets in a side repository before merging upstream
+#
+# Examples:
+# [[alternate_sources]]
+# url = "https://github.com/myteam/custom-manifests"
+#
+# [[alternate_sources]]
+# url = "git@github.com:team-b/manifests.git"
+#
+# [[alternate_sources]]
+# url = "/home/user/experimental-manifests"
 
 # =============================================================================
 # Skip Mirror Operations
@@ -1303,6 +1335,11 @@ impl UserConfig {
         if let Some(ref source) = self.default_source {
             lines.push(format!("default_source={}", source));
         }
+        if let Some(ref alts) = self.alternate_sources {
+            for (idx, alt) in alts.iter().enumerate() {
+                lines.push(format!("alternate_sources.{}.url={}", idx, alt.url));
+            }
+        }
         if let Some(no_mirror) = self.no_mirror {
             lines.push(format!("no_mirror={}", no_mirror));
         }
@@ -1356,6 +1393,22 @@ impl UserConfig {
             "cert_validation" => self.cert_validation.clone(),
             "no_dividers" => self.no_dividers.map(|b| b.to_string()),
             _ => {
+                // Handle nested keys like alternate_sources.0.url
+                if key.starts_with("alternate_sources.") {
+                    let parts: Vec<&str> = key.split('.').collect();
+                    if parts.len() == 3 {
+                        if let Ok(idx) = parts[1].parse::<usize>() {
+                            if let Some(ref alts) = self.alternate_sources {
+                                if let Some(alt) = alts.get(idx) {
+                                    return match parts[2] {
+                                        "url" => Some(alt.url.clone()),
+                                        _ => None,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
                 // Handle nested keys like copy_files.0.src
                 if key.starts_with("copy_files.") {
                     let parts: Vec<&str> = key.split('.').collect();
@@ -1992,5 +2045,63 @@ mirror = "/only/mirror/set"
         assert_eq!(tiers[1].len(), 2);
         assert_eq!(tiers[2].len(), 1);
         assert_eq!(tiers[2][0].name, "d");
+    }
+
+    #[test]
+    fn test_user_config_alternate_sources_table() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let content = r#"
+default_source = "https://example.com/manifests"
+
+[[alternate_sources]]
+url = "https://alt1.com/repo"
+
+[[alternate_sources]]
+url = "https://alt2.com/repo"
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        let config = UserConfig::load_from(&config_path).unwrap().unwrap();
+        assert_eq!(
+            config.default_source.unwrap(),
+            "https://example.com/manifests"
+        );
+        let alts = config.alternate_sources.unwrap();
+        assert_eq!(alts.len(), 2);
+        assert_eq!(alts[0].url, "https://alt1.com/repo");
+        assert_eq!(alts[1].url, "https://alt2.com/repo");
+    }
+
+    #[test]
+    fn test_user_config_alternate_sources_ssh() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let content = r#"
+[[alternate_sources]]
+url = "git@github.com:team/manifests.git"
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        let config = UserConfig::load_from(&config_path).unwrap().unwrap();
+        let alts = config.alternate_sources.unwrap();
+        assert_eq!(alts.len(), 1);
+        assert_eq!(alts[0].url, "git@github.com:team/manifests.git");
+    }
+
+    #[test]
+    fn test_user_config_no_alternate_sources() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let content = r#"
+default_source = "https://example.com/manifests"
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        let config = UserConfig::load_from(&config_path).unwrap().unwrap();
+        assert!(config.alternate_sources.is_none());
     }
 }

@@ -21,7 +21,7 @@ use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::download::{copy_yaml_files_to_workspace, process_copy_files};
 use dsdk_cli::workspace::{
     create_workspace_marker, download_config_from_url, expand_config_mirror_path, expand_env_vars,
-    expand_manifest_vars_in_config, get_default_source, get_home_dir, is_url,
+    expand_manifest_vars_in_config, get_all_sources_from_config, get_home_dir, is_url,
     load_config_with_user_overrides, require_workspace_config, resolve_target_config_from_git,
     CreateWorkspaceMarkerParams, OS_DEPS_FILE, PYTHON_DEPS_FILE, SDK_CONFIG_FILE,
     WORKSPACE_MARKER_FILE,
@@ -376,6 +376,147 @@ pub(crate) fn list_available_targets(config_root: &Path) -> Result<Vec<String>, 
     Ok(targets)
 }
 
+/// Result of resolving a target from one or more manifest sources.
+pub(crate) struct ResolvedTarget {
+    /// Path to the resolved sdk.yml
+    pub config_path: PathBuf,
+    /// The source URL or path that matched
+    pub source_path: String,
+    /// Whether the source was a remote git repo (or local with version checkout)
+    pub is_git_source: bool,
+    /// Index of the matched source (0 = default)
+    pub source_index: usize,
+}
+
+/// Returns "default" for index 0, "alternate" for any other index.
+pub(crate) fn source_label(index: usize) -> &'static str {
+    if index == 0 {
+        "default"
+    } else {
+        "alternate"
+    }
+}
+
+/// Search multiple manifest sources for a target, returning the first match.
+///
+/// Iterates through `sources` in order, attempting URL-based git resolution,
+/// local git resolution (when `version` is set), or direct local path resolution.
+/// Returns the first successful match.
+///
+/// # Arguments
+///
+/// * `target` - Target name to find
+/// * `version` - Optional version (branch/tag) to checkout
+/// * `sources` - Ordered list of source URLs or paths to search
+/// * `persistent_dir` - Optional directory for extracted files. If None, uses tempfile with mem::forget
+pub(crate) fn resolve_target_from_sources(
+    target: &str,
+    version: Option<&str>,
+    sources: &[String],
+    persistent_dir: Option<&Path>,
+) -> Result<ResolvedTarget, String> {
+    let multi_source = sources.len() > 1;
+
+    for (i, source_path) in sources.iter().enumerate() {
+        if is_url(source_path) {
+            match resolve_target_config_from_git(source_path, target, version, persistent_dir) {
+                Ok(path) => {
+                    return Ok(ResolvedTarget {
+                        config_path: path,
+                        source_path: source_path.clone(),
+                        is_git_source: true,
+                        source_index: i,
+                    });
+                }
+                Err(e) => {
+                    if !multi_source {
+                        return Err(e.to_string());
+                    }
+                    messages::verbose(&format!(
+                        "  Target '{}' not found in source: {}",
+                        target, source_path
+                    ));
+                }
+            }
+        } else {
+            let source_root = PathBuf::from(source_path);
+
+            if let Some(v) = version {
+                if source_root.join(".git").exists() {
+                    match resolve_target_config_from_git(
+                        source_path,
+                        target,
+                        Some(v),
+                        persistent_dir,
+                    ) {
+                        Ok(path) => {
+                            return Ok(ResolvedTarget {
+                                config_path: path,
+                                source_path: source_path.clone(),
+                                is_git_source: true,
+                                source_index: i,
+                            });
+                        }
+                        Err(e) => {
+                            if !multi_source {
+                                return Err(e.to_string());
+                            }
+                            messages::verbose(&format!("  Skipping {}: {}", source_path, e));
+                        }
+                    }
+                } else {
+                    if !multi_source {
+                        return Err(format!(
+                            "Version specified but source is not a git repository: {}",
+                            source_path
+                        ));
+                    }
+                    messages::verbose(&format!(
+                        "  Skipping {} (version specified but source is not a git repo)",
+                        source_path
+                    ));
+                }
+            } else {
+                match resolve_target_config(target, &source_root) {
+                    Ok(path) => {
+                        return Ok(ResolvedTarget {
+                            config_path: path,
+                            source_path: source_path.clone(),
+                            is_git_source: false,
+                            source_index: i,
+                        });
+                    }
+                    Err(_) => {
+                        if !multi_source {
+                            let mut msg =
+                                format!("Target '{}' not found in source {}", target, source_path);
+                            if let Ok(targets) = list_available_targets(&source_root) {
+                                msg.push_str("\nAvailable targets:");
+                                for t in targets {
+                                    msg.push_str(&format!("\n  - {}", t));
+                                }
+                            }
+                            return Err(msg);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // No source had the target
+    let mut msg = format!(
+        "Target '{}' not found in any configured manifest source.",
+        target
+    );
+    msg.push_str("\nSearched sources:");
+    for (i, src) in sources.iter().enumerate() {
+        msg.push_str(&format!("\n  - {} ({})", src, source_label(i)));
+    }
+    msg.push_str("\n  Use 'cim list-targets' to see all available targets");
+    Err(msg)
+}
+
 /// Helper function to install OS dependencies during init if they exist
 /// This function is called by init --full to install OS packages before other components
 pub(crate) fn install_os_deps_if_available(
@@ -611,149 +752,76 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         }
     };
 
-    // Determine source path (use user config default if available)
-    let default_source = if let Some(ref uc) = user_config {
-        if let Some(ref ds) = uc.default_source {
-            ds.clone()
-        } else {
-            get_default_source()
-        }
+    // Determine all sources to search
+    let sources: Vec<String> = if let Some(ref src) = config.source {
+        // Explicit --source: use only that source
+        vec![src.clone()]
     } else {
-        get_default_source()
+        get_all_sources_from_config(user_config.as_ref())
     };
 
-    let (source_path, using_user_config_source) = if let Some(src) = config.source {
-        // Explicit source provided, not using user config default
-        (src, false)
-    } else {
-        // No explicit source, check if we have user config default
-        let using_user_default = if let Some(ref uc) = user_config {
-            uc.default_source.is_some()
-        } else {
-            false
-        };
-        if using_user_default {
-            messages::verbose(&format!(
-                "Using default_source from user config: {}",
-                default_source
-            ));
-        }
-        (default_source, using_user_default)
-    };
+    if sources.len() > 1 {
+        messages::verbose(&format!(
+            "Searching {} manifest sources for target '{}'",
+            sources.len(),
+            config.target
+        ));
+    }
 
-    // Track whether we're using a remote git source for copy_files processing
-    let mut is_remote_git_source = false;
-
-    // For now, simplified approach: check if target itself is a URL first, otherwise use source
-    let (config_path, config_url) = if is_url(&config.target) {
-        // Target is a direct URL to config file
-        match resolve_target_config(&config.target, &PathBuf::new()) {
-            Ok(path) => (path, Some(config.target.clone())),
-            Err(e) => {
-                messages::error(&e.to_string());
-                return;
-            }
-        }
-    } else {
-        // Use source to resolve target config
-        if is_url(&source_path) {
-            // Git-based source - clone and checkout specific version
-            match resolve_target_config_from_git(
-                &source_path,
-                &config.target,
-                config.version.as_deref(),
-                None, // Use tempfile with mem::forget for init
-            ) {
-                Ok(path) => {
-                    let version_info = if let Some(v) = &config.version {
-                        format!(" ({})", v)
-                    } else {
-                        " (latest)".to_string()
-                    };
-                    let source_info = if using_user_config_source {
-                        " (user config default_source)"
-                    } else {
-                        ""
-                    };
-                    messages::status(&format!(
-                        "Setting up for target '{}'{} using source: {}{}",
-                        config.target, version_info, source_path, source_info
-                    ));
-                    // Mark that we're using a remote git source for copy_files processing
-                    is_remote_git_source = true;
-                    (path, None) // Use None for git-based configs since dependency files are locally available
-                }
+    // Check if target itself is a URL first, otherwise search sources
+    let (config_path, config_url, is_remote_git_source, resolved_source_path) =
+        if is_url(&config.target) {
+            match resolve_target_config(&config.target, &PathBuf::new()) {
+                Ok(path) => (path, Some(config.target.clone()), false, None),
                 Err(e) => {
                     messages::error(&e.to_string());
                     return;
                 }
             }
         } else {
-            // Local source directory
-            let source_root = PathBuf::from(&source_path);
-
-            // Check if version is specified and source is a git repository
-            if let Some(v) = config.version.as_deref() {
-                if source_root.join(".git").exists() {
-                    // Clone local git repo to temp dir and checkout specific version
-                    match resolve_target_config_from_git(
-                        &source_path,
-                        &config.target,
-                        Some(v),
-                        None,
-                    ) {
-                        Ok(path) => {
-                            messages::verbose(&format!(
-                                "Checked out config for target '{}' at version '{}'",
-                                config.target, v
-                            ));
-                            // Mark that we're using a remote git source for copy_files processing
-                            is_remote_git_source = true;
-                            (path, None)
-                        }
-                        Err(e) => {
-                            messages::error(&e.to_string());
-                            return;
-                        }
-                    }
-                } else {
-                    messages::error(&format!(
-                        "Version specified but source is not a git repository: {}",
-                        source_path
+            match resolve_target_from_sources(
+                &config.target,
+                config.version.as_deref(),
+                &sources,
+                None, // Use tempfile with mem::forget for init
+            ) {
+                Ok(resolved) => {
+                    let version_info = if let Some(v) = &config.version {
+                        format!(" ({})", v)
+                    } else if resolved.is_git_source {
+                        " (latest)".to_string()
+                    } else {
+                        String::new()
+                    };
+                    let label = if sources.len() > 1 {
+                        format!(" ({} source)", source_label(resolved.source_index))
+                    } else if config.source.is_none()
+                        && user_config
+                            .as_ref()
+                            .and_then(|uc| uc.default_source.as_ref())
+                            .is_some()
+                    {
+                        " (user config default_source)".to_string()
+                    } else {
+                        String::new()
+                    };
+                    messages::status(&format!(
+                        "Setting up for target '{}'{} using source: {}{}",
+                        config.target, version_info, resolved.source_path, label
                     ));
+                    (
+                        resolved.config_path,
+                        None,
+                        resolved.is_git_source,
+                        Some(resolved.source_path),
+                    )
+                }
+                Err(e) => {
+                    messages::error(&e);
                     return;
                 }
-            } else {
-                // No version specified, use current state directly
-                match resolve_target_config(&config.target, &source_root) {
-                    Ok(path) => {
-                        if using_user_config_source {
-                            messages::status(&format!(
-                                "Setting up for target '{}' using source: {} (user config default_source)",
-                                config.target, source_path
-                            ));
-                        }
-                        (path, None)
-                    }
-                    Err(e) => {
-                        messages::error(&format!("Error: {}", e));
-                        messages::status("Available targets:");
-                        if let Ok(targets) = list_available_targets(&source_root) {
-                            for target in targets {
-                                messages::status(&format!("  - {}", target));
-                            }
-                        } else {
-                            messages::status(&format!(
-                                "  (Could not list targets from {})",
-                                source_root.display()
-                            ));
-                        }
-                        return;
-                    }
-                }
             }
-        }
-    };
+        };
 
     messages::verbose(&format!(
         "Loading configuration from {}",
@@ -949,7 +1017,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         target_version: config.version.as_deref(),
         skip_mirror,
         source_url: if is_remote_git_source {
-            Some(&source_path)
+            resolved_source_path.as_deref()
         } else {
             None
         },

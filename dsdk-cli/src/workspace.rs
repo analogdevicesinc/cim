@@ -36,16 +36,8 @@ pub fn get_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Get the default manifest source location, considering user config
-pub fn get_default_source() -> String {
-    // Try to load user config to get default_source
-    if let Ok(Some(user_config)) = config::UserConfig::load() {
-        if let Some(ref default_source) = user_config.default_source {
-            return default_source.clone();
-        }
-    }
-
-    // Fall back to hardcoded default with legacy path support
+/// Hardcoded fallback for default manifest source (no config file I/O)
+fn default_source_fallback() -> String {
     let home_path = get_home_dir().unwrap_or_else(|| PathBuf::from("."));
     let devel_dir = home_path.join("devel");
 
@@ -68,6 +60,44 @@ pub fn get_default_source() -> String {
 
     // Neither exists, return new path as default (for error messages)
     new_path.to_string_lossy().to_string()
+}
+
+/// Get the default manifest source location, considering user config
+pub fn get_default_source() -> String {
+    if let Ok(Some(user_config)) = config::UserConfig::load() {
+        if let Some(ref default_source) = user_config.default_source {
+            return default_source.clone();
+        }
+    }
+    default_source_fallback()
+}
+
+/// Get all manifest sources (default + alternates), deduplicated.
+/// Accepts a pre-loaded UserConfig to avoid redundant file I/O.
+pub fn get_all_sources_from_config(user_config: Option<&config::UserConfig>) -> Vec<String> {
+    let default = match user_config.and_then(|uc| uc.default_source.as_ref()) {
+        Some(ds) => expand_env_vars(ds),
+        None => default_source_fallback(),
+    };
+    let alternates = user_config
+        .and_then(|uc| uc.alternate_sources.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    let mut sources = vec![default.clone()];
+    for alt in alternates {
+        let cleaned = expand_env_vars(alt.url.trim());
+        if !cleaned.is_empty() && cleaned != default {
+            sources.push(cleaned);
+        }
+    }
+    sources
+}
+
+/// Get all manifest sources (default + alternates), deduplicated.
+/// Convenience wrapper that loads UserConfig internally.
+pub fn get_all_sources() -> Vec<String> {
+    let uc = config::UserConfig::load().ok().flatten();
+    get_all_sources_from_config(uc.as_ref())
 }
 
 /// Get the docker temporary directory, considering user config
@@ -455,9 +485,9 @@ pub fn require_workspace_config() -> Result<(PathBuf, PathBuf), String> {
     Ok((workspace_path, config_path))
 }
 
-/// Check if a string represents a URL (http:// or https://)
+/// Check if a string represents a URL (http://, https://, or git@ SSH)
 pub fn is_url(input: &str) -> bool {
-    input.starts_with("http://") || input.starts_with("https://")
+    input.starts_with("http://") || input.starts_with("https://") || input.starts_with("git@")
 }
 
 /// Expand environment variables in a path string
@@ -1581,5 +1611,87 @@ mod tests {
 
         let result = generate_git_dir_vars(&gits, Some(&user_vars)).unwrap();
         assert!(!result.contains_key("U_BOOT_DIR"));
+    }
+
+    #[test]
+    fn test_is_url_http() {
+        assert!(is_url("http://example.com/manifests"));
+    }
+
+    #[test]
+    fn test_is_url_https() {
+        assert!(is_url("https://github.com/org/repo.git"));
+    }
+
+    #[test]
+    fn test_is_url_ssh() {
+        assert!(is_url("git@github.com:org/repo.git"));
+    }
+
+    #[test]
+    fn test_is_url_local_path() {
+        assert!(!is_url("/home/user/manifests"));
+        assert!(!is_url("./relative/path"));
+        assert!(!is_url("manifests"));
+    }
+
+    #[test]
+    fn test_get_all_sources_from_config_default_only() {
+        let uc = config::UserConfig {
+            default_source: Some("/my/source".to_string()),
+            alternate_sources: None,
+            ..Default::default()
+        };
+        let sources = get_all_sources_from_config(Some(&uc));
+        assert_eq!(sources, vec!["/my/source"]);
+    }
+
+    fn alt(url: &str) -> config::AlternateSourceConfig {
+        config::AlternateSourceConfig {
+            url: url.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_get_all_sources_from_config_with_alternates() {
+        let uc = config::UserConfig {
+            default_source: Some("/default".to_string()),
+            alternate_sources: Some(vec![alt("/alt1"), alt("/alt2")]),
+            ..Default::default()
+        };
+        let sources = get_all_sources_from_config(Some(&uc));
+        assert_eq!(sources, vec!["/default", "/alt1", "/alt2"]);
+    }
+
+    #[test]
+    fn test_get_all_sources_from_config_dedup() {
+        let uc = config::UserConfig {
+            default_source: Some("/default".to_string()),
+            alternate_sources: Some(vec![
+                alt("/default"), // duplicate of default
+                alt("/alt1"),
+            ]),
+            ..Default::default()
+        };
+        let sources = get_all_sources_from_config(Some(&uc));
+        assert_eq!(sources, vec!["/default", "/alt1"]);
+    }
+
+    #[test]
+    fn test_get_all_sources_from_config_filters_empty() {
+        let uc = config::UserConfig {
+            default_source: Some("/default".to_string()),
+            alternate_sources: Some(vec![alt(""), alt("   "), alt("/valid")]),
+            ..Default::default()
+        };
+        let sources = get_all_sources_from_config(Some(&uc));
+        assert_eq!(sources, vec!["/default", "/valid"]);
+    }
+
+    #[test]
+    fn test_get_all_sources_from_config_no_config() {
+        let sources = get_all_sources_from_config(None);
+        // Should return the hardcoded fallback path
+        assert_eq!(sources.len(), 1);
     }
 }

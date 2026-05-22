@@ -411,6 +411,13 @@ cim utils update
 # Override default manifest source
 default_source = "https://github.com/<a-path-to>/cim-manifests"
 
+# Additional manifest sources (searched after default_source)
+[[alternate_sources]]
+url = "https://github.com/myteam/custom-manifests"
+
+[[alternate_sources]]
+url = "$HOME/devel/local-manifests"
+
 # Override mirror location
 mirror_path = "/custom/mirror"
 

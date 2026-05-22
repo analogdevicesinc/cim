@@ -373,6 +373,7 @@ fn test_user_config_list_all_simple_fields() {
         default_workspace: Some(PathBuf::from("/home/user/workspace")),
         workspace_prefix: Some("myprefix-".to_string()),
         default_source: Some("https://example.com/manifests".to_string()),
+        alternate_sources: None,
         no_mirror: Some(true),
         docker_temp_dir: Some(PathBuf::from("/tmp/docker")),
         copy_files: None,
@@ -939,6 +940,7 @@ fn test_user_config_mirror_override_priority() {
     let user_config = UserConfig {
         mirror: Some(user_mirror.clone()),
         default_source: None,
+        alternate_sources: None,
         default_workspace: None,
         workspace_prefix: None,
         no_mirror: None,
@@ -987,6 +989,7 @@ fn test_user_config_mirror_override_with_multiple_overrides() {
     let user_config = UserConfig {
         mirror: Some(user_mirror.clone()),
         default_source: Some("https://github.com/example/manifests.git".to_string()),
+        alternate_sources: None,
         default_workspace: Some(fixture.path().join("workspace")),
         workspace_prefix: Some("test-".to_string()),
         no_mirror: Some(true),
