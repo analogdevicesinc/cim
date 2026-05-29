@@ -11,16 +11,16 @@
 
 use crate::cli::{Cli, DockerCommand};
 use crate::init_cmd::{
-    compile_match_regex, create_filtered_sdk_config, filter_git_configs,
-    get_latest_commit_for_branch, is_branch_reference, list_target_versions,
-    list_targets_from_source, resolve_target_from_sources, setup_direnv, source_label,
+    compile_match_regex, create_filtered_sdk_config, get_latest_commit_for_branch,
+    is_branch_reference, list_target_versions, list_targets_from_source, setup_direnv,
+    source_label,
 };
 use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
 use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::workspace::{
-    expand_config_mirror_path, get_all_sources, get_all_sources_from_config, get_docker_temp_dir,
-    require_workspace_config, WorkspaceMarker, PYTHON_DEPS_FILE, WORKSPACE_MARKER_FILE,
+    expand_config_mirror_path, get_all_sources, require_workspace_config, WorkspaceMarker,
+    WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{config, docker_manager, git_operations, messages};
 use std::fs;
@@ -1078,271 +1078,41 @@ pub(crate) fn checkout_commit(git_cfg: &config::GitConfig, repo_path: &Path) -> 
 
 /// Handle Docker commands
 pub(crate) fn handle_docker_command(docker_command: &DockerCommand) {
-    // Docker command must be run from the dsdk source repository folder
-    let current_dir = std::env::current_dir().unwrap_or_else(|e| {
-        messages::error(&format!("Could not get current directory: {}", e));
-        std::process::exit(1);
-    });
-
-    // Check if we're in the dsdk source folder by looking for Cargo.toml and dsdk-cli/src/main.rs
-    let cargo_toml = current_dir.join("Cargo.toml");
-    let dsdk_cli_main = current_dir.join("dsdk-cli/src/main.rs");
-
-    if !cargo_toml.exists() || !dsdk_cli_main.exists() {
-        messages::error("Docker command must be run from the cim source repository");
-        messages::status(&format!("Current directory: {}", current_dir.display()));
-        messages::status("Missing required files:");
-        if !cargo_toml.exists() {
-            messages::status("  - Cargo.toml");
-        }
-        if !dsdk_cli_main.exists() {
-            messages::status("  - dsdk-cli/src/main.rs");
-        }
-        messages::status("");
-        messages::status("Please cd to your cim source repository and run the command again.");
-        return;
-    }
-
     match docker_command {
         DockerCommand::Create {
             target,
             source,
             version,
             distro,
-            profile,
-            arch,
-            output: _, // Dockerfile always created in temp directory
+            output,
             force,
-            force_https,
-            force_ssh,
-            no_mirror,
-            r#match,
         } => {
-            // Get docker temp directory for storing extracted manifests
-            let docker_temp_dir = match get_docker_temp_dir() {
-                Ok(dir) => dir,
-                Err(e) => {
-                    messages::error(&format!("Failed to create docker temp directory: {}", e));
-                    return;
-                }
-            };
-
-            // Load user config for no_mirror preference
-            let user_config = config::UserConfig::load().ok().flatten();
-
-            // Determine if we should skip mirror with precedence:
-            // CLI flag > user config > default (false)
-            let skip_mirror = *no_mirror
-                || user_config
-                    .as_ref()
-                    .and_then(|uc| uc.no_mirror)
-                    .unwrap_or(false);
-
-            // Determine sources to search for the target
-            let sources: Vec<String> = if let Some(ref src) = source {
-                // Explicit --source: use only that source
-                vec![src.clone()]
-            } else {
-                get_all_sources_from_config(user_config.as_ref())
-            };
-
-            // Resolve config path using the same approach as init command
-            // For git sources, extract to docker_temp_dir instead of using mem::forget
-            let config_path = match resolve_target_from_sources(
-                target,
-                version.as_deref(),
-                &sources,
-                Some(&docker_temp_dir),
-            ) {
-                Ok(resolved) => {
-                    let version_info = if let Some(v) = &version {
-                        format!(" (version: {})", v)
-                    } else if resolved.is_git_source {
-                        " (latest)".to_string()
-                    } else {
-                        String::new()
-                    };
-                    let label = if sources.len() > 1 {
-                        format!(" ({} source)", source_label(resolved.source_index))
-                    } else {
-                        String::new()
-                    };
-                    messages::status(&format!(
-                        "Fetched config for target '{}'{}{} from: {}",
-                        target, version_info, label, resolved.source_path
-                    ));
-                    resolved.config_path
-                }
-                Err(e) => {
-                    messages::error(&e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Validate core config exists and is loadable
-            if let Err(e) = config::load_config(&config_path) {
-                messages::error(&format!(
-                    "Failed to load SDK config from {}: {}",
-                    config_path.display(),
-                    e
-                ));
-                return;
-            }
-
-            // Load the full config with dependencies (required for Docker generation)
-            let (full_sdk_config, os_deps) = match config::load_config_with_os_deps(&config_path) {
-                Ok((config, Some(deps))) => (config, deps),
-                Ok((_, None)) => {
-                    messages::error("os-dependencies.yml is required for Docker generation");
-                    messages::info(
-                        "Please ensure os-dependencies.yml exists in the target directory",
-                    );
-                    return;
-                }
-                Err(e) => {
-                    messages::error(&format!("Could not load dependency files: {}", e));
-                    messages::info("Please ensure os-dependencies.yml exists and is valid YAML");
-                    return;
-                }
-            };
-
-            // Load python dependencies from the same directory as the config
-            let config_dir = config_path
-                .parent()
-                .expect("Config path should have parent directory");
-            let python_deps_path = config_dir.join(PYTHON_DEPS_FILE);
-            let python_deps = match config::load_python_dependencies(&python_deps_path) {
-                Ok(deps) => deps,
-                Err(e) => {
-                    messages::error(&format!("Could not load python-dependencies.yml: {}", e));
-                    messages::status(&format!("Config directory: {}", config_dir.display()));
-                    messages::status(&format!("Expected file: {}", python_deps_path.display()));
-                    return;
-                }
-            };
-
-            // Apply filtering if --match is provided
-            let filtered_sdk_config = if let Some(pattern) = r#match {
-                // Compile regex - if it fails, exit with error
-                let match_regex = match compile_match_regex(pattern) {
-                    Ok(regex) => Some(regex),
-                    Err(e) => {
-                        messages::error(&e);
-                        return;
-                    }
-                };
-                let filtered_gits = filter_git_configs(&full_sdk_config.gits, &match_regex);
-                messages::status(&format!(
-                    "Filtered to {} repositories (from {} total)",
-                    filtered_gits.len(),
-                    full_sdk_config.gits.len()
-                ));
-                config::SdkConfig {
-                    mirror: full_sdk_config.mirror.clone(),
-                    gits: filtered_gits,
-                    toolchains: full_sdk_config.toolchains.clone(),
-                    copy_files: full_sdk_config.copy_files.clone(),
-                    install: full_sdk_config.install.clone(),
-                    makefile_include: full_sdk_config.makefile_include.clone(),
-                    build_folder: full_sdk_config.build_folder.clone(),
-                    envsetup: full_sdk_config.envsetup.clone(),
-                    test: full_sdk_config.test.clone(),
-                    clean: full_sdk_config.clean.clone(),
-                    build: full_sdk_config.build.clone(),
-                    flash: full_sdk_config.flash.clone(),
-                    variables: full_sdk_config.variables.clone(),
-                    phases: full_sdk_config.phases.clone(),
-                    direnv: full_sdk_config.direnv.clone(),
-                }
-            } else {
-                // No filtering, use original config
-                full_sdk_config.clone()
-            };
-
-            // Get the temp directory containing all config files
-            let config_dir = config_path
-                .parent()
-                .expect("Config path should have parent directory");
-
-            // Copy cross-compiled binary to temp directory so it's in Docker build context
-            let source_binary = current_dir
-                .join("target")
-                .join(arch)
-                .join("release")
-                .join("cim");
-
-            let dest_binary = config_dir.join("cim");
-
-            if !source_binary.exists() {
-                messages::error(&format!(
-                    "Cross-compiled binary not found at {}",
-                    source_binary.display()
-                ));
-                messages::info(&format!(
-                    "Please run: cross build --release --target {}",
-                    arch
-                ));
-                return;
-            }
-
-            if let Err(e) = fs::copy(&source_binary, &dest_binary) {
-                messages::error(&format!("Failed to copy binary to temp directory: {}", e));
-                return;
-            }
-            messages::verbose(&format!("Copied {} binary to build context", arch));
-
-            // Dockerfile will be created in the temp directory alongside config files
-            // This makes all files (including the binary) accessible within Docker's build context
-
-            let dockerfile_output = config_dir.join("Dockerfile");
-
-            let docker_manager =
-                docker_manager::DockerManager::new(current_dir.clone(), config_dir.to_path_buf());
-            messages::status("Generating Dockerfile...");
+            let distro_str = distro.as_deref().unwrap_or("ubuntu:22.04");
 
             let config = docker_manager::DockerfileConfig {
-                sdk_config: &filtered_sdk_config,
-                os_deps: &os_deps,
-                python_deps: &python_deps,
-                output_path: &dockerfile_output,
-                distro_preference: distro.as_deref(),
-                python_profile: profile,
+                target,
+                version: version.as_deref(),
+                source: source.as_deref(),
+                distro: distro_str,
+                output_path: output,
                 force: *force,
-                force_https: *force_https,
-                force_ssh: *force_ssh,
-                no_mirror: skip_mirror,
             };
-            match docker_manager.create_dockerfile(config) {
-                Ok(_) => {
-                    // docker_manager.create_dockerfile already prints success message with details
 
-                    // Show build instructions
+            match docker_manager::create_dockerfile(&config) {
+                Ok(()) => {
+                    messages::success(&format!("Dockerfile created at '{}'", output.display()));
                     messages::status("");
                     messages::status("To build the Docker image:");
-                    messages::status(&format!("  cd {}", config_dir.display()));
+                    messages::status(&format!(
+                        "  docker build -t sdk-image -f {} .",
+                        output.display()
+                    ));
                     messages::status("");
-                    messages::status(
-                        "For a setup known to have all git repositories being public:",
-                    );
-                    messages::status("  docker build -t sdk-image .");
-                    messages::status("");
-                    messages::status("For a setup with private GitHub repositories:");
-                    messages::status("  export GITHUB_TOKEN=<your_token>");
-                    messages::status(
-                        "  docker build --secret id=GIT_AUTH_TOKEN,env=GITHUB_TOKEN -t sdk-image .",
-                    );
-                    messages::status("");
-                    messages::status("Create a token at: https://github.com/settings/tokens");
-                    messages::status("Required scopes: repo (for private repos)");
-                    messages::status("");
-                    messages::status("For organizations with SAML SSO:");
-                    messages::status("  After creating the token, authorize it at:");
-                    messages::status(
-                        "  https://github.com/settings/tokens → Configure SSO → Authorize",
-                    );
+                    messages::status("To run the image:");
+                    messages::status("  docker run -it sdk-image");
                 }
                 Err(e) => {
-                    messages::error(&format!("Failed to create Dockerfile: {}", e));
+                    messages::error(&format!("{}", e));
                 }
             }
         }

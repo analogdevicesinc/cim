@@ -319,7 +319,7 @@ pub enum DocsCommand {
 pub enum DockerCommand {
     /// Create a Dockerfile for SDK development
     Create {
-        /// Target name (looks in configs/targets/<name>/sdk.yml)
+        /// Target name (looks in targets/<name>/sdk.yml)
         #[arg(
             short,
             long,
@@ -343,25 +343,13 @@ pub enum DockerCommand {
             help = "Target version (branch/tag name)"
         )]
         version: Option<String>,
-        /// Target Linux distribution (e.g., ubuntu:22.04, fedora:42)
-        #[arg(short, long, help = "Linux distribution for Docker image")]
+        /// Base Docker image (e.g. ubuntu:22.04, fedora:40) [default: ubuntu:22.04]
+        #[arg(
+            short,
+            long,
+            help = "Linux distribution for Docker image (e.g. ubuntu:22.04)"
+        )]
         distro: Option<String>,
-        /// Python dependency profile to use
-        #[arg(
-            short,
-            long,
-            default_value = "docs",
-            help = "Python profile from python-dependencies.yml"
-        )]
-        profile: String,
-        /// Target architecture for cross-compilation
-        #[arg(
-            short,
-            long,
-            default_value = "aarch64-unknown-linux-gnu",
-            help = "Target architecture"
-        )]
-        arch: String,
         /// Output Dockerfile path
         #[arg(
             short,
@@ -371,20 +359,8 @@ pub enum DockerCommand {
         )]
         output: PathBuf,
         /// Force overwrite existing Dockerfile
-        #[arg(short, long, help = "Force overwrite existing files")]
+        #[arg(short, long, help = "Force overwrite existing Dockerfile")]
         force: bool,
-        /// Force all git URLs to use HTTPS protocol for corporate proxy compatibility
-        #[arg(long, help = "Convert git URLs to HTTPS")]
-        force_https: bool,
-        /// Force all git URLs to use SSH protocol for key-based authentication
-        #[arg(long, help = "Convert git URLs to SSH")]
-        force_ssh: bool,
-        /// Skip mirror operations in the generated Docker environment
-        #[arg(long, help = "Skip mirror operations in Docker")]
-        no_mirror: bool,
-        /// Only include repositories matching this regex pattern in the Dockerfile
-        #[arg(short, long, help = "Filter repositories by regex pattern")]
-        r#match: Option<String>,
     },
 }
 
