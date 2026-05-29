@@ -29,8 +29,7 @@
 #   - docs build: --format (-f)
 #   - docs serve: --port (-p), --host
 #   - docker create: --target (-t), --source (-s), --version (-v), --distro (-d),
-#                    --profile (-p), --arch (-a), --output (-o), --force (-f),
-#                    --force-https, --force-ssh, --no-mirror, --match (-m)
+#                    --output (-o), --force (-f)
 #   - release: --tag (-t), --genconfig, --include, --exclude, --dry-run
 #   - config: --list (-l), --get (-g), --path (-p), --template (-t), --create (-c),
 #             --force (-f), --edit (-e), --validate (-v)
@@ -396,25 +395,12 @@ _cim_completions() {
                                 COMPREPLY=( $(compgen -W "ubuntu:20.04 ubuntu:22.04 ubuntu:24.04 fedora:39 fedora:40 fedora:41 fedora:42 debian:11 debian:12 centos:7 centos:8" -- "${cur}") )
                                 return 0
                                 ;;
-                            -p|--profile)
-                                COMPREPLY=( $(compgen -W "minimal docs dev full" -- "${cur}") )
-                                return 0
-                                ;;
-                            -a|--arch)
-                                COMPREPLY=( $(compgen -W "aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-gnu" -- "${cur}") )
-                                return 0
-                                ;;
                             -o|--output)
                                 _complete_file_path
                                 return 0
                                 ;;
-                            -m|--match)
-                                # Common regex patterns
-                                COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
-                                return 0
-                                ;;
                             *)
-                                COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --distro -d --profile -p --arch -a --output -o --force -f --force-https --force-ssh --no-mirror --match -m --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --distro -d --output -o --force -f --help" -- "${cur}") )
                                 return 0
                                 ;;
                         esac
