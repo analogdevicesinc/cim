@@ -290,6 +290,38 @@ omitted.  Both keys are optional.  The legacy bare-list form
 (`makefile_include: [include extra.mk]`) remains supported and implies
 no exclusions.
 
+#### Custom Phases
+
+By default, `cim` generates the five standard `sdk-*` targets: `sdk-envsetup`,
+`sdk-build`, `sdk-test`, `sdk-clean`, and `sdk-flash`.  You can extend this list
+with custom phases by adding a `phases:` key to `sdk.yml`:
+
+```yaml
+phases:
+  - deploy
+  - lint
+  - docs
+```
+
+This generates `sdk-deploy`, `sdk-lint`, and `sdk-docs` targets in addition to the
+standard five. Custom phases are implemented via per-repository `.mk` fragments
+in your `build_folder` (default: `build/`). For example, add `build/myrepo.mk`
+with targets like:
+
+```makefile
+myrepo-deploy:
+	@echo "Deploying myrepo..."
+	# deployment commands here
+
+myrepo-lint:
+	@echo "Linting myrepo..."
+	# linting commands here
+```
+
+The Makefile auto-discovers these as `sdk-deploy` and `sdk-lint` overlay targets.
+Custom phases are useful for workflows like deployment, linting, documentation
+generation, or other domain-specific build operations.
+
 #### foreach
 
 Run command in each repo.
