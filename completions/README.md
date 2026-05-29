@@ -71,7 +71,7 @@ The completion script provides intelligent completion for:
 ### Commands:
 - `cim list-targets` - List available SDK targets with source and target filtering
 - `cim init` - Initialize workspace with target, source, version, and match filtering
-- `cim update` - Update repositories with mirror, match, and verbose options
+- `cim update` - Update repositories with mirror, match, all, and verbose options
 - `cim foreach` - Execute commands in each repository with match filtering
 - `cim makefile` - Generate Makefile from SDK configuration
 - `cim add` - Add new repositories with name, URL, and commit parameters
@@ -124,7 +124,7 @@ cim init --match <TAB>
 
 # Complete update options
 cim update --<TAB>
-# Shows: --no-mirror --match --verbose --help
+# Shows: --no-mirror --match --all --verbose --help
 
 # Complete foreach commands
 cim foreach <TAB>

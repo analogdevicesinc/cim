@@ -251,11 +251,16 @@ cim init --target NAME [--workspace PATH] [--version VERSION]
 
 #### update
 
-Update git repos in workspace.
+Update git repos in workspace. By default, if the workspace was created
+with `--match`, only the matched repositories are updated.
 
 ```bash
-cim update [--match REGEX] [--no-mirror]
+cim update [--match REGEX] [--all] [--no-mirror]
 ```
+
+- `--all`: Update all repositories, ignoring any stored match filter
+  from init. Clears the stored filter so subsequent updates also cover
+  all repositories.
 
 #### makefile
 

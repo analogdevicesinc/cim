@@ -17,7 +17,7 @@
 #   - init: --target (-t), --source (-s), --version (-v), --workspace (-w),
 #           --no-mirror, --force, --match, --verbose, --install, --full, --symlink,
 #           --yes (-y), --cert-validation, --no-includes
-#   - update: --no-mirror, --match, --verbose (-v), --cert-validation
+#   - update: --no-mirror, --match, --all, --verbose (-v), --cert-validation
 #   - foreach: command, --match
 #   - makefile: --no-dividers, --no-includes
 #   - add: --name (-n), --url (-u), --commit
@@ -199,7 +199,7 @@ _cim_completions() {
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--no-mirror --match --verbose -v --cert-validation --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--no-mirror --match --all --verbose -v --cert-validation --help" -- "${cur}") )
                     return 0
                     ;;
             esac
