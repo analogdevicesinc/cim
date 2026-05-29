@@ -699,18 +699,25 @@ pub(crate) struct InitConfig<'a> {
 
 /// Write .envrc and trust the workspace with direnv.
 ///
-/// Venv creation is intentionally left to `install_pip_packages_if_available` (which runs as
-/// Step 2, before `make install-all`) so that symlink semantics are respected.  The .envrc
-/// itself contains the creation guard for users who activate the workspace via direnv directly.
+/// In symlink mode, .venv points to a shared mirror venv. The generated .envrc resolves the
+/// symlink target and creates the venv at that canonical target path when needed to avoid
+/// workspace-specific shebangs in shared scripts.
 pub(crate) fn setup_direnv(
     workspace_path: &std::path::Path,
     direnv_cfg: &dsdk_cli::config::DirenvConfig,
+    symlink: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let venv = direnv_cfg.venv_path_or_default();
 
-    let envrc_content = format!(
-        "if [ ! -d \"{venv}\" ] ; then\n  python3 -m venv {venv}\nfi\n. {venv}/bin/activate\n"
-    );
+    let envrc_content = if symlink {
+        format!(
+            "if [ -L \"{venv}\" ] ; then\n  _venv_target=\"$(readlink \"{venv}\")\"\n  case \"$_venv_target\" in\n    /*) ;;\n    *) _venv_target=\"$(cd \"$(dirname \"{venv}\")\" && pwd)/$_venv_target\" ;;\n  esac\n  if [ ! -d \"$_venv_target\" ] ; then\n    python3 -m venv \"$_venv_target\"\n  fi\nelif [ ! -d \"{venv}\" ] ; then\n  python3 -m venv {venv}\nfi\n. {venv}/bin/activate\n"
+        )
+    } else {
+        format!(
+            "if [ ! -d \"{venv}\" ] ; then\n  python3 -m venv {venv}\nfi\n. {venv}/bin/activate\n"
+        )
+    };
     std::fs::write(workspace_path.join(".envrc"), &envrc_content)?;
 
     // Trust the workspace with direnv (best-effort; direnv may not be installed yet).
@@ -1109,16 +1116,6 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             let _ = clipboard.set_text(workspace_path.display().to_string());
         }
 
-        // Set up direnv (write .envrc + create venv) before any install targets run,
-        // so install commands that activate the venv find it ready.
-        if let Some(direnv_cfg) = sdk_config.direnv() {
-            if direnv_cfg.used {
-                if let Err(e) = setup_direnv(&workspace_path, direnv_cfg) {
-                    messages::info(&format!("Note: direnv setup encountered an issue: {}", e));
-                }
-            }
-        }
-
         // Determine if we should run installation steps
         // --full implies --install
         let should_install = config.install || config.full;
@@ -1259,6 +1256,16 @@ pub(crate) fn handle_init_command(config: InitConfig) {
                         e
                     ));
                     messages::status("You can generate it later with 'cim makefile'");
+                }
+            }
+        }
+
+        // Set up direnv after install steps. In symlink mode, install may create .venv symlink,
+        // and .envrc should respect that canonical target path.
+        if let Some(direnv_cfg) = sdk_config.direnv() {
+            if direnv_cfg.used {
+                if let Err(e) = setup_direnv(&workspace_path, direnv_cfg, config.symlink) {
+                    messages::info(&format!("Note: direnv setup encountered an issue: {}", e));
                 }
             }
         }
@@ -1516,6 +1523,7 @@ pub(crate) fn get_latest_commit_for_branch(repo_path: &Path, branch_name: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dsdk_cli::config::DirenvConfig;
     use dsdk_cli::git_operations;
     use std::fs;
     use tempfile::TempDir;
@@ -1525,6 +1533,42 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let workspace_path = temp_dir.path().to_path_buf();
         (temp_dir, workspace_path)
+    }
+
+    #[test]
+    fn test_setup_direnv_non_symlink_content() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let direnv_cfg = DirenvConfig {
+            used: true,
+            venv_path: None,
+        };
+
+        setup_direnv(&workspace_path, &direnv_cfg, false).expect("Failed to write .envrc");
+
+        let envrc =
+            fs::read_to_string(workspace_path.join(".envrc")).expect("Failed to read .envrc");
+        assert!(envrc.contains("if [ ! -d \".venv\" ] ; then"));
+        assert!(envrc.contains("python3 -m venv .venv"));
+        assert!(envrc.contains(". .venv/bin/activate"));
+        assert!(!envrc.contains("readlink"));
+    }
+
+    #[test]
+    fn test_setup_direnv_symlink_content() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let direnv_cfg = DirenvConfig {
+            used: true,
+            venv_path: Some(".venv".to_string()),
+        };
+
+        setup_direnv(&workspace_path, &direnv_cfg, true).expect("Failed to write .envrc");
+
+        let envrc =
+            fs::read_to_string(workspace_path.join(".envrc")).expect("Failed to read .envrc");
+        assert!(envrc.contains("if [ -L \".venv\" ] ; then"));
+        assert!(envrc.contains("readlink \".venv\""));
+        assert!(envrc.contains("python3 -m venv \"$_venv_target\""));
+        assert!(envrc.contains(". .venv/bin/activate"));
     }
 
     // Test cases for the new list-targets command functionality

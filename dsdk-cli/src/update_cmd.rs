@@ -540,7 +540,7 @@ pub(crate) fn handle_update_command(
     // Idempotently set up direnv if configured and .envrc is not yet present.
     if let Some(direnv_cfg) = sdk_config.direnv() {
         if direnv_cfg.used && !workspace_path.join(".envrc").exists() {
-            if let Err(e) = setup_direnv(&workspace_path, direnv_cfg) {
+            if let Err(e) = setup_direnv(&workspace_path, direnv_cfg, false) {
                 messages::info(&format!("Note: direnv setup encountered an issue: {}", e));
             }
         }
