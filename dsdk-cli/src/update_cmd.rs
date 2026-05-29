@@ -428,11 +428,37 @@ pub(crate) fn handle_update_command(
     messages::verbose(&format!("Mirror: {}", expanded_mirror.display()));
     sdk_config.mirror = expanded_mirror;
 
+    // Determine match pattern: CLI flag takes precedence, then workspace marker
+    let effective_match_pattern: Option<String> = if match_pattern.is_some() {
+        match_pattern.map(|s| s.to_string())
+    } else {
+        // Read stored match pattern from workspace marker
+        let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
+        if marker_path.exists() {
+            match fs::read_to_string(&marker_path) {
+                Ok(content) => serde_yaml::from_str::<WorkspaceMarker>(&content)
+                    .ok()
+                    .and_then(|m| m.match_pattern),
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    };
+
     // Compile regex pattern if provided
-    let match_regex = if let Some(pattern) = match_pattern {
+    let match_regex = if let Some(ref pattern) = effective_match_pattern {
         match compile_match_regex(pattern) {
             Ok(regex) => {
-                messages::status(&format!("Filtering repositories with pattern: {}", pattern));
+                let source = if match_pattern.is_some() {
+                    "CLI"
+                } else {
+                    "workspace marker"
+                };
+                messages::status(&format!(
+                    "Filtering repositories with pattern: {} (from {})",
+                    pattern, source
+                ));
                 Some(regex)
             }
             Err(e) => {
