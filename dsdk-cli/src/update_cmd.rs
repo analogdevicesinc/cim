@@ -377,6 +377,7 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
 pub(crate) fn handle_update_command(
     no_mirror: bool,
     match_pattern: Option<&str>,
+    all: bool,
     verbose: bool,
     _cert_validation: Option<&str>,
 ) {
@@ -428,8 +429,12 @@ pub(crate) fn handle_update_command(
     messages::verbose(&format!("Mirror: {}", expanded_mirror.display()));
     sdk_config.mirror = expanded_mirror;
 
-    // Determine match pattern: CLI flag takes precedence, then workspace marker
-    let effective_match_pattern: Option<String> = if match_pattern.is_some() {
+    // Determine match pattern: --all disables filtering, CLI --match takes
+    // precedence over stored workspace marker pattern.
+    let effective_match_pattern: Option<String> = if all {
+        messages::status("Updating all repositories (--all flag, ignoring stored match filter)");
+        None
+    } else if match_pattern.is_some() {
         match_pattern.map(|s| s.to_string())
     } else {
         // Read stored match pattern from workspace marker
@@ -518,6 +523,18 @@ pub(crate) fn handle_update_command(
 
         // Update workspace repositories (single-threaded to avoid conflicts)
         update_workspace_repos(&filtered_config, &workspace_path, false, false);
+    }
+
+    // When --all is used, clear the stored match pattern from the workspace
+    // marker so subsequent updates without --all still update everything.
+    if all {
+        use dsdk_cli::workspace::update_workspace_marker_match_pattern;
+        if let Err(e) = update_workspace_marker_match_pattern(&workspace_path, None) {
+            messages::info(&format!(
+                "Note: failed to clear match pattern from workspace marker: {}",
+                e
+            ));
+        }
     }
 
     // Idempotently set up direnv if configured and .envrc is not yet present.

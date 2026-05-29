@@ -137,6 +137,12 @@ pub enum Commands {
         /// Only update repositories matching the given regex pattern
         #[arg(long, help = "Only update repositories matching this regex pattern")]
         r#match: Option<String>,
+        /// Update all repositories, ignoring the stored match pattern
+        #[arg(
+            long,
+            help = "Update all repositories, ignoring stored match filter from init"
+        )]
+        all: bool,
         /// Enable verbose output
         #[arg(short, long, help = "Show detailed progress information")]
         verbose: bool,

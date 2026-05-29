@@ -113,12 +113,14 @@ fn main() {
         Commands::Update {
             no_mirror,
             r#match,
+            all,
             verbose,
             cert_validation,
         } => {
             handle_update_command(
                 *no_mirror,
                 r#match.as_deref(),
+                *all,
                 *verbose,
                 cert_validation.as_deref(),
             );
