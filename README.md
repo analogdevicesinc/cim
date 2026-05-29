@@ -933,22 +933,27 @@ cim init --target my-sdk --source ./my-manifests
 
 ### Docker
 
-The `docker create` command generates Dockerfiles for containerized SDK development. The feature is experimental and command options may change in future versions. Since it need cross compiled `cim` binaries for the target, this command can and should only be used from the source code folder of `cim` itself.
+The `docker create` command generates a Dockerfile that downloads `cim`
+from GitHub Releases and runs `cim init` to set up the workspace inside
+the container. It can be run from anywhere — no source tree or
+cross-compilation required.
 
 ```bash
 # Generate Dockerfile
-cim docker create --target optee-qemu-v8 --distro ubuntu:22.04
+cim docker create --target optee-qemu-v8
 
 # Build and run
 docker build -t sdk-dev .
-docker run -it sdk-dev bash
+docker run -it sdk-dev
 ```
 
 Options:
-- `--distro`: Linux distribution (e.g., ubuntu:22.04, fedora:42)
-- `--profile`: Python profile for documentation tools
-- `--force-https`: Convert git URLs to HTTPS (useful for corporate proxies)
-- `--match`: Filter repositories by regex pattern
+- `--target` (`-t`): Target name (required)
+- `--source` (`-s`): Manifest source URL or local path
+- `--version` (`-v`): Target version (branch/tag)
+- `--distro` (`-d`): Base Docker image (default: `ubuntu:22.04`)
+- `--output` (`-o`): Output Dockerfile path (default: `Dockerfile`)
+- `--force` (`-f`): Overwrite existing Dockerfile
 
 ---
 

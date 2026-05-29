@@ -111,9 +111,13 @@ The repository includes a Makefile to streamline common development tasks:
 - `make help` - Display all available targets
 
 ## Docker Usage
-- Can only be used from with/from the source code folder.
-- Build and run the SDK tool in a container using the provided `Dockerfile`.
-- See `dsdk-cli/src/docker_manager.rs` for Docker integration details.
+- `cim docker create` generates a Dockerfile that downloads `cim` from
+  GitHub Releases and runs `cim init` inside the container.
+- Can be run from anywhere — no source tree or cross-compilation needed.
+- The generated Dockerfile auto-detects the package manager and CPU
+  architecture at build time.
+- See `dsdk-cli/src/docker_manager.rs` for the `generate_dockerfile()`
+  and `create_dockerfile()` functions.
 
 ## Formatting Standards
 - **Line Endings**: All files must use Unix line endings (LF, `\n`) for cross-platform compatibility. Never use Windows line endings (CRLF, `\r\n`).
