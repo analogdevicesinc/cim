@@ -143,6 +143,9 @@ pub struct WorkspaceMarker {
     /// Directory containing the original config file (for resolving relative copy_files paths)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_source_dir: Option<String>,
+    /// Regex pattern used to filter repositories during init (--match option)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_pattern: Option<String>,
 }
 
 /// Find the workspace root by walking up directories looking for .workspace marker
@@ -173,6 +176,7 @@ pub struct CreateWorkspaceMarkerParams<'a> {
     pub target_version: Option<&'a str>,
     pub skip_mirror: bool,
     pub source_url: Option<&'a str>,
+    pub match_pattern: Option<&'a str>,
 }
 
 /// Create workspace marker file
@@ -237,6 +241,7 @@ pub fn create_workspace_marker(
         cim_commit,
         no_mirror: if params.skip_mirror { Some(true) } else { None },
         config_source_dir,
+        match_pattern: params.match_pattern.map(|s| s.to_string()),
     };
 
     fs::write(&marker_path, serde_yaml::to_string(&marker)?)?;
@@ -244,6 +249,20 @@ pub fn create_workspace_marker(
         "Created workspace marker: {}",
         marker_path.display()
     ));
+    Ok(())
+}
+
+/// Update the match_pattern field in an existing workspace marker file.
+/// Pass `None` to clear the stored match pattern.
+pub fn update_workspace_marker_match_pattern(
+    workspace_path: &Path,
+    match_pattern: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
+    let content = fs::read_to_string(&marker_path)?;
+    let mut marker: WorkspaceMarker = serde_yaml::from_str(&content)?;
+    marker.match_pattern = match_pattern.map(|s| s.to_string());
+    fs::write(&marker_path, serde_yaml::to_string(&marker)?)?;
     Ok(())
 }
 
@@ -1095,6 +1114,7 @@ mod tests {
             cim_commit: "6b4768b7".to_string(),
             no_mirror: Some(true),
             config_source_dir: Some("/path/to/source".to_string()),
+            match_pattern: None,
         };
 
         let serialized = serde_yaml::to_string(&marker).expect("Failed to serialize marker");
@@ -1137,6 +1157,7 @@ mod tests {
             target_version: None,
             skip_mirror: false,
             source_url: None,
+            match_pattern: None,
         });
         assert!(result.is_ok());
 

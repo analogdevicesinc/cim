@@ -1021,6 +1021,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         } else {
             None
         },
+        match_pattern: config.match_pattern,
     }) {
         messages::error(&format!("Error creating workspace marker: {}", e));
         return;
