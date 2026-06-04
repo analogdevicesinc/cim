@@ -997,9 +997,18 @@ pub(crate) fn clone_repo_to_workspace(
                     spinner.finish();
                     return ok;
                 }
-                _ => {
+                Ok(result) => {
                     spinner.finish();
-                    messages::error(&format!("{} (clone failed)", git_cfg.name));
+                    messages::error(&format!(
+                        "{} (clone failed: {})",
+                        git_cfg.name,
+                        result.stderr.trim()
+                    ));
+                    return false;
+                }
+                Err(e) => {
+                    spinner.finish();
+                    messages::error(&format!("{} (clone failed: {})", git_cfg.name, e));
                     return false;
                 }
             }
@@ -1015,9 +1024,18 @@ pub(crate) fn clone_repo_to_workspace(
             spinner.finish();
             ok
         }
-        _ => {
+        Ok(result) => {
             spinner.finish();
-            messages::error(&format!("{} (clone failed)", git_cfg.name));
+            messages::error(&format!(
+                "{} (clone failed: {})",
+                git_cfg.name,
+                result.stderr.trim()
+            ));
+            false
+        }
+        Err(e) => {
+            spinner.finish();
+            messages::error(&format!("{} (clone failed: {})", git_cfg.name, e));
             false
         }
     }
