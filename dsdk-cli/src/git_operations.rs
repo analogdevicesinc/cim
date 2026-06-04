@@ -126,6 +126,11 @@ pub fn clone_repo(url: &str, path: &Path, reference: Option<&Path>) -> Result<Gi
     git_command(&args_str, None)
 }
 
+/// Convert a shallow repository to a full clone
+pub fn fetch_unshallow(repo_path: &Path) -> Result<GitResult> {
+    git_command(&["fetch", "--unshallow"], Some(repo_path))
+}
+
 /// Clone repository with shallow depth
 pub fn clone_repo_shallow(url: &str, path: &Path, depth: u32) -> Result<GitResult> {
     let depth_str = depth.to_string();

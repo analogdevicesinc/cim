@@ -951,6 +951,17 @@ pub(crate) fn clone_repo_to_workspace(
             dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
         if mirror_repo_path.exists() {
+            // git clone --reference refuses shallow repositories; unshallow before cloning
+            if mirror_repo_path.join("shallow").exists() {
+                messages::progress(&git_cfg.name, "mirror is shallow, unshallowing");
+                let ok = git_operations::fetch_unshallow(&mirror_repo_path)
+                    .is_ok_and(|r| r.is_success());
+                if !ok {
+                    messages::error(&format!("{} (failed to unshallow mirror)", git_cfg.name));
+                    return false;
+                }
+            }
+
             spinner.set_action(&git_cfg.name, "resolving refs…");
             let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
             let (fetch_refspec, update_ref_name, sha) =
