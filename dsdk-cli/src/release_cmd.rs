@@ -15,7 +15,8 @@ use dsdk_cli::download::{
 };
 use dsdk_cli::workspace::{
     copy_dir_recursive, expand_config_mirror_path, expand_env_vars, expand_manifest_vars_in_config,
-    is_url, require_workspace_config, resolve_config_source_dir_from_marker,
+    is_url, load_config_with_user_overrides, require_workspace_config,
+    resolve_config_source_dir_from_marker,
 };
 
 #[cfg(test)]
@@ -65,7 +66,7 @@ pub(crate) fn handle_release_command(
         messages::status("DRY RUN: No actual changes will be made");
     }
 
-    let sdk_config = match config::load_config(&config_path) {
+    let sdk_config = match load_config_with_user_overrides(&config_path, false) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Error loading config: {}", e));
@@ -695,8 +696,7 @@ pub(crate) fn handle_copy_files_hash_command(
         }
     };
 
-    // Load SDK config (without user overrides)
-    let mut sdk_config = match config::load_config(&config_path) {
+    let mut sdk_config = match load_config_with_user_overrides(&config_path, verbose) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Error loading config: {}", e));
@@ -900,7 +900,7 @@ pub(crate) fn handle_toolchains_hash_command(
         }
     };
 
-    let sdk_config = match config::load_config(&config_path) {
+    let sdk_config = match load_config_with_user_overrides(&config_path, verbose) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Error loading config: {}", e));
@@ -1076,8 +1076,7 @@ pub(crate) fn handle_sync_files_hash_command(
         }
     };
 
-    // Load SDK config (without user overrides for sync operation)
-    let mut sdk_config = match config::load_config(&config_path) {
+    let mut sdk_config = match load_config_with_user_overrides(&config_path, verbose) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Error loading config: {}", e));
