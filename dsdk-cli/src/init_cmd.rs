@@ -1520,6 +1520,19 @@ pub(crate) fn get_latest_commit_for_branch(repo_path: &Path, branch_name: &str) 
     git_operations::get_latest_commit_for_branch(repo_path, branch_name)
 }
 
+/// Get the latest commit hash for a branch, checking `preferred_remote` first.
+pub(crate) fn get_latest_commit_for_branch_with_remote(
+    repo_path: &Path,
+    branch_name: &str,
+    preferred_remote: Option<&str>,
+) -> Option<String> {
+    git_operations::get_latest_commit_for_branch_with_remote(
+        repo_path,
+        branch_name,
+        preferred_remote,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

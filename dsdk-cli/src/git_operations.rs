@@ -348,7 +348,29 @@ pub fn is_branch_reference(repo_path: &Path, commit_ref: &str) -> bool {
 
 /// Get latest commit hash for branch
 pub fn get_latest_commit_for_branch(repo_path: &Path, branch_name: &str) -> Option<String> {
-    // Try remote branch first
+    get_latest_commit_for_branch_with_remote(repo_path, branch_name, None)
+}
+
+/// Get latest commit hash for branch, checking `preferred_remote` first.
+/// Pass `Some("mirror")` when the workspace fetched from a local mirror so that
+/// the freshly-updated `mirror/<branch>` tracking ref is used instead of the
+/// stale `origin/<branch>` ref (which is never fetched in the mirror path).
+pub fn get_latest_commit_for_branch_with_remote(
+    repo_path: &Path,
+    branch_name: &str,
+    preferred_remote: Option<&str>,
+) -> Option<String> {
+    // Try preferred remote first (e.g. "mirror/platform-sdk")
+    if let Some(remote) = preferred_remote {
+        let remote_branch = format!("{}/{}", remote, branch_name);
+        if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
+            if result.success {
+                return Some(result.stdout.trim().to_string());
+            }
+        }
+    }
+
+    // Try origin/
     let remote_branch = format!("origin/{}", branch_name);
     if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
         if result.success {

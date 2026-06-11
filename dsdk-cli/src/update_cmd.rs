@@ -12,8 +12,8 @@
 use crate::cli::{Cli, DockerCommand};
 use crate::init_cmd::{
     compile_match_regex, create_filtered_sdk_config, get_latest_commit_for_branch,
-    is_branch_reference, list_target_versions, list_targets_from_source, setup_direnv,
-    source_label,
+    get_latest_commit_for_branch_with_remote, is_branch_reference, list_target_versions,
+    list_targets_from_source, setup_direnv, source_label,
 };
 use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
@@ -795,6 +795,11 @@ pub(crate) fn handle_existing_workspace_repo(
         git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
     let target = sha.unwrap_or_else(|| git_cfg.commit.clone());
 
+    // Track which remote was used to fetch so we can resolve "latest" against
+    // the right remote-tracking ref.  When a mirror is in use the workspace
+    // fetches from "mirror", so origin/* is stale and mirror/* is current.
+    let preferred_remote: Option<&str> = mirror_path.map(|_| "mirror");
+
     let success = if let Some(mirror_path) = mirror_path {
         let mirror_repo_path =
             dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
@@ -821,7 +826,18 @@ pub(crate) fn handle_existing_workspace_repo(
             }
             // Local mirror: no depth limit — objects are on disk, no network cost,
             // and shallow fetches would write a .git/shallow file that cuts history.
-            git_operations::fetch_ref(repo_path, "mirror", &fetch_refspec, None)
+            //
+            // Use a mapping refspec for branches so that git updates the
+            // refs/remotes/mirror/<branch> tracking ref in the workspace.
+            // Without this, the fetch only writes FETCH_HEAD and
+            // get_latest_commit_for_branch_with_remote("mirror") would find nothing.
+            let mirror_fetch_refspec =
+                if let Some(branch) = fetch_refspec.strip_prefix("refs/heads/") {
+                    format!("refs/heads/{}:refs/remotes/mirror/{}", branch, branch)
+                } else {
+                    fetch_refspec.clone()
+                };
+            git_operations::fetch_ref(repo_path, "mirror", &mirror_fetch_refspec, None)
                 .is_ok_and(|r| r.is_success())
         } else {
             git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, Some(1))
@@ -839,10 +855,14 @@ pub(crate) fn handle_existing_workspace_repo(
                 // Clean: safe to reset
                 // Check if the commit is a branch reference
                 if is_branch_reference(repo_path, &git_cfg.commit) {
-                    // For branches, get the latest commit and checkout that
-                    if let Some(latest_commit) =
-                        get_latest_commit_for_branch(repo_path, &git_cfg.commit)
-                    {
+                    // For branches, get the latest commit and checkout that.
+                    // Pass the preferred remote so we read the freshly-fetched
+                    // tracking ref (mirror/*) rather than the stale origin/*.
+                    if let Some(latest_commit) = get_latest_commit_for_branch_with_remote(
+                        repo_path,
+                        &git_cfg.commit,
+                        preferred_remote,
+                    ) {
                         let checkout_output = git_operations::checkout(repo_path, &latest_commit);
                         match checkout_output {
                             Ok(result) if result.is_success() => {
