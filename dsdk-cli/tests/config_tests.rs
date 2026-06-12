@@ -374,7 +374,6 @@ fn test_user_config_list_all_simple_fields() {
         workspace_prefix: Some("myprefix-".to_string()),
         default_source: Some("https://example.com/manifests".to_string()),
         alternate_sources: None,
-        no_mirror: Some(true),
         copy_files: None,
         shell: Some("/bin/zsh".to_string()),
         shell_arg: Some("-c".to_string()),
@@ -384,12 +383,11 @@ fn test_user_config_list_all_simple_fields() {
     };
 
     let list = config.list_all();
-    assert_eq!(list.len(), 8);
+    assert_eq!(list.len(), 7);
     assert!(list.contains(&"mirror=/custom/mirror".to_string()));
     assert!(list.contains(&"default_workspace=/home/user/workspace".to_string()));
     assert!(list.contains(&"workspace_prefix=myprefix-".to_string()));
     assert!(list.contains(&"default_source=https://example.com/manifests".to_string()));
-    assert!(list.contains(&"no_mirror=true".to_string()));
     assert!(list.contains(&"shell=/bin/zsh".to_string()));
     assert!(list.contains(&"shell_arg=-c".to_string()));
     assert!(list.contains(&"documentation_dirs=docs,manuals".to_string()));
@@ -440,7 +438,6 @@ fn test_user_config_get_value_simple() {
     let config = UserConfig {
         mirror: Some(PathBuf::from("/custom/mirror")),
         default_source: Some("https://example.com".to_string()),
-        no_mirror: Some(false),
         ..Default::default()
     };
 
@@ -452,7 +449,6 @@ fn test_user_config_get_value_simple() {
         config.get_value("default_source"),
         Some("https://example.com".to_string())
     );
-    assert_eq!(config.get_value("no_mirror"), Some("false".to_string()));
     assert_eq!(config.get_value("nonexistent"), None);
 }
 
@@ -493,7 +489,6 @@ fn test_user_config_load_and_list() {
 mirror = "/custom/mirror"
 default_source = "https://example.com/manifests"
 workspace_prefix = "myprefix-"
-no_mirror = true
 "#;
 
     fixture.write_file("config.toml", config_content);
@@ -503,11 +498,10 @@ no_mirror = true
         .expect("Config should exist");
 
     let list = config.list_all();
-    assert_eq!(list.len(), 4);
+    assert_eq!(list.len(), 3);
     assert!(list.contains(&"mirror=/custom/mirror".to_string()));
     assert!(list.contains(&"default_source=https://example.com/manifests".to_string()));
     assert!(list.contains(&"workspace_prefix=myprefix-".to_string()));
-    assert!(list.contains(&"no_mirror=true".to_string()));
 }
 
 #[test]
@@ -941,7 +935,6 @@ fn test_user_config_mirror_override_priority() {
         alternate_sources: None,
         default_workspace: None,
         workspace_prefix: None,
-        no_mirror: None,
         copy_files: None,
         shell: None,
         shell_arg: None,
@@ -989,7 +982,6 @@ fn test_user_config_mirror_override_with_multiple_overrides() {
         alternate_sources: None,
         default_workspace: Some(fixture.path().join("workspace")),
         workspace_prefix: Some("test-".to_string()),
-        no_mirror: Some(true),
         copy_files: Some(vec![CopyFileConfig {
             source: "test.txt".to_string(),
             dest: "test-dest.txt".to_string(),

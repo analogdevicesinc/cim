@@ -685,7 +685,6 @@ pub(crate) struct InitConfig<'a> {
     pub(crate) source: Option<String>,
     pub(crate) version: Option<String>,
     pub(crate) workspace: Option<PathBuf>,
-    pub(crate) no_mirror: bool,
     pub(crate) force: bool,
     pub(crate) match_pattern: Option<&'a str>,
     pub(crate) verbose: bool,
@@ -1005,14 +1004,6 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     }
     messages::verbose("Copied configuration to workspace as sdk.yml");
 
-    // Determine if we should skip mirror (command line flag OR user config setting)
-    // This needs to be calculated before creating workspace marker
-    let skip_mirror = config.no_mirror
-        || user_config
-            .as_ref()
-            .and_then(|uc| uc.no_mirror)
-            .unwrap_or(false);
-
     // Create workspace marker file
     // Always use target name as original identifier for both URL-based and local targets
     if let Err(e) = create_workspace_marker(CreateWorkspaceMarkerParams {
@@ -1022,7 +1013,6 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         mirror_path: &sdk_config.mirror,
         original_identifier: Some(&config.target),
         target_version: config.version.as_deref(),
-        skip_mirror,
         source_url: if is_remote_git_source {
             resolved_source_path.as_deref()
         } else {
@@ -1050,23 +1040,14 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     // Show workspace status (similar to update command)
     messages::verbose(&format!("Workspace: {}", workspace_path.display()));
 
-    // Now proceed with mirror and workspace setup
-    let any_failed = if skip_mirror {
-        if config.no_mirror {
-            messages::info("Skipping mirror operations (--no-mirror enabled)");
-        } else {
-            messages::info("Skipping mirror operations (no_mirror = true in user config)");
-        }
-        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, true)
-    } else {
-        messages::verbose(&format!("Mirror: {}", sdk_config.mirror().display()));
+    // Proceed with mirror and workspace setup
+    messages::verbose(&format!("Mirror: {}", sdk_config.mirror().display()));
 
-        // Update mirror repositories
-        update_mirror_repos(&filtered_config);
+    // Update mirror repositories
+    update_mirror_repos(&filtered_config);
 
-        // Update workspace repositories
-        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, false)
-    };
+    // Update workspace repositories
+    let any_failed = update_workspace_repos_with_result(&filtered_config, &workspace_path, true);
 
     // Process copy_files after git repositories are cloned
     let mut copy_files_failed = false;

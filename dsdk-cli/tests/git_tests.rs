@@ -66,7 +66,6 @@ fn test_clone_repository() {
     );
 }
 
-
 #[test]
 fn test_add_and_commit() {
     let repo = MockGitRepo::new("test-repo");
@@ -353,7 +352,7 @@ fn test_branch_tag_detection() {
 
 #[test]
 fn test_mirror_discovers_new_branches() {
-    // This tests that fetch_all_with_tags discovers branches added after mirror creation
+    // This tests that fetch_ref discovers branches added after mirror creation
     let fixture = TestFixture::new();
 
     // 1. Create upstream repository with initial branch
@@ -495,8 +494,9 @@ fn test_get_mirror_repo_path_different_urls_get_different_paths() {
     assert_ne!(result, mirror_path.join("u-boot"));
 }
 
-/// Verify that clone_repo with a branch refspec fetches the right content,
-/// and that subsequent fetch+checkout of a different branch works.
+/// Verify that checkout() resolves a remote-only branch name via the
+/// `origin/<name>` DWIM fallback — the regression that broke
+/// `cim init --version` after the libgit2 migration.
 #[test]
 fn test_checkout_fetched_branch() {
     // 1. Create an upstream bare repo.
@@ -505,11 +505,9 @@ fn test_checkout_fetched_branch() {
     git_operations::remote_add(&working.path, "origin", &upstream.file_url())
         .expect("Should add remote");
 
-    // First commit – v1.0 – pushed to main and feature-branch.
+    // Commit v1 on main and create feature-branch at this point.
     working.add_file("version.txt", "1.0\n");
     working.commit("Version 1.0");
-    git_operations::push(&working.path, Some("origin"), Some("main"))
-        .expect("Should push main");
     git_operations::create_branch(&working.path, "feature-branch", None)
         .expect("Should create branch");
     // Push feature-branch (still points at v1).

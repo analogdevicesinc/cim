@@ -374,7 +374,6 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
 ///
 /// Supports environment variable expansion in mirror paths (e.g., $HOME, ${HOME})
 pub(crate) fn handle_update_command(
-    no_mirror: bool,
     match_pattern: Option<&str>,
     all: bool,
     verbose: bool,
@@ -405,7 +404,7 @@ pub(crate) fn handle_update_command(
     };
 
     // Load and apply user config overrides if present
-    let user_config = match config::UserConfig::load() {
+    let _user_config = match config::UserConfig::load() {
         Ok(Some(user_config)) => {
             let override_count = user_config.apply_to_sdk_config(&mut sdk_config, verbose);
             if override_count > 0 && verbose {
@@ -477,52 +476,11 @@ pub(crate) fn handle_update_command(
     // Create filtered config based on match pattern
     let filtered_config = create_filtered_sdk_config(&sdk_config, &match_regex);
 
-    // Read workspace marker to get stored no_mirror preference
-    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
-    let workspace_no_mirror = if marker_path.exists() {
-        match fs::read_to_string(&marker_path) {
-            Ok(content) => serde_yaml::from_str::<WorkspaceMarker>(&content)
-                .ok()
-                .and_then(|m| m.no_mirror)
-                .unwrap_or(false),
-            Err(_) => false,
-        }
-    } else {
-        false
-    };
+    // Update mirror repositories in parallel
+    update_mirror_repos(&filtered_config);
 
-    // Determine if we should skip mirror with precedence:
-    // CLI flag > workspace marker preference > user config > default (false)
-    let (skip_mirror, mirror_source) = if no_mirror {
-        (true, "CLI flag --no-mirror")
-    } else if workspace_no_mirror {
-        (true, "workspace preference")
-    } else if user_config
-        .as_ref()
-        .and_then(|uc| uc.no_mirror)
-        .unwrap_or(false)
-    {
-        (true, "user config")
-    } else {
-        (false, "default (using mirrors)")
-    };
-
-    if skip_mirror {
-        messages::info(&format!("Skipping mirror operations ({})", mirror_source));
-    } else {
-        messages::verbose(&format!("Using mirror operations ({})", mirror_source));
-    }
-
-    if skip_mirror {
-        // Update workspace repositories directly from remote URLs
-        update_workspace_repos(&filtered_config, &workspace_path, false, true);
-    } else {
-        // Update mirror repositories in parallel
-        update_mirror_repos(&filtered_config);
-
-        // Update workspace repositories (single-threaded to avoid conflicts)
-        update_workspace_repos(&filtered_config, &workspace_path, false, false);
-    }
+    // Update workspace repositories
+    update_workspace_repos(&filtered_config, &workspace_path, false);
 
     // When --all is used, clear the stored match pattern from the workspace
     // marker so subsequent updates without --all still update everything.
@@ -665,7 +623,6 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
     sdk_config: &T,
     workspace_path: &Path,
     is_init: bool,
-    no_mirror: bool,
 ) {
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
@@ -678,7 +635,7 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
         }
     };
 
-    let mirror_path = (!no_mirror).then(|| sdk_config.mirror().clone());
+    let mirror_path = sdk_config.mirror().clone();
 
     for tier in &tiers {
         let pool = ThreadPool::new(4);
@@ -689,13 +646,12 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
             let mirror_path = mirror_path.clone();
 
             pool.execute(move || {
-                let mirror_path = mirror_path.as_deref();
                 let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
                 let success = if repo_workspace_path.join(".git").exists() {
-                    handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, mirror_path)
+                    handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, &mirror_path)
                 } else {
-                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, mirror_path)
+                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path)
                 };
 
                 // Print result immediately
@@ -714,7 +670,6 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
     sdk_config: &T,
     workspace_path: &Path,
     is_init: bool,
-    no_mirror: bool,
 ) -> bool {
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
@@ -729,7 +684,7 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
 
     let any_failed = Arc::new(AtomicBool::new(false));
 
-    let mirror_path = (!no_mirror).then(|| sdk_config.mirror().clone());
+    let mirror_path = sdk_config.mirror().clone();
 
     for tier in &tiers {
         let pool = ThreadPool::new(4);
@@ -744,13 +699,9 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
                 let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
                 let success = if repo_workspace_path.join(".git").exists() {
-                    handle_existing_workspace_repo(
-                        &git_cfg,
-                        &repo_workspace_path,
-                        mirror_path.as_deref(),
-                    )
+                    handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, &mirror_path)
                 } else {
-                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, mirror_path.as_deref())
+                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path)
                 };
 
                 // Print result immediately and track failures
@@ -771,38 +722,30 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
 pub(crate) fn handle_existing_workspace_repo(
     git_cfg: &config::GitConfig,
     repo_path: &Path,
-    mirror_path: Option<&Path>,
+    mirror_path: &Path,
 ) -> bool {
     let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
     let (fetch_refspec, update_ref_name, sha) =
         git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
     let target = sha.unwrap_or_else(|| git_cfg.commit.clone());
 
-    let success = if let Some(mirror_path) = mirror_path {
-        let mirror_repo_path =
-            dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
+    let mirror_repo_path =
+        dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
-        if mirror_repo_path.exists() {
-            if !git_operations::cat_file(&mirror_repo_path, &target) {
-                let fetch_ok =
-                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1)
-                        .is_ok_and(|r| r.is_success());
-                if fetch_ok {
-                    let _ = git_operations::update_ref(
-                        &mirror_repo_path,
-                        &update_ref_name,
-                        "FETCH_HEAD",
-                    );
-                }
-            }
+    // Fetch into the mirror; worktrees share the object store so no
+    // separate fetch into the workspace is needed.
+    let success = if !git_operations::cat_file(&mirror_repo_path, &target) {
+        let fetch_ok = git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1)
+            .is_ok_and(|r| r.is_success());
+        if fetch_ok {
+            let _ = git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
             true
         } else {
-            git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, 1)
-                .is_ok_and(|r| r.is_success())
+            messages::error(&format!("{} (fetch failed)", git_cfg.name));
+            false
         }
     } else {
-        git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, 1)
-            .is_ok_and(|r| r.is_success())
+        true
     };
 
     if success {
@@ -810,8 +753,8 @@ pub(crate) fn handle_existing_workspace_repo(
         match dsdk_cli::git_manager::repo_has_pending_changes(repo_path) {
             Ok(false) => {
                 // Clean: safe to reset
-                let checkout_result = git_operations::checkout(repo_path, &target);
-                match checkout_result {
+                let checkout_output = git_operations::checkout(repo_path, &target);
+                match checkout_output {
                     Ok(result) if result.is_success() => {
                         if fetch_refspec.starts_with("refs/heads/") {
                             messages::success(&format!(
@@ -863,7 +806,7 @@ pub(crate) fn handle_existing_workspace_repo(
 pub(crate) fn clone_repo_to_workspace(
     git_cfg: &config::GitConfig,
     repo_path: &Path,
-    mirror_path: Option<&Path>,
+    mirror_path: &Path,
 ) -> bool {
     // Remove directory if it exists but is not a git repo / worktree
     if repo_path.exists() && !repo_path.join(".git").exists() {
@@ -878,46 +821,26 @@ pub(crate) fn clone_repo_to_workspace(
 
     messages::progress(&git_cfg.name, "cloning repository");
 
-    if let Some(mirror_path) = mirror_path {
-        let mirror_repo_path =
-            dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
+    let mirror_repo_path =
+        dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
-        if mirror_repo_path.exists() {
-            let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
-            let (fetch_refspec, update_ref_name, sha) =
-                git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
-            let target_sha = sha.unwrap_or_else(|| git_cfg.commit.clone());
+    let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+    let (fetch_refspec, update_ref_name, sha) =
+        git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+    let target_sha = sha.unwrap_or_else(|| git_cfg.commit.clone());
 
-            // Ensure the commit is present in the mirror, fetching it if needed
-            if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
-                let _ = git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1);
-                let _ =
-                    git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
-            }
-
-            // Use a worktree from the mirror instead of a redundant clone
-            let result =
-                git_operations::worktree_add(&mirror_repo_path, repo_path, &target_sha);
-            match result {
-                Ok(result) if result.is_success() => {
-                    return checkout_commit(git_cfg, repo_path);
-                }
-                _ => {
-                    messages::error(&format!("{} (worktree add failed)", git_cfg.name));
-                    return false;
-                }
-            }
-        }
+    // Ensure the commit is present in the mirror, fetching it if needed
+    if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
+        let _ = git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1);
+        let _ = git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
     }
 
-    // Direct clone (no mirror, or mirror path not yet on disk)
-    let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
-    let (fetch_refspec, _, _) = git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
-    let result = git_operations::clone_repo(&git_cfg.url, repo_path, &fetch_refspec, 1);
+    // Use a worktree from the mirror instead of a redundant clone
+    let result = git_operations::worktree_add(&mirror_repo_path, repo_path, &target_sha);
     match result {
         Ok(result) if result.is_success() => checkout_commit(git_cfg, repo_path),
         _ => {
-            messages::error(&format!("{} (clone failed)", git_cfg.name));
+            messages::error(&format!("{} (worktree add failed)", git_cfg.name));
             false
         }
     }

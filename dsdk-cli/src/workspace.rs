@@ -112,8 +112,6 @@ pub struct WorkspaceMarker {
     pub cim_version: String,
     pub cim_sha256: String,
     pub cim_commit: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub no_mirror: Option<bool>,
     /// Directory containing the original config file (for resolving relative copy_files paths)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_source_dir: Option<String>,
@@ -148,7 +146,6 @@ pub struct CreateWorkspaceMarkerParams<'a> {
     pub mirror_path: &'a Path,
     pub original_identifier: Option<&'a str>,
     pub target_version: Option<&'a str>,
-    pub skip_mirror: bool,
     pub source_url: Option<&'a str>,
     pub match_pattern: Option<&'a str>,
 }
@@ -213,7 +210,6 @@ pub fn create_workspace_marker(
         cim_version,
         cim_sha256,
         cim_commit,
-        no_mirror: if params.skip_mirror { Some(true) } else { None },
         config_source_dir,
         match_pattern: params.match_pattern.map(|s| s.to_string()),
     };
@@ -299,7 +295,6 @@ pub fn resolve_target_config_from_git(
     };
 
     let clone_result = git_operations::clone_repo(git_source, temp_path, &clone_refspec, 1)?;
-
     if !clone_result.is_success() {
         return Err(anyhow::anyhow!("Git clone failed: {}", clone_result.stderr));
     }
@@ -1070,7 +1065,6 @@ mod tests {
             cim_sha256: "909481f5438ec71ea6c44712bd62513ec71b02c3a149e8577b997743da5a539c"
                 .to_string(),
             cim_commit: "6b4768b7".to_string(),
-            no_mirror: Some(true),
             config_source_dir: Some("/path/to/source".to_string()),
             match_pattern: None,
         };
@@ -1089,7 +1083,6 @@ mod tests {
         assert_eq!(marker.cim_version, deserialized.cim_version);
         assert_eq!(marker.cim_sha256, deserialized.cim_sha256);
         assert_eq!(marker.cim_commit, deserialized.cim_commit);
-        assert_eq!(marker.no_mirror, deserialized.no_mirror);
         assert_eq!(marker.config_source_dir, deserialized.config_source_dir);
     }
 
@@ -1113,7 +1106,6 @@ mod tests {
             mirror_path,
             original_identifier: None,
             target_version: None,
-            skip_mirror: false,
             source_url: None,
             match_pattern: None,
         });
