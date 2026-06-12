@@ -289,19 +289,7 @@ pub fn resolve_target_config_from_git(
 
     let temp_path = temp_dir.path();
 
-    // Clone the repository (shallow if no version specified, full if version needed)
-    let clone_result = if version.is_some() {
-        // For version checkout, we need full history to access branches/tags
-        git_operations::clone_repo(git_source, temp_path, None)?
-    } else {
-        // For main branch, use shallow clone
-        if is_url(git_source) {
-            git_operations::clone_repo_shallow(git_source, temp_path, 1)?
-        } else {
-            // For local repos without version, still do full clone since shallow clone of local repos is not very useful
-            git_operations::clone_repo(git_source, temp_path, None)?
-        }
-    };
+    let clone_result = git_operations::clone_repo(git_source, temp_path, None)?;
 
     if !clone_result.is_success() {
         return Err(anyhow::anyhow!("Git clone failed: {}", clone_result.stderr));
