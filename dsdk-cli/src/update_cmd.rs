@@ -635,7 +635,9 @@ pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
             } else {
                 // Clone new mirror
                 messages::progress(&git_cfg.name, "cloning new repository");
+                let spinner = messages::Spinner::start(&git_cfg.name, "cloning mirror…");
                 let clone_result = git_operations::clone_mirror(&git_cfg.url, &repo_mirror_path);
+                spinner.finish();
 
                 match clone_result {
                     Ok(result) => {
@@ -942,12 +944,14 @@ pub(crate) fn clone_repo_to_workspace(
     }
 
     messages::progress(&git_cfg.name, "cloning repository");
+    let spinner = messages::Spinner::start(&git_cfg.name, "cloning…");
 
     if let Some(mirror_path) = mirror_path {
         let mirror_repo_path =
             dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
         if mirror_repo_path.exists() {
+            spinner.set_action(&git_cfg.name, "resolving refs…");
             let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
             let (fetch_refspec, update_ref_name, sha) =
                 git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
@@ -955,6 +959,7 @@ pub(crate) fn clone_repo_to_workspace(
 
             // Ensure the commit is present in the mirror, fetching it if needed
             if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
+                spinner.set_action(&git_cfg.name, "fetching into mirror…");
                 let fetch_ok =
                     git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1))
                         .is_ok_and(|r| r.is_success());
@@ -965,6 +970,7 @@ pub(crate) fn clone_repo_to_workspace(
                         "FETCH_HEAD",
                     );
                 } else {
+                    spinner.finish();
                     messages::error(&format!(
                         "{} (commit {} not found in remote — check the commit hash in sdk.yml)",
                         git_cfg.name, target_sha
@@ -973,6 +979,7 @@ pub(crate) fn clone_repo_to_workspace(
                 }
             }
 
+            spinner.set_action(&git_cfg.name, "cloning from mirror…");
             let mirror_url = git_operations::path_to_file_url(&mirror_repo_path);
             let result =
                 git_operations::clone_repo(&mirror_url, repo_path, Some(&mirror_repo_path));
@@ -985,9 +992,13 @@ pub(crate) fn clone_repo_to_workspace(
                         "mirror",
                         &git_operations::path_to_file_url(&mirror_repo_path),
                     );
-                    return checkout_commit(git_cfg, repo_path);
+                    spinner.set_action(&git_cfg.name, "checking out…");
+                    let ok = checkout_commit(git_cfg, repo_path);
+                    spinner.finish();
+                    return ok;
                 }
                 _ => {
+                    spinner.finish();
                     messages::error(&format!("{} (clone failed)", git_cfg.name));
                     return false;
                 }
@@ -998,8 +1009,14 @@ pub(crate) fn clone_repo_to_workspace(
     // Direct clone (no mirror, or mirror path not yet on disk)
     let result = git_operations::clone_repo(&git_cfg.url, repo_path, None);
     match result {
-        Ok(result) if result.is_success() => checkout_commit(git_cfg, repo_path),
+        Ok(result) if result.is_success() => {
+            spinner.set_action(&git_cfg.name, "checking out…");
+            let ok = checkout_commit(git_cfg, repo_path);
+            spinner.finish();
+            ok
+        }
         _ => {
+            spinner.finish();
             messages::error(&format!("{} (clone failed)", git_cfg.name));
             false
         }
