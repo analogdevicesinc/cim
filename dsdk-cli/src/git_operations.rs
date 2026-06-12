@@ -111,19 +111,26 @@ pub fn strip_unc_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
 // ---------------------------------------------------------------
 
 /// Clone repository to specified path
-pub fn clone_repo(url: &str, path: &Path, reference: Option<&Path>) -> Result<GitResult> {
-    let mut args = vec!["clone".to_string()];
-
-    if let Some(ref_path) = reference {
-        args.push("--reference".to_string());
-        args.push(ref_path.to_string_lossy().to_string());
+/// Works uniformly for branches (refs/heads/*), tags (refs/tags/*), commit SHAs, and HEAD.
+/// Uses init + remote add + fetch + checkout FETCH_HEAD.
+pub fn clone_repo(url: &str, path: &Path, refspec: &str, depth: u32) -> Result<GitResult> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("Failed to create parent directory: {}", e))?;
     }
-
-    args.push(url.to_string());
-    args.push(path.to_string_lossy().to_string());
-
-    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    git_command(&args_str, None)
+    let init_result = init_repo(path, false)?;
+    if !init_result.is_success() {
+        return Ok(init_result);
+    }
+    let remote_result = remote_add(path, "origin", url)?;
+    if !remote_result.is_success() {
+        return Ok(remote_result);
+    }
+    let fetch_result = fetch_ref(path, "origin", refspec, depth)?;
+    if !fetch_result.is_success() {
+        return Ok(fetch_result);
+    }
+    checkout(path, "FETCH_HEAD")
 }
 
 

@@ -55,7 +55,7 @@ fn test_clone_repository() {
     let fixture = TestFixture::new();
     let clone_path = fixture.path().join("clone");
 
-    let result = git_operations::clone_repo(&source_repo.file_url(), &clone_path, None)
+    let result = git_operations::clone_repo(&source_repo.file_url(), &clone_path, "HEAD", 1)
         .expect("Should clone repository");
 
     assert!(result.is_success());
@@ -66,28 +66,6 @@ fn test_clone_repository() {
     );
 }
 
-#[test]
-fn test_clone_with_reference() {
-    let source_repo = MockGitRepo::new("source");
-    source_repo.add_file("data.txt", "content\n");
-    source_repo.commit("Initial commit");
-
-    let fixture = TestFixture::new();
-
-    // Create a mirror clone first
-    let mirror_path = fixture.path().join("mirror");
-    git_operations::clone_repo(&source_repo.file_url(), &mirror_path, None)
-        .expect("Should clone to mirror");
-
-    // Clone with reference to mirror
-    let workspace_path = fixture.path().join("workspace");
-    let result =
-        git_operations::clone_repo(&source_repo.file_url(), &workspace_path, Some(&mirror_path))
-            .expect("Should clone with reference");
-
-    assert!(result.is_success());
-    assert!(workspace_path.join("data.txt").exists());
-}
 
 #[test]
 fn test_add_and_commit() {
@@ -170,7 +148,7 @@ fn test_fetch_operations() {
     // Clone from upstream
     let fixture = TestFixture::new();
     let clone_path = fixture.path().join("clone");
-    git_operations::clone_repo(&upstream.file_url(), &clone_path, None).expect("Should clone");
+    git_operations::clone_repo(&upstream.file_url(), &clone_path, "HEAD", 1).expect("Should clone");
 
     // Add new commit to working repo
     working.add_file("new.txt", "new content\n");
@@ -310,7 +288,8 @@ fn test_mirror_workflow() {
     let clone_result = git_operations::clone_repo(
         &git_operations::path_to_file_url(&mirror_path),
         &workspace_path,
-        None,
+        "HEAD",
+        1,
     )
     .expect("Should clone from mirror");
     assert!(clone_result.is_success());
@@ -458,20 +437,21 @@ fn test_get_mirror_repo_path_different_urls_get_different_paths() {
     assert_ne!(result, mirror_path.join("u-boot"));
 }
 
-/// Verify that checkout() resolves a remote-only branch name via the
-/// `origin/<name>` DWIM fallback — the regression that broke
-/// `cim init --version` after the libgit2 migration.
+/// Verify that clone_repo with a branch refspec fetches the right content,
+/// and that subsequent fetch+checkout of a different branch works.
 #[test]
-fn test_checkout_remote_branch_by_name() {
+fn test_checkout_fetched_branch() {
     // 1. Create an upstream bare repo.
     let upstream = MockGitRepo::create_bare("upstream.git");
     let working = MockGitRepo::new("working");
     git_operations::remote_add(&working.path, "origin", &upstream.file_url())
         .expect("Should add remote");
 
-    // Commit v1 on main and create feature-branch at this point.
+    // First commit – v1.0 – pushed to main and feature-branch.
     working.add_file("version.txt", "1.0\n");
     working.commit("Version 1.0");
+    git_operations::push(&working.path, Some("origin"), Some("main"))
+        .expect("Should push main");
     git_operations::create_branch(&working.path, "feature-branch", None)
         .expect("Should create branch");
     // Push feature-branch (still points at v1).
@@ -483,22 +463,30 @@ fn test_checkout_remote_branch_by_name() {
     working.commit("Version 2.0");
     git_operations::push(&working.path, Some("origin"), Some("main")).expect("Should push main");
 
-    // 2. Clone from upstream — default branch (main) is checked out.
+    // 2. Clone from upstream with feature-branch refspec.
     let fixture = TestFixture::new();
     let clone_path = fixture.path().join("clone");
-    git_operations::clone_repo(&upstream.file_url(), &clone_path, None).expect("Should clone");
+    git_operations::clone_repo(
+        &upstream.file_url(),
+        &clone_path,
+        "refs/heads/feature-branch",
+        1,
+    )
+    .expect("Should clone");
 
-    // Sanity: working tree starts on main (v2.0).
-    let content = fs::read_to_string(clone_path.join("version.txt")).unwrap();
-    assert_eq!(content, "2.0\n");
-
-    // 3. checkout() with the bare branch name must succeed via the
-    //    origin/ DWIM fallback (no local "feature-branch" exists).
-    let result = git_operations::checkout(&clone_path, "feature-branch")
-        .expect("Should checkout remote branch by name (DWIM fallback)");
-    assert!(result.is_success());
-
-    // 4. Verify we got the v1.0 content from feature-branch.
+    // 3. Verify we got the v1.0 content from feature-branch.
     let content = fs::read_to_string(clone_path.join("version.txt")).unwrap();
     assert_eq!(content, "1.0\n");
+
+    // 4. Fetch main and checkout.
+    let fetch_result = git_operations::fetch_ref(&clone_path, "origin", "refs/heads/main", 1)
+        .expect("Should fetch main");
+    assert!(fetch_result.is_success());
+    let checkout_result =
+        git_operations::checkout(&clone_path, "FETCH_HEAD").expect("Should checkout FETCH_HEAD");
+    assert!(checkout_result.is_success());
+
+    // 5. Verify we got the v2.0 content from main.
+    let content = fs::read_to_string(clone_path.join("version.txt")).unwrap();
+    assert_eq!(content, "2.0\n");
 }

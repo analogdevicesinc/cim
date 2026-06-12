@@ -1002,7 +1002,7 @@ pub(crate) fn clone_repo_to_workspace(
             spinner.set_action(&git_cfg.name, "cloning from mirror…");
             let mirror_url = git_operations::path_to_file_url(&mirror_repo_path);
             let result =
-                git_operations::clone_repo(&mirror_url, repo_path, Some(&mirror_repo_path));
+                git_operations::clone_repo(&mirror_url, repo_path, &fetch_refspec, 1);
             match result {
                 Ok(result) if result.is_success() => {
                     // Set origin to upstream and add mirror remote
@@ -1036,7 +1036,9 @@ pub(crate) fn clone_repo_to_workspace(
     }
 
     // Direct clone (no mirror, or mirror path not yet on disk)
-    let result = git_operations::clone_repo(&git_cfg.url, repo_path, None);
+    let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+    let (fetch_refspec, _, _) = git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+    let result = git_operations::clone_repo(&git_cfg.url, repo_path, &fetch_refspec, 1);
     match result {
         Ok(result) if result.is_success() => {
             spinner.set_action(&git_cfg.name, "checking out…");

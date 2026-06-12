@@ -1434,7 +1434,7 @@ pub(crate) fn list_targets_from_git_repo(git_url: &str) -> Result<Vec<String>, a
     let temp_path = temp_dir.path();
 
     // Perform clone
-    let clone_result = git_operations::clone_repo(git_url, temp_path, None)?;
+    let clone_result = git_operations::clone_repo(git_url, temp_path, "HEAD", 1)?;
 
     if !clone_result.is_success() {
         return Err(anyhow::anyhow!("Git clone failed: {}", clone_result.stderr));
