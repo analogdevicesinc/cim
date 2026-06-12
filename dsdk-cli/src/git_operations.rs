@@ -280,94 +280,6 @@ pub fn list_local_branches(repo_path: &Path) -> Result<Vec<String>> {
     Ok(branches)
 }
 
-/// Check if reference is a branch
-pub fn is_branch_reference(repo_path: &Path, commit_ref: &str) -> bool {
-    // Check remote branch
-    let remote_ref = format!("refs/remotes/origin/{}", commit_ref);
-    if git_command(&["show-ref", "--verify", &remote_ref], Some(repo_path)).is_ok_and(|r| r.success)
-    {
-        return true;
-    }
-
-    // Check local branch
-    let local_ref = format!("refs/heads/{}", commit_ref);
-    git_command(&["show-ref", "--verify", &local_ref], Some(repo_path)).is_ok_and(|r| r.success)
-}
-
-/// Get latest commit hash for branch
-pub fn get_latest_commit_for_branch(repo_path: &Path, branch_name: &str) -> Option<String> {
-    get_latest_commit_for_branch_with_remote(repo_path, branch_name, None)
-}
-
-/// Get latest commit hash for branch, checking `preferred_remote` first.
-/// Pass `Some("mirror")` when the workspace fetched from a local mirror so that
-/// the freshly-updated `mirror/<branch>` tracking ref is used instead of the
-/// stale `origin/<branch>` ref (which is never fetched in the mirror path).
-pub fn get_latest_commit_for_branch_with_remote(
-    repo_path: &Path,
-    branch_name: &str,
-    preferred_remote: Option<&str>,
-) -> Option<String> {
-    // Try preferred remote first (e.g. "mirror/platform-sdk")
-    if let Some(remote) = preferred_remote {
-        let remote_branch = format!("{}/{}", remote, branch_name);
-        if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-            if result.success {
-                return Some(result.stdout.trim().to_string());
-            }
-        }
-    }
-
-    // Try origin/
-    let remote_branch = format!("origin/{}", branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    // Fallback to local branch
-    if let Ok(result) = git_command(&["rev-parse", branch_name], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    None
-}
-
-/// Get latest commit hash for remote branch after fetch (works in bare repos)
-pub fn get_latest_commit_for_remote_branch(
-    repo_path: &Path,
-    remote: &str,
-    branch_name: &str,
-) -> Option<String> {
-    // In bare repos after fetch, we can use origin/branch notation
-    let remote_branch = format!("{}/{}", remote, branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    // For mirror repos, branches are stored directly as refs/heads/{branch}
-    // Try refs/heads/{branch} directly (this works for mirror repos)
-    let heads_ref = format!("refs/heads/{}", branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &heads_ref], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    // Try just the branch name as a final fallback
-    if let Ok(result) = git_command(&["rev-parse", branch_name], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    None
-}
 
 // ---------------------------------------------------------------
 // Refspec resolution
@@ -479,18 +391,6 @@ pub fn clone_bare(url: &str, path: &Path) -> Result<GitResult> {
     git_command(&args, None)
 }
 
-/// Clone repository as mirror (for mirroring)
-pub fn clone_mirror(url: &str, path: &Path) -> Result<GitResult> {
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| anyhow!("Failed to create parent directory: {}", e))?;
-    }
-
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec!["clone", "--mirror", url, &path_str];
-    git_command(&args, None)
-}
 
 // ---------------------------------------------------------------
 // Remote management

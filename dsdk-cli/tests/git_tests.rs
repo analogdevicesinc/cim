@@ -277,11 +277,17 @@ fn test_mirror_workflow() {
     working.commit("Add data");
     git_operations::push(&working.path, Some("origin"), Some("main")).expect("Should push");
 
-    // 2. Create mirror
+    // 2. Create mirror (bare init + remote add + fetch)
     let mirror_path = fixture.path().join("mirror/test-repo.git");
-    let mirror_result = git_operations::clone_mirror(&upstream.file_url(), &mirror_path)
-        .expect("Should create mirror");
-    assert!(mirror_result.is_success());
+    fs::create_dir_all(&mirror_path).expect("Should create mirror dir");
+    git_operations::init_repo(&mirror_path, true).expect("Should init bare repo");
+    git_operations::remote_add(&mirror_path, "origin", &upstream.file_url())
+        .expect("Should add remote to mirror");
+    let mirror_fetch = git_operations::fetch_ref(&mirror_path, "origin", "refs/heads/main", 1)
+        .expect("Should fetch into mirror");
+    assert!(mirror_fetch.is_success());
+    git_operations::update_ref(&mirror_path, "refs/heads/main", "FETCH_HEAD")
+        .expect("Should update ref in mirror");
 
     // 3. Clone from mirror to workspace
     let workspace_path = fixture.path().join("workspace/test-repo");
@@ -301,22 +307,51 @@ fn test_mirror_workflow() {
 }
 
 #[test]
-fn test_branch_detection() {
+fn test_branch_tag_detection() {
     let repo = MockGitRepo::new("test-repo");
     repo.add_file("test.txt", "test\n");
     repo.commit("Initial commit");
-
-    // Main/master is a branch
-    let is_branch = git_operations::is_branch_reference(&repo.path, "main");
-    let is_branch_master = git_operations::is_branch_reference(&repo.path, "master");
-    assert!(is_branch || is_branch_master);
-
-    // Create and checkout a tag
     repo.create_tag("v1.0.0");
+    git_operations::create_branch(&repo.path, "feature-branch", None)
+        .expect("Should create feature branch");
+    let url = repo.file_url();
 
-    // Tag is not a branch
-    let is_branch = git_operations::is_branch_reference(&repo.path, "v1.0.0");
-    assert!(!is_branch);
+    let refs = git_operations::ls_remote(&url, true, true).expect("ls_remote should succeed");
+
+    // Default branch is detected as a branch
+    let (main_refspec, _, main_sha) = git_operations::resolve_fetch_refspec(&refs, "main");
+    assert!(
+        main_refspec.starts_with("refs/heads/"),
+        "Default branch should be detected as a branch"
+    );
+    assert!(main_sha.is_some());
+
+    // Feature branch is detected as a branch
+    let (fb_refspec, _, fb_sha) = git_operations::resolve_fetch_refspec(&refs, "feature-branch");
+    assert!(
+        fb_refspec.starts_with("refs/heads/"),
+        "feature-branch should be a branch reference, got: {}",
+        fb_refspec
+    );
+    assert!(fb_sha.is_some());
+
+    // Tag is not detected as a branch
+    let (tag_refspec, _, tag_sha) = git_operations::resolve_fetch_refspec(&refs, "v1.0.0");
+    assert!(
+        tag_refspec.starts_with("refs/tags/"),
+        "Tag should be detected as a tag, got: {}",
+        tag_refspec
+    );
+    assert!(tag_sha.is_some());
+
+    // Nonexistent ref falls through as a commit hash (no sha)
+    let (nonexistent_refspec, _, nonexistent_sha) =
+        git_operations::resolve_fetch_refspec(&refs, "nonexistent-branch");
+    assert_eq!(
+        nonexistent_refspec, "nonexistent-branch",
+        "Nonexistent ref should be returned as-is (treated as commit hash)"
+    );
+    assert!(nonexistent_sha.is_none());
 }
 
 #[test]
@@ -333,11 +368,15 @@ fn test_mirror_discovers_new_branches() {
     working.commit("Initial commit");
     git_operations::push(&working.path, Some("origin"), Some("main")).expect("Should push");
 
-    // 2. Create mirror
+    // 2. Create mirror (bare init + remote add + fetch)
     let mirror_path = fixture.path().join("mirror/test-repo.git");
-    let mirror_result = git_operations::clone_mirror(&upstream.file_url(), &mirror_path)
-        .expect("Should create mirror");
-    assert!(mirror_result.is_success());
+    fs::create_dir_all(&mirror_path).expect("Should create mirror dir");
+    git_operations::init_repo(&mirror_path, true).expect("Should init bare repo");
+    git_operations::remote_add(&mirror_path, "origin", &upstream.file_url())
+        .expect("Should add remote to mirror");
+    let mirror_fetch = git_operations::fetch_ref(&mirror_path, "origin", "refs/heads/main", 1)
+        .expect("Should fetch into mirror");
+    assert!(mirror_fetch.is_success());
 
     // 3. Add a new branch to upstream (simulating the dev/gensecbl scenario)
     git_operations::create_branch(&working.path, "dev/new-feature", None)
@@ -348,21 +387,26 @@ fn test_mirror_discovers_new_branches() {
     git_operations::push(&working.path, Some("origin"), Some("dev/new-feature"))
         .expect("Should push new branch");
 
-    // 4. Update mirror with fetch_all_with_tags (should discover new branch)
+    // 4. Update mirror with fetch_ref for the new branch
     let fetch_result =
-        git_operations::fetch_all_with_tags(&mirror_path).expect("Should fetch all with tags");
+        git_operations::fetch_ref(&mirror_path, "origin", "refs/heads/dev/new-feature", 1)
+            .expect("Should fetch new branch");
     assert!(
         fetch_result.is_success(),
-        "fetch_all_with_tags should succeed"
+        "fetch_ref for new branch should succeed"
     );
 
-    // 5. Verify new branch exists in mirror
-    // In a mirror repository, all branches are in refs/heads/
-    let branches = git_operations::list_local_branches(&mirror_path).expect("Should list branches");
+    // 5. Verify new branch is fetchable via ls-remote on the mirror
+    // After a shallow fetch the ref is stored under FETCH_HEAD; update it so it
+    // appears in refs/heads.
+    let _ = git_operations::update_ref(&mirror_path, "refs/heads/dev/new-feature", "FETCH_HEAD");
+    let refs =
+        git_operations::ls_remote(&git_operations::path_to_file_url(&mirror_path), true, false)
+            .expect("Should ls-remote mirror");
     assert!(
-        branches.iter().any(|b| b.contains("dev/new-feature")),
-        "Mirror should have discovered the new dev/new-feature branch. Found branches: {:?}",
-        branches
+        refs.iter().any(|(_, r)| r.contains("dev/new-feature")),
+        "Mirror should have the new dev/new-feature branch. Found refs: {:?}",
+        refs
     );
 }
 
@@ -384,10 +428,16 @@ fn test_get_mirror_repo_path_matching_url() {
     let fixture = TestFixture::new();
     let mirror_path = fixture.create_dir("mirror");
     let upstream = MockGitRepo::new("upstream-uboot");
+    upstream.add_file("test.txt", "test\n");
+    upstream.commit("Initial commit");
 
-    // Create a mirror clone with the upstream URL
+    // Create a mirror with the upstream URL
     let mirror_repo = mirror_path.join("u-boot");
-    git_operations::clone_mirror(&upstream.file_url(), &mirror_repo).expect("Should create mirror");
+    fs::create_dir_all(&mirror_repo).expect("Should create mirror dir");
+    git_operations::init_repo(&mirror_repo, true).expect("Should init bare repo");
+    git_operations::remote_add(&mirror_repo, "origin", &upstream.file_url())
+        .expect("Should add remote");
+    git_operations::fetch_ref(&mirror_repo, "origin", "refs/heads/main", 1).expect("Should fetch");
 
     // Same URL should resolve to the same path
     let result = git_manager::get_mirror_repo_path(&mirror_path, "u-boot", &upstream.file_url());
@@ -399,11 +449,16 @@ fn test_get_mirror_repo_path_url_mismatch_uses_hash() {
     let fixture = TestFixture::new();
     let mirror_path = fixture.create_dir("mirror");
     let upstream1 = MockGitRepo::new("upstream1");
+    upstream1.add_file("test.txt", "test\n");
+    upstream1.commit("Initial commit");
 
     // Create a mirror for the first upstream
     let mirror_repo = mirror_path.join("u-boot");
-    git_operations::clone_mirror(&upstream1.file_url(), &mirror_repo)
-        .expect("Should create mirror");
+    fs::create_dir_all(&mirror_repo).expect("Should create mirror dir");
+    git_operations::init_repo(&mirror_repo, true).expect("Should init bare repo");
+    git_operations::remote_add(&mirror_repo, "origin", &upstream1.file_url())
+        .expect("Should add remote");
+    git_operations::fetch_ref(&mirror_repo, "origin", "refs/heads/main", 1).expect("Should fetch");
 
     // Different URL should resolve to hash-based path
     let result = git_manager::get_mirror_repo_path(
@@ -420,10 +475,16 @@ fn test_get_mirror_repo_path_different_urls_get_different_paths() {
     let fixture = TestFixture::new();
     let mirror_path = fixture.create_dir("mirror");
     let upstream1 = MockGitRepo::new("upstream1");
+    upstream1.add_file("test.txt", "test\n");
+    upstream1.commit("Initial commit");
 
     // Create a mirror at the default name
     let mirror1 = mirror_path.join("u-boot");
-    git_operations::clone_mirror(&upstream1.file_url(), &mirror1).expect("Should create mirror 1");
+    fs::create_dir_all(&mirror1).expect("Should create mirror dir");
+    git_operations::init_repo(&mirror1, true).expect("Should init bare repo");
+    git_operations::remote_add(&mirror1, "origin", &upstream1.file_url())
+        .expect("Should add remote");
+    git_operations::fetch_ref(&mirror1, "origin", "refs/heads/main", 1).expect("Should fetch");
 
     // Different URL should get a unique hash-based path
     let result = git_manager::get_mirror_repo_path(
