@@ -289,21 +289,18 @@ fn test_mirror_workflow() {
     git_operations::update_ref(&mirror_path, "refs/heads/main", "FETCH_HEAD")
         .expect("Should update ref in mirror");
 
-    // 3. Clone from mirror to workspace
+    // 3. Create workspace as a worktree of the mirror
     let workspace_path = fixture.path().join("workspace/test-repo");
-    let clone_result = git_operations::clone_repo(
-        &git_operations::path_to_file_url(&mirror_path),
-        &workspace_path,
-        "HEAD",
-        1,
-    )
-    .expect("Should clone from mirror");
-    assert!(clone_result.is_success());
+    let commit = git_operations::get_current_commit(&mirror_path).expect("Should get mirror HEAD");
+    let wt_result = git_operations::worktree_add(&mirror_path, &workspace_path, &commit)
+        .expect("Should add worktree");
+    assert!(wt_result.is_success());
 
-    // 4. Verify data in workspace
+    // 4. Verify data in workspace and that it is a worktree (`.git` is a file)
     assert!(workspace_path.join("data.txt").exists());
     let content = fs::read_to_string(workspace_path.join("data.txt")).unwrap();
     assert_eq!(content, "important data\n");
+    assert!(git_operations::is_worktree(&workspace_path));
 }
 
 #[test]
@@ -550,4 +547,54 @@ fn test_checkout_fetched_branch() {
     // 5. Verify we got the v2.0 content from main.
     let content = fs::read_to_string(clone_path.join("version.txt")).unwrap();
     assert_eq!(content, "2.0\n");
+}
+
+#[test]
+fn test_worktree_shares_objects_with_mirror() {
+    let fixture = TestFixture::new();
+
+    // 1. Create upstream repo with two commits
+    let upstream = MockGitRepo::create_bare("upstream.git");
+    let working = MockGitRepo::new("working");
+    git_operations::remote_add(&working.path, "origin", &upstream.file_url()).expect("add remote");
+    working.add_file("v.txt", "1\n");
+    working.commit("v1");
+    git_operations::push(&working.path, Some("origin"), Some("main")).expect("push v1");
+
+    // 2. Set up bare mirror and fetch
+    let mirror = fixture.path().join("mirror.git");
+    fs::create_dir_all(&mirror).unwrap();
+    git_operations::init_repo(&mirror, true).expect("init bare");
+    git_operations::remote_add(&mirror, "origin", &upstream.file_url()).expect("remote add");
+    git_operations::fetch_ref(&mirror, "origin", "refs/heads/main", 1).expect("fetch");
+    let v1_sha_output = git_operations::git_command(&["rev-parse", "FETCH_HEAD"], Some(&mirror))
+        .expect("rev-parse");
+    let v1_sha = v1_sha_output.stdout.trim().to_string();
+
+    // 3. Add worktree
+    let ws = fixture.path().join("ws/repo");
+    let wt = git_operations::worktree_add(&mirror, &ws, &v1_sha).expect("worktree add");
+    assert!(wt.is_success());
+    assert!(git_operations::is_worktree(&ws));
+    assert_eq!(fs::read_to_string(ws.join("v.txt")).unwrap(), "1\n");
+
+    // 4. Push v2 upstream, fetch into mirror
+    git_operations::checkout(&working.path, "main").expect("checkout main");
+    working.add_file("v.txt", "2\n");
+    working.commit("v2");
+    git_operations::push(&working.path, Some("origin"), Some("main")).expect("push v2");
+    git_operations::fetch_ref(&mirror, "origin", "refs/heads/main", 1).expect("fetch v2");
+    let v2_sha_output = git_operations::git_command(&["rev-parse", "FETCH_HEAD"], Some(&mirror))
+        .expect("rev-parse");
+    let v2_sha = v2_sha_output.stdout.trim();
+
+    // 5. Checkout v2 in the worktree
+    let co = git_operations::checkout(&ws, v2_sha).expect("checkout v2 in worktree");
+    assert!(co.is_success());
+    assert_eq!(fs::read_to_string(ws.join("v.txt")).unwrap(), "2\n");
+
+    // 6. Remove worktree
+    let rm = git_operations::worktree_remove(&mirror, &ws).expect("worktree remove");
+    assert!(rm.is_success());
+    assert!(!ws.exists());
 }

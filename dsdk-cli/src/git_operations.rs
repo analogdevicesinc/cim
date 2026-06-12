@@ -133,7 +133,6 @@ pub fn clone_repo(url: &str, path: &Path, refspec: &str, depth: u32) -> Result<G
     checkout(path, "FETCH_HEAD")
 }
 
-
 // ---------------------------------------------------------------
 // Fetch operations
 // ---------------------------------------------------------------
@@ -199,6 +198,33 @@ pub fn fetch_tags(repo_path: &Path, remote: Option<&str>) -> Result<GitResult> {
 /// Checkout commit/branch/tag
 pub fn checkout(repo_path: &Path, commit_ref: &str) -> Result<GitResult> {
     git_command(&["checkout", commit_ref], Some(repo_path))
+}
+
+/// Add a git worktree at `worktree_path` from the repository at `repo_path`,
+/// checking out `commit_ref` in detached-HEAD mode.
+pub fn worktree_add(repo_path: &Path, worktree_path: &Path, commit_ref: &str) -> Result<GitResult> {
+    let wt = worktree_path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF-8 worktree path"))?;
+    git_command(
+        &["worktree", "add", "--detach", wt, commit_ref],
+        Some(repo_path),
+    )
+}
+
+/// Remove a previously added worktree.
+pub fn worktree_remove(repo_path: &Path, worktree_path: &Path) -> Result<GitResult> {
+    let wt = worktree_path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF-8 worktree path"))?;
+    git_command(&["worktree", "remove", "--force", wt], Some(repo_path))
+}
+
+/// Check whether `path` is a git worktree (has a `.git` *file* rather than
+/// a `.git` directory, pointing back to a parent repository).
+pub fn is_worktree(path: &Path) -> bool {
+    let dot_git = path.join(".git");
+    dot_git.is_file()
 }
 
 /// List remote references
@@ -279,7 +305,6 @@ pub fn list_local_branches(repo_path: &Path) -> Result<Vec<String>> {
 
     Ok(branches)
 }
-
 
 // ---------------------------------------------------------------
 // Refspec resolution
@@ -390,7 +415,6 @@ pub fn clone_bare(url: &str, path: &Path) -> Result<GitResult> {
     let args = vec!["clone", "--bare", url, &path_str];
     git_command(&args, None)
 }
-
 
 // ---------------------------------------------------------------
 // Remote management
