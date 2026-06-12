@@ -814,7 +814,7 @@ pub(crate) fn handle_existing_workspace_repo(
         if mirror_repo_path.exists() {
             if !git_operations::cat_file(&mirror_repo_path, &target) {
                 let fetch_ok =
-                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1))
+                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1)
                         .is_ok_and(|r| r.is_success());
                 if fetch_ok {
                     let _ = git_operations::update_ref(
@@ -837,14 +837,14 @@ pub(crate) fn handle_existing_workspace_repo(
                 } else {
                     fetch_refspec.clone()
                 };
-            git_operations::fetch_ref(repo_path, "mirror", &mirror_fetch_refspec, None)
+            git_operations::fetch_ref(repo_path, "mirror", &mirror_fetch_refspec, 1)
                 .is_ok_and(|r| r.is_success())
         } else {
-            git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, Some(1))
+            git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, 1)
                 .is_ok_and(|r| r.is_success())
         }
     } else {
-        git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, Some(1))
+        git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, 1)
             .is_ok_and(|r| r.is_success())
     };
 
@@ -981,7 +981,7 @@ pub(crate) fn clone_repo_to_workspace(
             if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
                 spinner.set_action(&git_cfg.name, "fetching into mirror…");
                 let fetch_ok =
-                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1))
+                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1)
                         .is_ok_and(|r| r.is_success());
                 if fetch_ok {
                     let _ = git_operations::update_ref(
