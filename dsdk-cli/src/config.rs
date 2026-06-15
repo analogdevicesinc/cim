@@ -478,9 +478,69 @@ pub struct CopyFileConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+enum PackageList {
+    Flat(Vec<String>),
+    Nested(Vec<PackageListEntry>),
+}
+
+impl Default for PackageList {
+    fn default() -> Self {
+        PackageList::Flat(Vec::new())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+enum PackageListEntry {
+    Single(String),
+    Group(Vec<String>),
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PackageManagerConfig {
     pub command: String,
-    pub packages: Vec<String>,
+    packages: PackageList,
+}
+
+impl PackageManagerConfig {
+    /// Returns a flat, deduplicated list of packages.
+    ///
+    /// Accepts both a plain list (`packages: [a, b]`) and a composed list of
+    /// lists (`packages: [*base, *extras]`). Duplicate entries across groups
+    /// are removed; insertion order within each group is preserved.
+    pub fn resolved_packages(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        match &self.packages {
+            PackageList::Flat(pkgs) => {
+                for p in pkgs {
+                    if seen.insert(p.clone()) {
+                        result.push(p.clone());
+                    }
+                }
+            }
+            PackageList::Nested(entries) => {
+                for entry in entries {
+                    match entry {
+                        PackageListEntry::Single(s) => {
+                            if seen.insert(s.clone()) {
+                                result.push(s.clone());
+                            }
+                        }
+                        PackageListEntry::Group(g) => {
+                            for p in g {
+                                if seen.insert(p.clone()) {
+                                    result.push(p.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

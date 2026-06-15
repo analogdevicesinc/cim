@@ -754,11 +754,14 @@ Here we define the host OS dependencies for different OS'es. If the distros use 
 
 `command:` is the command to install packages for that particular OS/distro. For example, `apt install` for Ubuntu and `dnf install` for Fedora, `brew install` for macOS, `winget` for Windows etc.
 
-`packages:` is the list of packages to install for that particular OS/distro.
+`packages:` is the list of packages to install for that particular OS/distro. It accepts two forms:
+
+- **Flat list** — the standard form: `packages: *anchor` or an inline sequence.
+- **Composed list** — a list of lists, where each element is itself a list (typically a YAML anchor). `cim` flattens and deduplicates all sublists into one install command at runtime. This is useful when a target needs a shared base plus architecture-specific extras, avoiding full list duplication.
 
 ```yaml
 # Common package lists using YAML anchors for DRY
-ubuntu_packages: &ubuntu_pkgs
+ubuntu_packages_base: &ubuntu_packages_base
   - build-essential
   - curl
   - git
@@ -766,7 +769,12 @@ ubuntu_packages: &ubuntu_pkgs
   - python3
   - vim
 
-fedora_packages: &fedora_pkgs
+# x86_64-only packages (no ARM64 equivalents)
+ubuntu_packages_x86_64_extras: &ubuntu_packages_x86_64_extras
+  - gcc-multilib
+  - g++-multilib
+
+fedora_packages: &fedora_packages
   - ccache
   - cmake
   - curl
@@ -778,34 +786,40 @@ fedora_packages: &fedora_pkgs
   - vim
 
 # Linux x86_64 (Intel/AMD) dependencies
+# Composed form: base list + x86_64-specific extras
 linux-x86_64:
   ubuntu-22.04:
     command: "apt-get install"
-    packages: *ubuntu_pkgs
+    packages:
+      - *ubuntu_packages_base
+      - *ubuntu_packages_x86_64_extras
 
   fedora-42:
     command: "dnf install"
-    packages: *fedora_pkgs
+    packages: *fedora_packages
 
 # Linux ARM64 (Apple Silicon, ARM servers) dependencies
+# Flat form: base list only, no multilib packages on ARM64
 linux-aarch64:
   ubuntu-22.04:
     command: "apt-get install"
-    packages: *ubuntu_pkgs
+    packages: *ubuntu_packages_base
 
   fedora-42:
     command: "dnf install"
-    packages: *fedora_pkgs
+    packages: *fedora_packages
 
 # Backward compatibility - generic linux (defaults to x86_64 behavior)
 linux:
   ubuntu-22.04:
     command: "apt-get install"
-    packages: *ubuntu_pkgs
+    packages:
+      - *ubuntu_packages_base
+      - *ubuntu_packages_x86_64_extras
 
   fedora-42:
     command: "dnf install"
-    packages: *fedora_pkgs
+    packages: *fedora_packages
 
 macos:
   macos-any:
