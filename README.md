@@ -72,6 +72,8 @@ cargo build --release
 
 Binary location: `target/release/cim`
 
+> Tip: a [Dev Container](https://containers.dev/) is provided under `.devcontainer/` — open the repo in VS Code and run **"Dev Containers: Reopen in Container"** to get a ready-to-build environment without installing Rust or system dependencies on your host.
+
 #### Install
 
 ```bash
