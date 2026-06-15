@@ -922,7 +922,7 @@ pub(crate) fn install_prerequisites(
             ));
 
             // Display packages to be installed (sorted alphabetically)
-            let mut packages = distro_config.package_manager.packages.clone();
+            let mut packages = distro_config.package_manager.resolved_packages();
             packages.sort();
             messages::status("\nPackages to be installed:");
             for package in &packages {

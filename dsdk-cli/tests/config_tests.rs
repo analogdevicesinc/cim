@@ -775,10 +775,10 @@ linux-x86_64:
 
     // Verify package lists
     let ubuntu_22 = &os_config.distros["ubuntu-22.04"];
-    assert_eq!(ubuntu_22.package_manager.packages.len(), 2);
+    assert_eq!(ubuntu_22.package_manager.resolved_packages().len(), 2);
 
     let ubuntu_24 = &os_config.distros["ubuntu-24.04"];
-    assert_eq!(ubuntu_24.package_manager.packages.len(), 3);
+    assert_eq!(ubuntu_24.package_manager.resolved_packages().len(), 3);
 }
 
 #[test]
@@ -903,6 +903,122 @@ linux-x86_64:
         OsDependencies::parse_distro_key("alma-linux-8.8"),
         Some(("alma-linux".to_string(), "8.8".to_string()))
     );
+}
+
+#[test]
+fn test_os_dependencies_nested_packages_flat_compat() {
+    use dsdk_cli::config::OsDependencies;
+
+    let yaml_content = r#"
+linux-x86_64:
+  ubuntu-24.04:
+    command: "apt install"
+    packages:
+      - git
+      - cmake
+      - build-essential
+"#;
+
+    let os_deps: OsDependencies =
+        serde_yaml::from_str(yaml_content).expect("Should parse flat packages list");
+
+    let distro = &os_deps.os_configs["linux-x86_64"].distros["ubuntu-24.04"];
+    let packages = distro.package_manager.resolved_packages();
+    assert_eq!(packages.len(), 3);
+    assert!(packages.contains(&"git".to_string()));
+    assert!(packages.contains(&"cmake".to_string()));
+    assert!(packages.contains(&"build-essential".to_string()));
+}
+
+#[test]
+fn test_os_dependencies_nested_packages_composed() {
+    use dsdk_cli::config::OsDependencies;
+
+    // Simulate what YAML anchors expand to: a list of lists
+    let yaml_content = r#"
+linux-x86_64:
+  ubuntu-24.04:
+    command: "apt install"
+    packages:
+      - - git
+        - cmake
+      - - gcc-multilib
+        - g++-multilib
+"#;
+
+    let os_deps: OsDependencies =
+        serde_yaml::from_str(yaml_content).expect("Should parse nested (composed) packages list");
+
+    let distro = &os_deps.os_configs["linux-x86_64"].distros["ubuntu-24.04"];
+    let packages = distro.package_manager.resolved_packages();
+    assert_eq!(packages.len(), 4);
+    assert!(packages.contains(&"git".to_string()));
+    assert!(packages.contains(&"cmake".to_string()));
+    assert!(packages.contains(&"gcc-multilib".to_string()));
+    assert!(packages.contains(&"g++-multilib".to_string()));
+}
+
+#[test]
+fn test_os_dependencies_nested_packages_dedup() {
+    use dsdk_cli::config::OsDependencies;
+
+    // Both groups contain "git" — should appear only once in the result
+    let yaml_content = r#"
+linux-x86_64:
+  ubuntu-24.04:
+    command: "apt install"
+    packages:
+      - - git
+        - cmake
+      - - git
+        - gcc-multilib
+"#;
+
+    let os_deps: OsDependencies =
+        serde_yaml::from_str(yaml_content).expect("Should parse nested packages with duplicates");
+
+    let distro = &os_deps.os_configs["linux-x86_64"].distros["ubuntu-24.04"];
+    let packages = distro.package_manager.resolved_packages();
+    assert_eq!(packages.len(), 3, "duplicate 'git' should be removed");
+    assert!(packages.contains(&"git".to_string()));
+    assert!(packages.contains(&"cmake".to_string()));
+    assert!(packages.contains(&"gcc-multilib".to_string()));
+}
+
+#[test]
+fn test_os_dependencies_mixed_flat_and_nested_same_file() {
+    use dsdk_cli::config::OsDependencies;
+
+    // x86_64 uses nested (composed), aarch64 uses flat — both must parse correctly
+    let yaml_content = r#"
+linux-x86_64:
+  ubuntu-24.04:
+    command: "apt install"
+    packages:
+      - - git
+        - cmake
+      - - gcc-multilib
+
+linux-aarch64:
+  ubuntu-24.04:
+    command: "apt install"
+    packages:
+      - git
+      - cmake
+"#;
+
+    let os_deps: OsDependencies =
+        serde_yaml::from_str(yaml_content).expect("Should parse file with mixed flat and nested");
+
+    let x86_distro = &os_deps.os_configs["linux-x86_64"].distros["ubuntu-24.04"];
+    let x86_pkgs = x86_distro.package_manager.resolved_packages();
+    assert_eq!(x86_pkgs.len(), 3);
+    assert!(x86_pkgs.contains(&"gcc-multilib".to_string()));
+
+    let arm_distro = &os_deps.os_configs["linux-aarch64"].distros["ubuntu-24.04"];
+    let arm_pkgs = arm_distro.package_manager.resolved_packages();
+    assert_eq!(arm_pkgs.len(), 2);
+    assert!(!arm_pkgs.contains(&"gcc-multilib".to_string()));
 }
 
 #[test]
