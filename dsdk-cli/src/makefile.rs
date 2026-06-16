@@ -268,7 +268,8 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         sorted_dir_vars.sort_by_key(|(k, _)| k.as_str());
         for (key, value) in sorted_dir_vars {
             let make_value = render_command_for_makefile(value);
-            makefile.push_str(&format!("{} := {}\n", key, make_value));
+            // Export so recipes and sub-makes inherit the path via the environment.
+            makefile.push_str(&format!("export {} := {}\n", key, make_value));
         }
         makefile.push('\n');
     }
@@ -2704,6 +2705,12 @@ mod tests {
         assert!(
             makefile.contains("LINUX_STABLE_DIR := $(WORKSPACE)/linux-stable"),
             "Missing LINUX_STABLE_DIR in:\n{}",
+            makefile
+        );
+        // _DIR vars are exported so recipes and sub-makes inherit them.
+        assert!(
+            makefile.contains("export U_BOOT_DIR := $(WORKSPACE)/u-boot"),
+            "U_BOOT_DIR should be exported in:\n{}",
             makefile
         );
         assert!(
