@@ -808,6 +808,53 @@ pub fn generate_git_dir_vars(
     Ok(dir_vars)
 }
 
+/// Generate auto-derived `_VENV` variables for git entries that declare
+/// `python-deps`.
+///
+/// Returns a map of variable names (e.g., `ZEPHYR_VENV`) to their raw values
+/// (e.g., `${{ WORKSPACE }}/.cim/zephyrproject/zephyr/.venv`). These point at
+/// the per-git virtual environment created by `cim install pip` so that
+/// generated Makefile fragments can activate the right venv with
+/// `. $(ZEPHYR_VENV)/bin/activate`.
+///
+/// Only gits with `python-deps` get a variable, to avoid cluttering the
+/// Makefile with venvs that are never created. User-defined variables take
+/// precedence, mirroring [`generate_git_dir_vars`]. Returns `Err` on a naming
+/// conflict between two git entries.
+pub fn generate_git_venv_vars(
+    gits: &[config::GitConfig],
+    user_vars: Option<&std::collections::HashMap<String, String>>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut venv_vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for git in gits {
+        if git.python_deps.is_none() {
+            continue;
+        }
+
+        let var_name = git_name_to_venv_var(&git.name);
+
+        if let Some(uv) = user_vars {
+            if uv.contains_key(&var_name) {
+                continue;
+            }
+        }
+
+        if venv_vars.contains_key(&var_name) {
+            return Err(format!(
+                "Git name conflict: '{}' produces an already-used variable '{}'. \
+                 Resolve by adding an explicit entry in the 'variables:' section.",
+                git.name, var_name
+            ));
+        }
+
+        let value = format!("${{{{ WORKSPACE }}}}/.cim/{}/.venv", git.name);
+        venv_vars.insert(var_name, value);
+    }
+
+    Ok(venv_vars)
+}
+
 /// Expand `${{ VAR }}` manifest variable references in a string.
 ///
 /// Looks up each `VAR` in the provided resolved variables map.  Unknown
@@ -1677,6 +1724,62 @@ mod tests {
         assert!(err.contains("foo/zephyr"));
         assert!(err.contains("bar/zephyr"));
         assert!(err.contains("ZEPHYR_DIR"));
+    }
+
+    #[test]
+    fn test_generate_git_venv_vars_only_for_python_deps() {
+        let gits = vec![
+            config::GitConfig {
+                name: "zephyrproject/zephyr".to_string(),
+                url: "https://example.com/zephyr.git".to_string(),
+                commit: "main".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+                python_deps: Some(vec!["zephyrproject/zephyr/requirements.txt".to_string()]),
+            },
+            config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "master".to_string(),
+                build_depends_on: None,
+                git_depends_on: None,
+                build: None,
+                documentation_dir: None,
+                python_deps: None,
+            },
+        ];
+
+        let result = generate_git_venv_vars(&gits, None).unwrap();
+        // Only the git with python-deps gets a venv variable.
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result.get("ZEPHYR_VENV").unwrap(),
+            "${{ WORKSPACE }}/.cim/zephyrproject/zephyr/.venv"
+        );
+        assert!(!result.contains_key("U_BOOT_VENV"));
+    }
+
+    #[test]
+    fn test_generate_git_venv_vars_user_override() {
+        let gits = vec![config::GitConfig {
+            name: "zephyr".to_string(),
+            url: "https://example.com/zephyr.git".to_string(),
+            commit: "main".to_string(),
+            build_depends_on: None,
+            git_depends_on: None,
+            build: None,
+            documentation_dir: None,
+            python_deps: Some(vec!["zephyr/requirements.txt".to_string()]),
+        }];
+
+        let mut user_vars = std::collections::HashMap::new();
+        user_vars.insert("ZEPHYR_VENV".to_string(), "/custom/venv".to_string());
+
+        // User-defined variable wins: no auto-generated entry.
+        let result = generate_git_venv_vars(&gits, Some(&user_vars)).unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]

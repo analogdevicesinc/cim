@@ -273,6 +273,31 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         makefile.push('\n');
     }
 
+    // Auto-generate _VENV variables for gits that declare python-deps. These
+    // point at the per-git venv (.cim/<name>/.venv) so .mk fragments can
+    // activate it with `. $(NAME_VENV)/bin/activate`.
+    let git_venv_vars = match dsdk_cli::workspace::generate_git_venv_vars(
+        sdk_config.gits(),
+        sdk_config.variables().as_ref(),
+    ) {
+        Ok(vv) => vv,
+        Err(e) => {
+            dsdk_cli::messages::error(&e);
+            std::collections::HashMap::new()
+        }
+    };
+
+    if !git_venv_vars.is_empty() {
+        makefile.push_str("# Auto-generated Python venv variables from gits python-deps\n");
+        let mut sorted_venv_vars: Vec<_> = git_venv_vars.iter().collect();
+        sorted_venv_vars.sort_by_key(|(k, _)| k.as_str());
+        for (key, value) in sorted_venv_vars {
+            let make_value = render_command_for_makefile(value);
+            makefile.push_str(&format!("{} := {}\n", key, make_value));
+        }
+        makefile.push('\n');
+    }
+
     // Emit manifest variables as Make ?= assignments so host env vars override them
     let vars: std::collections::HashMap<String, String> =
         if let Some(raw_vars) = sdk_config.variables() {
