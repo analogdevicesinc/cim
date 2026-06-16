@@ -888,7 +888,9 @@ pub(crate) fn install_pip_requirements(
 ///
 /// The venv lives at `<workspace>/.cim/<git-name>/.venv` (see
 /// [`dsdk_cli::workspace::git_venv_path`]). Requirement paths are resolved
-/// relative to the workspace root. With `force`, an existing venv is recreated.
+/// relative to the git's own checkout directory (`<workspace>/<git-name>`), so
+/// `python-deps: scripts/requirements.txt` refers to the file inside that
+/// repository. With `force`, an existing venv is recreated.
 pub(crate) fn install_git_python_deps(
     workspace_path: &Path,
     git_name: &str,
@@ -900,7 +902,9 @@ pub(crate) fn install_git_python_deps(
     }
 
     // Validate requirements files up front before any venv side effects.
-    let install_args = build_requirements_args(requirements, workspace_path)?;
+    // Paths are relative to the git's checkout directory.
+    let git_checkout = workspace_path.join(git_name);
+    let install_args = build_requirements_args(requirements, &git_checkout)?;
 
     // The venv primitives take a base directory and append `.venv`, so the
     // base for this git's venv is the parent of git_venv_path(..).
