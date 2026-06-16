@@ -67,13 +67,37 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
         } => {
             // Look for python-dependencies.yml file in workspace (copied via copy_files)
             let python_deps_path = workspace_path.join(PYTHON_DEPS_FILE);
-            if python_deps_path.exists() {
-                // Show available profiles if user requested the list
-                if *list_profiles {
-                    list_available_profiles(&python_deps_path);
-                    return;
-                }
 
+            // Show available profiles if user requested the list
+            if *list_profiles {
+                if python_deps_path.exists() {
+                    list_available_profiles(&python_deps_path);
+                } else {
+                    messages::error("python-dependencies.yml not found in workspace.");
+                }
+                return;
+            }
+
+            // Per-repo Python deps declared in sdk.yml gits: entries are installed
+            // into isolated venvs at .cim/<git>/.venv, independent of the shared
+            // workspace venv populated from python-dependencies.yml profiles.
+            for git in &sdk_config.gits {
+                if let Some(reqs) = &git.python_deps {
+                    if let Err(e) =
+                        install_git_python_deps(&workspace_path, &git.name, reqs, *force)
+                    {
+                        messages::error(&format!(
+                            "Failed to install Python deps for '{}': {}",
+                            git.name, e
+                        ));
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            // Shared workspace venv from python-dependencies.yml profiles (docs,
+            // lint, and other workspace-wide cim tooling).
+            if python_deps_path.exists() {
                 // Resolve mirror from user config / built-in default.
                 if let Err(e) = install_python_packages_from_file(
                     &python_deps_path,
@@ -86,7 +110,8 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                     messages::error(&format!("Failed to install Python packages: {}", e));
                     std::process::exit(1);
                 }
-            } else {
+            } else if !sdk_config.gits.iter().any(|g| g.python_deps.is_some()) {
+                // Nothing to do from either source: report the missing profiles file.
                 messages::error("python-dependencies.yml not found in workspace.");
                 messages::error("This file is copied automatically during 'cim init'.");
             }
@@ -810,20 +835,13 @@ pub(crate) fn install_pip_packages(
     Ok(())
 }
 
-/// Install packages listed in one or more `requirements.txt` files into the
-/// workspace virtual environment. Paths are resolved relative to the workspace
-/// root. Missing files are reported as errors.
-pub(crate) fn install_pip_requirements(
+/// Build the trailing `-r <abs-path>` arguments for a list of requirements
+/// files, resolving each path relative to the workspace root. Returns an error
+/// if any file is missing.
+fn build_requirements_args(
     requirements: &[String],
     workspace_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if requirements.is_empty() {
-        return Ok(());
-    }
-
-    let venv_python = resolve_venv_python(Some(workspace_path))?;
-
-    // Build the trailing args: `-r <abs-path>` for each requirements file.
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let mut install_args: Vec<String> = Vec::with_capacity(requirements.len() * 2);
     for req in requirements {
         let req_path = workspace_path.join(req);
@@ -837,6 +855,22 @@ pub(crate) fn install_pip_requirements(
         install_args.push("-r".to_string());
         install_args.push(req_path.to_string_lossy().into_owned());
     }
+    Ok(install_args)
+}
+
+/// Install packages listed in one or more `requirements.txt` files into the
+/// workspace virtual environment. Paths are resolved relative to the workspace
+/// root. Missing files are reported as errors.
+pub(crate) fn install_pip_requirements(
+    requirements: &[String],
+    workspace_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if requirements.is_empty() {
+        return Ok(());
+    }
+
+    let venv_python = resolve_venv_python(Some(workspace_path))?;
+    let install_args = build_requirements_args(requirements, workspace_path)?;
 
     messages::verbose(&format!(
         "Using virtual environment python: {}",
@@ -846,6 +880,70 @@ pub(crate) fn install_pip_requirements(
     run_pip_install(&venv_python, &install_args)?;
 
     messages::success("Successfully installed Python requirements in virtual environment");
+    Ok(())
+}
+
+/// Create (or reuse) an isolated virtual environment for a single git and
+/// install its `requirements.txt` files into it.
+///
+/// The venv lives at `<workspace>/.cim/<git-name>/.venv` (see
+/// [`dsdk_cli::workspace::git_venv_path`]). Requirement paths are resolved
+/// relative to the workspace root. With `force`, an existing venv is recreated.
+pub(crate) fn install_git_python_deps(
+    workspace_path: &Path,
+    git_name: &str,
+    requirements: &[String],
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if requirements.is_empty() {
+        return Ok(());
+    }
+
+    // Validate requirements files up front before any venv side effects.
+    let install_args = build_requirements_args(requirements, workspace_path)?;
+
+    // The venv primitives take a base directory and append `.venv`, so the
+    // base for this git's venv is the parent of git_venv_path(..).
+    let venv_path = dsdk_cli::workspace::git_venv_path(workspace_path, git_name);
+    let venv_base = venv_path
+        .parent()
+        .expect("git_venv_path always has a parent")
+        .to_path_buf();
+
+    if venv_path.exists() {
+        if force {
+            messages::info(&format!(
+                "Virtual environment for '{}' exists, removing due to --force",
+                git_name
+            ));
+            std::fs::remove_dir_all(&venv_path)?;
+        } else {
+            messages::info(&format!(
+                "Virtual environment for '{}' already exists at {}, reusing (use --force to reinstall)",
+                git_name,
+                venv_path.display()
+            ));
+        }
+    }
+
+    std::fs::create_dir_all(&venv_base)?;
+
+    if !venv_exists(&venv_base) {
+        run_python_venv_creation(&venv_base)?;
+    }
+
+    let venv_python = get_venv_python_path(&venv_base);
+    messages::status(&format!(
+        "Installing Python requirements for '{}' into {}",
+        git_name,
+        venv_path.display()
+    ));
+    run_pip_install(&venv_python, &install_args)?;
+
+    messages::success(&format!(
+        "Successfully installed Python requirements for '{}'",
+        git_name
+    ));
     Ok(())
 }
 
