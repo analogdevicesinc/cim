@@ -703,17 +703,11 @@ pub(crate) fn ensure_docs_dependencies(
     Ok(())
 }
 
-/// Helper function to install pip packages
-pub(crate) fn install_pip_packages(
-    packages: &[String],
+/// Resolve a workspace path from an optional override, falling back to the
+/// current workspace, and verify a virtual environment exists in it.
+fn resolve_venv_python(
     workspace_path_override: Option<&Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if packages.is_empty() {
-        messages::info("No Python packages to install");
-        return Ok(());
-    }
-
-    // Get workspace path - either from parameter or auto-detect
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let workspace_path = match workspace_path_override {
         Some(path) => path.to_path_buf(),
         None => match get_current_workspace() {
@@ -726,32 +720,32 @@ pub(crate) fn install_pip_packages(
         },
     };
 
-    // Use virtual environment pip if available
     if !venv_exists(&workspace_path) {
         return Err(
             "Could not finish setting up Python packages: virtual environment not found".into(),
         );
     }
 
-    let venv_python = get_venv_python_path(&workspace_path);
-    messages::verbose(&format!(
-        "Using virtual environment python: {}",
-        venv_python.display()
-    ));
+    Ok(get_venv_python_path(&workspace_path))
+}
 
-    // Prefer uv when available: `uv pip install --python <venv-python>` installs
-    // into the target venv far faster than pip. Otherwise fall back to invoking
-    // pip directly inside the venv.
+/// Run a pip install into the given venv with the supplied trailing arguments
+/// (package specifiers and/or `-r <file>` pairs). Prefers `uv` when available,
+/// otherwise invokes pip directly inside the venv with the trusted-host flags.
+fn run_pip_install(
+    venv_python: &Path,
+    install_args: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
     let status = if uv_available() {
         messages::status(&format!(
             "Running: uv pip install --python {} {}",
             venv_python.display(),
-            packages.join(" ")
+            install_args.join(" ")
         ));
         std::process::Command::new("uv")
             .args(["pip", "install", "--python"])
-            .arg(&venv_python)
-            .args(packages)
+            .arg(venv_python)
+            .args(install_args)
             .status()
             .map_err(|e| {
                 format!(
@@ -763,9 +757,9 @@ pub(crate) fn install_pip_packages(
         messages::status(&format!(
             "Running: {} -m pip install {}",
             venv_python.display(),
-            packages.join(" ")
+            install_args.join(" ")
         ));
-        std::process::Command::new(&venv_python)
+        std::process::Command::new(venv_python)
             .args(["-m", "pip", "install"])
             .arg("--trusted-host")
             .arg("pypi.org")
@@ -773,7 +767,7 @@ pub(crate) fn install_pip_packages(
             .arg("pypi.python.org")
             .arg("--trusted-host")
             .arg("files.pythonhosted.org")
-            .args(packages)
+            .args(install_args)
             .status()
             .map_err(|e| {
                 format!(
@@ -791,7 +785,67 @@ pub(crate) fn install_pip_packages(
         .into());
     }
 
+    Ok(())
+}
+
+/// Helper function to install pip packages
+pub(crate) fn install_pip_packages(
+    packages: &[String],
+    workspace_path_override: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if packages.is_empty() {
+        messages::info("No Python packages to install");
+        return Ok(());
+    }
+
+    let venv_python = resolve_venv_python(workspace_path_override)?;
+    messages::verbose(&format!(
+        "Using virtual environment python: {}",
+        venv_python.display()
+    ));
+
+    run_pip_install(&venv_python, packages)?;
+
     messages::success("Successfully installed Python packages in virtual environment");
+    Ok(())
+}
+
+/// Install packages listed in one or more `requirements.txt` files into the
+/// workspace virtual environment. Paths are resolved relative to the workspace
+/// root. Missing files are reported as errors.
+pub(crate) fn install_pip_requirements(
+    requirements: &[String],
+    workspace_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if requirements.is_empty() {
+        return Ok(());
+    }
+
+    let venv_python = resolve_venv_python(Some(workspace_path))?;
+
+    // Build the trailing args: `-r <abs-path>` for each requirements file.
+    let mut install_args: Vec<String> = Vec::with_capacity(requirements.len() * 2);
+    for req in requirements {
+        let req_path = workspace_path.join(req);
+        if !req_path.exists() {
+            return Err(format!(
+                "Could not finish setting up Python packages: requirements file not found: {}",
+                req_path.display()
+            )
+            .into());
+        }
+        install_args.push("-r".to_string());
+        install_args.push(req_path.to_string_lossy().into_owned());
+    }
+
+    messages::verbose(&format!(
+        "Using virtual environment python: {}",
+        venv_python.display()
+    ));
+
+    run_pip_install(&venv_python, &install_args)?;
+
+    messages::success("Successfully installed Python requirements in virtual environment");
     Ok(())
 }
 
@@ -908,19 +962,28 @@ pub(crate) fn install_python_packages_from_file(
         ));
     }
 
-    // Collect unique packages from all specified profiles
+    // Collect unique packages and requirements files from all specified profiles
     use std::collections::HashSet;
     let mut all_packages = HashSet::new();
+    let mut requirements: Vec<String> = Vec::new();
 
     for profile_name in &profile_names {
         if let Some(profile) = python_deps.profiles.get(*profile_name) {
             for package in &profile.packages {
                 all_packages.insert(package.clone());
             }
+            if let Some(reqs) = &profile.requirements {
+                for req in reqs {
+                    if !requirements.contains(req) {
+                        requirements.push(req.clone());
+                    }
+                }
+            }
             messages::verbose(&format!(
-                "Profile '{}' adds {} package(s)",
+                "Profile '{}' adds {} package(s) and {} requirements file(s)",
                 profile_name,
-                profile.packages.len()
+                profile.packages.len(),
+                profile.requirements.as_ref().map_or(0, |r| r.len()),
             ));
         }
     }
@@ -929,7 +992,7 @@ pub(crate) fn install_python_packages_from_file(
     let mut packages: Vec<String> = all_packages.into_iter().collect();
     packages.sort();
 
-    if packages.is_empty() {
+    if packages.is_empty() && requirements.is_empty() {
         if profile_names.len() == 1 {
             messages::info(&format!(
                 "Profile '{}' has no packages to install",
@@ -944,13 +1007,24 @@ pub(crate) fn install_python_packages_from_file(
         return Ok(());
     }
 
-    messages::status(&format!(
-        "Installing {} unique package(s) from {} profile(s)",
-        packages.len(),
-        profile_names.len()
-    ));
+    if !packages.is_empty() {
+        messages::status(&format!(
+            "Installing {} unique package(s) from {} profile(s)",
+            packages.len(),
+            profile_names.len()
+        ));
+        install_pip_packages(&packages, Some(workspace_path))?;
+    }
 
-    install_pip_packages(&packages, Some(workspace_path))?;
+    if !requirements.is_empty() {
+        messages::status(&format!(
+            "Installing {} requirements file(s) from {} profile(s)",
+            requirements.len(),
+            profile_names.len()
+        ));
+        install_pip_requirements(&requirements, workspace_path)?;
+    }
+
     Ok(())
 }
 

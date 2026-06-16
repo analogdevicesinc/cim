@@ -243,6 +243,48 @@ default: minimal
 }
 
 #[test]
+fn test_load_python_dependencies_with_requirements() {
+    let fixture = TestFixture::new();
+    let deps_path = fixture.path().join("python-deps.yml");
+
+    // A profile may list requirements.txt paths, with or without inline packages.
+    let deps_yaml = r#"
+profiles:
+  docs:
+    packages:
+      - sphinx
+    requirements:
+      - docs/requirements.txt
+  reqs-only:
+    requirements:
+      - tools/requirements.txt
+
+default: docs
+"#;
+
+    fixture.write_file("python-deps.yml", deps_yaml);
+
+    let loaded = load_python_dependencies(&deps_path).expect("Should load Python dependencies");
+    let docs = loaded.profiles.get("docs").expect("docs profile present");
+    assert_eq!(docs.packages, vec!["sphinx".to_string()]);
+    assert_eq!(
+        docs.requirements.as_deref(),
+        Some(&["docs/requirements.txt".to_string()][..])
+    );
+
+    // Profiles with only requirements (no inline packages) must still parse.
+    let reqs_only = loaded
+        .profiles
+        .get("reqs-only")
+        .expect("reqs-only profile present");
+    assert!(reqs_only.packages.is_empty());
+    assert_eq!(
+        reqs_only.requirements.as_deref(),
+        Some(&["tools/requirements.txt".to_string()][..])
+    );
+}
+
+#[test]
 fn test_config_with_yaml_anchors() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");

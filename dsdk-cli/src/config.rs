@@ -668,7 +668,14 @@ impl OsDependencies {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PythonProfile {
+    #[serde(default)]
     pub packages: Vec<String>,
+    /// Optional workspace-relative paths to `requirements.txt` files. Their
+    /// contents are installed alongside the inline `packages` list, letting a
+    /// profile reuse a repository's existing requirements file instead of
+    /// duplicating its pins here.
+    #[serde(default)]
+    pub requirements: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
