@@ -353,6 +353,16 @@ pub struct GitConfig {
     /// If specified, this directory will be searched for index.rst in addition to default locations
     #[serde(default)]
     pub documentation_dir: Option<String>,
+    /// Workspace-relative paths to `requirements.txt` files providing this
+    /// repository's Python dependencies. When set, `cim install pip` creates an
+    /// isolated virtual environment for this git at `.cim/<name>/.venv` and
+    /// installs these requirements into it. Accepts a single path or a list.
+    #[serde(
+        rename = "python-deps",
+        default,
+        deserialize_with = "deserialize_string_or_vec"
+    )]
+    pub python_deps: Option<Vec<String>>,
 }
 
 /// Configuration for installing a component/tool in the workspace.
@@ -2000,6 +2010,7 @@ mirror = "/only/mirror/set"
             git_depends_on: git_depends_on.map(|v| v.into_iter().map(String::from).collect()),
             build: None,
             documentation_dir: None,
+            python_deps: None,
         }
     }
 
@@ -2094,6 +2105,7 @@ mirror = "/only/mirror/set"
             git_depends_on: None,
             build: None,
             documentation_dir: None,
+            python_deps: None,
         }];
         let tiers = resolve_clone_order(&gits).unwrap();
         assert_eq!(tiers.len(), 1);

@@ -803,6 +803,7 @@ mod tests {
             git_depends_on: None,
             build: Some(vec!["make".to_string(), "make install".to_string()]),
             documentation_dir: None,
+            python_deps: None,
         };
 
         let config = config::SdkConfig {
@@ -841,6 +842,7 @@ mod tests {
             git_depends_on: None,
             build: Some(vec!["@echo Building base".to_string()]),
             documentation_dir: None,
+            python_deps: None,
         };
 
         let git2 = config::GitConfig {
@@ -851,6 +853,7 @@ mod tests {
             git_depends_on: None,
             build: Some(vec!["# This is a comment".to_string(), "make".to_string()]),
             documentation_dir: None,
+            python_deps: None,
         };
 
         let config = config::SdkConfig {
@@ -891,6 +894,7 @@ mod tests {
             git_depends_on: None,
             build: None,
             documentation_dir: None,
+            python_deps: None,
         };
 
         let emitted = add_makefile_target(&mut makefile, &git_config);
@@ -917,6 +921,7 @@ mod tests {
                 "make".to_string(),
             ]),
             documentation_dir: None,
+            python_deps: None,
         };
 
         add_makefile_target(&mut makefile, &git_config);
@@ -939,6 +944,7 @@ mod tests {
             git_depends_on: None,
             build: Some(vec![]),
             documentation_dir: None,
+            python_deps: None,
         };
 
         let config = config::SdkConfig {
@@ -975,6 +981,7 @@ mod tests {
             git_depends_on: None,
             build: Some(vec!["echo hello".to_string()]),
             documentation_dir: None,
+            python_deps: None,
         };
 
         let mut makefile = String::new();
@@ -1615,6 +1622,7 @@ mod tests {
             git_depends_on: None,
             build: Some(vec!["make".to_string()]),
             documentation_dir: None,
+            python_deps: None,
         };
 
         let mut vars = std::collections::HashMap::new();
@@ -1691,6 +1699,7 @@ mod tests {
             git_depends_on: None,
             build: Some(vec!["make".to_string()]),
             documentation_dir: None,
+            python_deps: None,
         };
 
         let mut vars = std::collections::HashMap::new();
@@ -1757,6 +1766,7 @@ mod tests {
             git_depends_on: None,
             build: None,
             documentation_dir: None,
+            python_deps: None,
         }];
         let found = discover_git_mk_files(tmp.path(), &gits, None, &[]);
         assert!(
@@ -1781,6 +1791,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
             config::GitConfig {
                 name: "linux".to_string(),
@@ -1790,6 +1801,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
         ];
 
@@ -1814,6 +1826,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
             config::GitConfig {
                 name: "linux".to_string(),
@@ -1823,6 +1836,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
             config::GitConfig {
                 name: "trusted-firmware-a".to_string(),
@@ -1832,6 +1846,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
         ];
 
@@ -1864,6 +1879,7 @@ mod tests {
                 git_depends_on: None,
                 build: Some(vec!["$(MAKE) u-boot-build".to_string()]),
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -1903,6 +1919,7 @@ mod tests {
                 git_depends_on: None,
                 build: Some(vec!["$(MAKE) -C u-boot".to_string()]),
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -1945,6 +1962,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -1996,6 +2014,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2049,6 +2068,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2103,6 +2123,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2153,6 +2174,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2192,6 +2214,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
             config::GitConfig {
                 name: "u-boot".to_string(),
@@ -2201,6 +2224,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
         ];
 
@@ -2231,6 +2255,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2280,6 +2305,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2360,6 +2386,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
                 config::GitConfig {
                     name: "trusted-services".to_string(),
@@ -2369,6 +2396,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
             ],
             copy_files: None,
@@ -2427,6 +2455,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
                 config::GitConfig {
                     name: "trusted-services".to_string(),
@@ -2436,6 +2465,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
             ],
             copy_files: None,
@@ -2493,6 +2523,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
                 config::GitConfig {
                     name: "trusted-services".to_string(),
@@ -2502,6 +2533,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
             ],
             copy_files: None,
@@ -2561,6 +2593,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -2670,6 +2703,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
                 config::GitConfig {
                     name: "linux-stable".to_string(),
@@ -2679,6 +2713,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
             ],
             copy_files: None,
@@ -2732,6 +2767,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2777,6 +2813,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2819,6 +2856,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -2869,6 +2907,7 @@ mod tests {
             git_depends_on: None,
             build: None,
             documentation_dir: None,
+            python_deps: None,
         }];
 
         let phases = config::default_phases();
@@ -2902,6 +2941,7 @@ mod tests {
             git_depends_on: None,
             build: None,
             documentation_dir: None,
+            python_deps: None,
         }];
 
         let phases = config::default_phases();
@@ -2938,6 +2978,7 @@ mod tests {
             git_depends_on: None,
             build: None,
             documentation_dir: None,
+            python_deps: None,
         }];
 
         let phases = config::default_phases();
@@ -2983,6 +3024,7 @@ mod tests {
                 git_depends_on: None,
                 build: Some(vec!["@echo Top-level build".to_string()]),
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -3033,6 +3075,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -3081,6 +3124,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,
@@ -3141,6 +3185,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
                 config::GitConfig {
                     name: "linux".to_string(),
@@ -3150,6 +3195,7 @@ mod tests {
                     git_depends_on: None,
                     build: None,
                     documentation_dir: None,
+                    python_deps: None,
                 },
             ],
             copy_files: None,
@@ -3202,6 +3248,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: Some(config::MakefileInclude::Structured(
@@ -3256,6 +3303,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             copy_files: None,
             makefile_include: None,

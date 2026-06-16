@@ -179,6 +179,7 @@ pub fn create_basic_sdk_config(repo_url: &str) -> SdkConfig {
             git_depends_on: None,
             build: Some(vec!["make".to_string()]),
             documentation_dir: None,
+            python_deps: None,
         }],
         toolchains: None,
         install: None,
@@ -209,6 +210,7 @@ pub fn create_complex_sdk_config() -> SdkConfig {
                 git_depends_on: None,
                 build: Some(vec!["make base".to_string()]),
                 documentation_dir: None,
+                python_deps: None,
             },
             GitConfig {
                 name: "middleware".to_string(),
@@ -218,6 +220,7 @@ pub fn create_complex_sdk_config() -> SdkConfig {
                 git_depends_on: None,
                 build: Some(vec!["make middleware".to_string()]),
                 documentation_dir: None,
+                python_deps: None,
             },
             GitConfig {
                 name: "application".to_string(),
@@ -227,6 +230,7 @@ pub fn create_complex_sdk_config() -> SdkConfig {
                 git_depends_on: None,
                 build: Some(vec!["make app".to_string()]),
                 documentation_dir: None,
+                python_deps: None,
             },
         ],
         toolchains: None,

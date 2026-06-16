@@ -751,6 +751,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             }],
             toolchains: None,
             copy_files: None,

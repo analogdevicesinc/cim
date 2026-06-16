@@ -54,6 +54,7 @@ fn create_git_config(name: &str, documentation_dir: Option<String>) -> GitConfig
         git_depends_on: None,
         build: None,
         documentation_dir,
+        python_deps: None,
     }
 }
 

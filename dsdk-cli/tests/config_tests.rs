@@ -46,6 +46,7 @@ fn test_load_config_with_repositories() {
             git_depends_on: None,
             build: Some(vec!["make".to_string()]),
             documentation_dir: None,
+            python_deps: None,
         },
         GitConfig {
             name: "repo2".to_string(),
@@ -55,6 +56,7 @@ fn test_load_config_with_repositories() {
             git_depends_on: None,
             build: None,
             documentation_dir: None,
+            python_deps: None,
         },
     ];
 
@@ -114,6 +116,51 @@ gits:
     assert_eq!(build[0], "@echo Building");
     assert_eq!(build[1], "make all");
     assert_eq!(build[2], "make install");
+}
+
+#[test]
+fn test_load_config_with_python_deps() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("sdk.yml");
+
+    // python-deps accepts both a single path (string) and a list of paths.
+    let yaml_content = format!(
+        r#"mirror: {}
+gits:
+  - name: single
+    url: https://example.com/single.git
+    commit: main
+    python-deps: single/requirements.txt
+  - name: multi
+    url: https://example.com/multi.git
+    commit: main
+    python-deps:
+      - multi/requirements.txt
+      - multi/docs/requirements.txt
+  - name: none
+    url: https://example.com/none.git
+    commit: main
+"#,
+        fixture.path().display()
+    );
+
+    fixture.write_file("sdk.yml", &yaml_content);
+
+    let loaded = load_config(&config_path).expect("Should load config with python-deps");
+    assert_eq!(
+        loaded.gits[0].python_deps.as_deref(),
+        Some(&["single/requirements.txt".to_string()][..])
+    );
+    assert_eq!(
+        loaded.gits[1].python_deps.as_deref(),
+        Some(
+            &[
+                "multi/requirements.txt".to_string(),
+                "multi/docs/requirements.txt".to_string()
+            ][..]
+        )
+    );
+    assert!(loaded.gits[2].python_deps.is_none());
 }
 
 #[test]

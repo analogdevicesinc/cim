@@ -1624,6 +1624,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
             config::GitConfig {
                 name: "linux-stable".to_string(),
@@ -1633,6 +1634,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
         ];
 
@@ -1655,6 +1657,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
             config::GitConfig {
                 name: "bar/zephyr".to_string(),
@@ -1664,6 +1667,7 @@ mod tests {
                 git_depends_on: None,
                 build: None,
                 documentation_dir: None,
+                python_deps: None,
             },
         ];
 
@@ -1685,6 +1689,7 @@ mod tests {
             git_depends_on: None,
             build: None,
             documentation_dir: None,
+            python_deps: None,
         }];
 
         let mut user_vars = std::collections::HashMap::new();
