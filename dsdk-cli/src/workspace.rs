@@ -714,6 +714,55 @@ pub fn git_name_to_dir_var(name: &str) -> String {
     format!("{}_DIR", sanitized)
 }
 
+/// Per-git Python virtual environment path: `<workspace>/.cim/<git-name>/.venv`.
+///
+/// Each git entry that declares `python-deps` gets its own isolated venv so
+/// that repositories needing conflicting versions of the same package can
+/// coexist in one workspace. The full git `name` (including any `/`) is used
+/// for the path so that nested names like `zephyrproject/zephyr` map to a
+/// stable, collision-free location.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// use dsdk_cli::workspace::git_venv_path;
+///
+/// let ws = Path::new("/ws");
+/// assert_eq!(git_venv_path(ws, "u-boot"), Path::new("/ws/.cim/u-boot/.venv"));
+/// assert_eq!(
+///     git_venv_path(ws, "zephyrproject/zephyr"),
+///     Path::new("/ws/.cim/zephyrproject/zephyr/.venv")
+/// );
+/// ```
+pub fn git_venv_path(workspace: &Path, git_name: &str) -> PathBuf {
+    workspace.join(".cim").join(git_name).join(".venv")
+}
+
+/// Convert a git entry name to its `_VENV` variable name.
+///
+/// Uses the same rules as [`git_name_to_dir_var`] (last path component,
+/// uppercased, hyphens and dots replaced with underscores) but appends
+/// `_VENV`. This variable points at [`git_venv_path`] and is emitted into the
+/// generated Makefile so `.mk` fragments can activate the right venv with
+/// `. $(ZEPHYR_VENV)/bin/activate`.
+///
+/// # Examples
+///
+/// ```
+/// use dsdk_cli::workspace::git_name_to_venv_var;
+///
+/// assert_eq!(git_name_to_venv_var("u-boot"), "U_BOOT_VENV");
+/// assert_eq!(git_name_to_venv_var("linux-stable"), "LINUX_STABLE_VENV");
+/// assert_eq!(git_name_to_venv_var("zephyrproject/zephyr"), "ZEPHYR_VENV");
+/// ```
+pub fn git_name_to_venv_var(name: &str) -> String {
+    let component = name.rsplit('/').next().unwrap_or(name);
+    let upper = component.to_uppercase();
+    let sanitized = upper.replace(['-', '.'], "_");
+    format!("{}_VENV", sanitized)
+}
+
 /// Generate auto-derived `_DIR` variables from git entries.
 ///
 /// Returns a map of variable names (e.g., `U_BOOT_DIR`) to their raw values
@@ -1540,6 +1589,28 @@ mod tests {
     fn test_git_name_to_dir_var_with_dots() {
         assert_eq!(git_name_to_dir_var("my.project"), "MY_PROJECT_DIR");
         assert_eq!(git_name_to_dir_var("v2.0-release"), "V2_0_RELEASE_DIR");
+    }
+
+    #[test]
+    fn test_git_name_to_venv_var() {
+        assert_eq!(git_name_to_venv_var("u-boot"), "U_BOOT_VENV");
+        assert_eq!(git_name_to_venv_var("linux-stable"), "LINUX_STABLE_VENV");
+        assert_eq!(git_name_to_venv_var("optee_os"), "OPTEE_OS_VENV");
+        assert_eq!(git_name_to_venv_var("zephyrproject/zephyr"), "ZEPHYR_VENV");
+        assert_eq!(git_name_to_venv_var("v2.0-release"), "V2_0_RELEASE_VENV");
+    }
+
+    #[test]
+    fn test_git_venv_path() {
+        let ws = Path::new("/ws");
+        assert_eq!(
+            git_venv_path(ws, "u-boot"),
+            Path::new("/ws/.cim/u-boot/.venv")
+        );
+        assert_eq!(
+            git_venv_path(ws, "zephyrproject/zephyr"),
+            Path::new("/ws/.cim/zephyrproject/zephyr/.venv")
+        );
     }
 
     #[test]
