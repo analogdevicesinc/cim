@@ -352,12 +352,23 @@ cim add --name NAME --url URL --commit COMMIT
 cim install os-deps [--yes] [--no-sudo] [--yes]
 ```
 
-**pip** - Install Python packages from python-dependencies.yml
+**pip** - Install Python packages
 
 ```bash
 cim install pip [--profile PROFILE] [--symlink] [--force]
 # Example: cim install pip --profile dev,docs
 ```
+
+This installs from two sources:
+
+- **Per-git deps** declared via `python-deps:` on `gits:` entries in `sdk.yml`,
+  each installed into an isolated venv at `.cim/<git>/.venv`.
+- **Shared workspace deps** from `python-dependencies.yml` profiles, installed
+  into `<workspace>/.venv` (selected with `--profile`).
+
+If [`uv`](https://docs.astral.sh/uv/) is on `PATH` it is used as a faster
+backend; otherwise cim falls back to `python3 -m venv` and `pip`. The resulting
+environments are standard venvs either way.
 
 **toolchains** - Download and extract toolchains from sdk.yml
 
@@ -706,6 +717,16 @@ install:
 #             cloned before this one. Useful for nested repos where a child
 #             path lives inside a parent repo's directory tree.
 # commit: can be a branch, tag, or specific commit hash.
+# python-deps: path(s) to requirements.txt files for this repository's Python
+#             dependencies, relative to the git's own checkout directory.
+#             Accepts a single path or a list. cim install pip creates an
+#             isolated venv for this git at .cim/<name>/.venv and installs the
+#             requirements into it. cim makefile then emits a <NAME>_VENV
+#             variable (e.g. ZEPHYR_VENV) pointing at that venv, so build
+#             fragments can activate it with `. $(ZEPHYR_VENV)/bin/activate`.
+#             Use this for per-repo runtime deps; use python-dependencies.yml
+#             profiles for workspace-wide cim tooling (docs, lint). See
+#             python-dependencies.yml below.
 ################################################################################
 gits:
   - name: build
@@ -719,6 +740,15 @@ gits:
     commit: master
     build_depends_on:
       - build
+
+  # Example: a repository with its own Python dependencies. The path is
+  # relative to the git's checkout, so this resolves to
+  # zephyrproject/zephyr/scripts/requirements.txt. cim installs it into
+  # .cim/zephyrproject/zephyr/.venv and exposes it as $(ZEPHYR_VENV).
+  - name: zephyrproject/zephyr
+    url: https://github.com/zephyrproject-rtos/zephyr.git
+    commit: main
+    python-deps: scripts/requirements.txt
 
   - name: optee_client
     url: https://github.com/OP-TEE/optee_client.git
@@ -835,7 +865,20 @@ macos:
 ```
 
 #### python-dependencies.yml
-Here we define the Python dependencies and packages needed for the project. Everything defined in here will end up in the `<workspace>/.venv` folder after running `cim install pip`. As can be seen in the example below, we can define different profiles for different purposes. If you don't specify a profile when running the install command, the `default` profile will be used. You can also specify multiple profiles at the same time using the `-p` or `--profile` option.
+Here we define workspace-wide Python dependencies — typically cim tooling such as documentation (sphinx) and linting. Everything defined in here ends up in the shared `<workspace>/.venv` folder after running `cim install pip`. As can be seen in the example below, we can define different profiles for different purposes. If you don't specify a profile when running the install command, the `default` profile will be used. You can also specify multiple profiles at the same time using the `-p` or `--profile` option.
+
+A profile may list inline `packages:` (optionally version-pinned, e.g. `sphinx==7.2.6`) and/or `requirements:` paths to existing `requirements.txt` files, so you don't have to copy pins by hand:
+
+```yaml
+profiles:
+  docs:
+    packages:
+      - sphinx
+    requirements:
+      - docs/requirements.txt
+```
+
+**Where do my Python deps go?** Rule of thumb: if a *repository* ships a `requirements.txt`, declare it via `python-deps:` on that git's `gits:` entry (it gets its own isolated `.cim/<git>/.venv`). If it's *workspace-wide cim tooling* shared across repos, put it in a `python-dependencies.yml` profile (shared `<workspace>/.venv`).
 
 ```yaml
 profiles:
