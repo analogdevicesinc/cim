@@ -463,6 +463,43 @@ fn python_command() -> &'static str {
     }
 }
 
+/// Resolve the absolute path of the system Python interpreter that the stdlib
+/// venv path would use, so the uv backend can be pinned to the same one.
+///
+/// Returns `None` if the interpreter cannot be located, in which case uv falls
+/// back to its own interpreter discovery.
+fn resolve_system_python() -> Option<PathBuf> {
+    let output = std::process::Command::new(python_command())
+        .args(["-c", "import sys; print(sys.executable)"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(path))
+    }
+}
+
+/// Check whether the `uv` binary is available on PATH.
+///
+/// When present, uv is used as a faster, drop-in backend for creating virtual
+/// environments and installing packages. uv produces a standard PEP 405 venv,
+/// so the resulting environment is interchangeable with one created by
+/// `python3 -m venv`. When absent, cim falls back to the stdlib venv + pip path.
+fn uv_available() -> bool {
+    std::process::Command::new("uv")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 /// Create a Python venv at the given path
 fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let venv_path = workspace_path.join(".venv");
@@ -471,6 +508,34 @@ fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::er
         "Creating Python virtual environment at {}...",
         venv_path.display()
     ));
+
+    // Prefer uv when available: `uv venv` creates a standard venv and does not
+    // need a separate ensurepip/upgrade step (uv manages installs itself).
+    //
+    // Pin the interpreter to the same `python3` the stdlib fallback would use.
+    // Without `--python`, uv applies its own discovery and may prefer a
+    // uv-managed CPython download over the system interpreter, producing a venv
+    // on a different Python version than the fallback path — defeating the
+    // "identical with or without uv" guarantee.
+    if uv_available() {
+        let mut command = std::process::Command::new("uv");
+        command.arg("venv");
+        if let Some(python) = resolve_system_python() {
+            command.arg("--python").arg(python);
+        }
+        let output = command.arg(&venv_path).output()?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to create virtual environment with uv:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+
+        messages::success("Virtual environment created successfully");
+        return Ok(());
+    }
 
     // Create the venv.
     let output = std::process::Command::new(python_command())
@@ -673,28 +738,50 @@ pub(crate) fn install_pip_packages(
         "Using virtual environment python: {}",
         venv_python.display()
     ));
-    messages::status(&format!(
-        "Running: {} -m pip install {}",
-        venv_python.display(),
-        packages.join(" ")
-    ));
 
-    let status = std::process::Command::new(&venv_python)
-        .args(["-m", "pip", "install"])
-        .arg("--trusted-host")
-        .arg("pypi.org")
-        .arg("--trusted-host")
-        .arg("pypi.python.org")
-        .arg("--trusted-host")
-        .arg("files.pythonhosted.org")
-        .args(packages)
-        .status()
-        .map_err(|e| {
-            format!(
-                "Could not finish setting up Python packages: failed to execute pip: {}",
-                e
-            )
-        })?;
+    // Prefer uv when available: `uv pip install --python <venv-python>` installs
+    // into the target venv far faster than pip. Otherwise fall back to invoking
+    // pip directly inside the venv.
+    let status = if uv_available() {
+        messages::status(&format!(
+            "Running: uv pip install --python {} {}",
+            venv_python.display(),
+            packages.join(" ")
+        ));
+        std::process::Command::new("uv")
+            .args(["pip", "install", "--python"])
+            .arg(&venv_python)
+            .args(packages)
+            .status()
+            .map_err(|e| {
+                format!(
+                    "Could not finish setting up Python packages: failed to execute uv: {}",
+                    e
+                )
+            })?
+    } else {
+        messages::status(&format!(
+            "Running: {} -m pip install {}",
+            venv_python.display(),
+            packages.join(" ")
+        ));
+        std::process::Command::new(&venv_python)
+            .args(["-m", "pip", "install"])
+            .arg("--trusted-host")
+            .arg("pypi.org")
+            .arg("--trusted-host")
+            .arg("pypi.python.org")
+            .arg("--trusted-host")
+            .arg("files.pythonhosted.org")
+            .args(packages)
+            .status()
+            .map_err(|e| {
+                format!(
+                    "Could not finish setting up Python packages: failed to execute pip: {}",
+                    e
+                )
+            })?
+    };
 
     if !status.success() {
         return Err(format!(
