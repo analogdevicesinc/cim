@@ -301,8 +301,13 @@ pub fn default_phases() -> Vec<String> {
     ]
 }
 
+/// Built-in default mirror location used when neither `--mirror` nor the
+/// `mirror` key in `~/.config/cim/config.toml` is set.
+pub fn default_mirror() -> PathBuf {
+    PathBuf::from("$HOME/tmp/mirror")
+}
+
 pub trait SdkConfigCore {
-    fn mirror(&self) -> &PathBuf;
     fn gits(&self) -> &Vec<GitConfig>;
     fn install(&self) -> &Option<Vec<InstallConfig>>;
     fn makefile_include(&self) -> Option<&MakefileInclude>;
@@ -679,7 +684,6 @@ fn default_python_profile() -> String {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SdkConfig {
-    pub mirror: PathBuf,
     pub gits: Vec<GitConfig>,
     #[serde(default)]
     pub toolchains: Option<Vec<ToolchainConfig>>,
@@ -722,10 +726,6 @@ pub struct SdkConfig {
 }
 
 impl SdkConfigCore for SdkConfig {
-    fn mirror(&self) -> &PathBuf {
-        &self.mirror
-    }
-
     fn gits(&self) -> &Vec<GitConfig> {
         &self.gits
     }
@@ -869,6 +869,7 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<SdkConfig, Box<dyn std::er
 
     let config: SdkConfig = serde_yaml::from_str(&file_content)
         .map_err(|e| enhance_config_error(&file_content, &path_buf, &e))?;
+
     Ok(config)
 }
 
@@ -1009,7 +1010,14 @@ impl UserConfig {
 # Override the default mirror directory location.
 # The mirror stores git repositories and toolchains for fast workspace creation.
 #
-# Default: $HOME/tmp/mirror
+# Resolution order (highest priority first):
+#   1. --mirror <DIR>     command-line flag (init / update)
+#   2. mirror = ...       this config file
+#   3. $HOME/tmp/mirror   built-in default
+#
+# Note: a `mirror:` key in sdk.yml is ignored. Configure the mirror here or
+# with --mirror instead.
+#
 # Use cases:
 #   - Store on faster SSD for better performance
 #   - Use shared network location for team collaboration
@@ -1326,18 +1334,6 @@ impl UserConfig {
     /// Returns the number of overrides applied
     pub fn apply_to_sdk_config(&self, config: &mut SdkConfig, verbose: bool) -> usize {
         let mut override_count = 0;
-
-        if let Some(ref mirror) = self.mirror {
-            if verbose {
-                messages::verbose(&format!(
-                    "User config override: mirror {} -> {}",
-                    config.mirror.display(),
-                    mirror.display()
-                ));
-            }
-            config.mirror = mirror.clone();
-            override_count += 1;
-        }
 
         if let Some(ref user_copy_files) = self.copy_files {
             if verbose {
@@ -1671,13 +1667,36 @@ gits:
         let mut file = File::create(&file_path).unwrap();
         file.write_all(YAML.as_bytes()).unwrap();
         let config = load_config(&file_path).unwrap();
-        assert_eq!(config.mirror.to_str().unwrap(), "/tmp/mirror");
         assert_eq!(config.gits.len(), 2);
         assert_eq!(config.gits[0].name, "git");
         assert_eq!(
             config.gits[1].build_depends_on.as_ref().unwrap(),
             &vec!["git".to_string()]
         );
+    }
+
+    #[test]
+    fn test_manifest_mirror_key_is_ignored() {
+        // A manifest carrying a `mirror:` key still parses; the key is dropped.
+        let yaml = "mirror: /some/manifest/mirror\ngits: []\n";
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(yaml.as_bytes()).unwrap();
+
+        assert!(load_config(&file_path).is_ok());
+    }
+
+    #[test]
+    fn test_missing_mirror_key_loads() {
+        // `mirror:` is not required; a manifest without it loads fine.
+        let yaml = "gits: []\n";
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(yaml.as_bytes()).unwrap();
+
+        assert!(load_config(&file_path).is_ok());
     }
 
     #[test]

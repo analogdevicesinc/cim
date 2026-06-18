@@ -20,11 +20,11 @@ use crate::version::spawn_version_check;
 use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::download::{copy_yaml_files_to_workspace, process_copy_files};
 use dsdk_cli::workspace::{
-    create_workspace_marker, download_config_from_url, expand_config_mirror_path, expand_env_vars,
+    create_workspace_marker, download_config_from_url, expand_env_vars,
     expand_manifest_vars_in_config, get_all_sources_from_config, get_home_dir, is_url,
-    load_config_with_user_overrides, require_workspace_config, resolve_target_config_from_git,
-    CreateWorkspaceMarkerParams, OS_DEPS_FILE, PYTHON_DEPS_FILE, SDK_CONFIG_FILE,
-    WORKSPACE_MARKER_FILE,
+    load_config_with_user_overrides, require_workspace_config, resolve_mirror,
+    resolve_target_config_from_git, CreateWorkspaceMarkerParams, OS_DEPS_FILE, PYTHON_DEPS_FILE,
+    SDK_CONFIG_FILE, WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{
     config, doc_manager, git_operations, messages, toolchain_manager, vscode_tasks_manager,
@@ -557,6 +557,7 @@ pub(crate) fn install_os_deps_if_available(
 pub(crate) fn install_toolchains_if_available(
     workspace_path: &Path,
     config_path: &Path,
+    mirror_path: &Path,
     symlink: bool,
     _verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -581,11 +582,10 @@ pub(crate) fn install_toolchains_if_available(
     messages::status("");
     messages::status("Installing toolchains...");
 
-    // Mirror path already expanded in full_config with user overrides applied
     // Create toolchain manager and install toolchains
     let toolchain_manager = toolchain_manager::ToolchainManager::new(
         workspace_path.to_path_buf(),
-        full_config.mirror.clone(),
+        mirror_path.to_path_buf(),
     );
 
     match toolchain_manager.install_toolchains(
@@ -611,10 +611,11 @@ pub(crate) fn install_toolchains_if_available(
 pub(crate) fn install_pip_packages_if_available(
     workspace_path: &Path,
     config_path: &Path,
+    mirror_path: &Path,
     symlink: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Load the SDK config with user overrides to get the mirror path
-    let sdk_config = match load_config_with_user_overrides(config_path, false) {
+    // Load the SDK config to validate the manifest parses.
+    let _sdk_config = match load_config_with_user_overrides(config_path, false) {
         Ok(config) => config,
         Err(e) => {
             messages::info(&format!(
@@ -664,7 +665,6 @@ pub(crate) fn install_pip_packages_if_available(
     messages::status("");
     messages::status("Installing Python packages...");
 
-    // Mirror path already expanded in sdk_config with user overrides applied
     // Install Python packages using the default profile
     install_python_packages_from_file(
         &python_deps_path,
@@ -672,7 +672,7 @@ pub(crate) fn install_pip_packages_if_available(
         symlink, // symlink = from parameter
         None,    // profile = None (use default)
         workspace_path,
-        &sdk_config.mirror,
+        mirror_path,
     )?;
 
     messages::success("Python packages installation completed");
@@ -686,6 +686,7 @@ pub(crate) struct InitConfig<'a> {
     pub(crate) version: Option<String>,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) no_mirror: bool,
+    pub(crate) mirror: Option<PathBuf>,
     pub(crate) force: bool,
     pub(crate) match_pattern: Option<&'a str>,
     pub(crate) verbose: bool,
@@ -855,19 +856,9 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         }
     }
 
-    // Expand environment variables in mirror path
-    let original_mirror = sdk_config.mirror.to_string_lossy().to_string();
-    let expanded_mirror = expand_config_mirror_path(&sdk_config);
-    if original_mirror != expanded_mirror.to_string_lossy() {
-        messages::verbose(&format!(
-            "Mirror: {} -> {}",
-            original_mirror,
-            expanded_mirror.display()
-        ));
-    } else {
-        messages::verbose(&format!("Mirror: {}", expanded_mirror.display()));
-    }
-    sdk_config.mirror = expanded_mirror;
+    // Resolve the mirror directory: --mirror flag > user config > built-in default.
+    let mirror_path = resolve_mirror(config.mirror.as_deref());
+    messages::verbose(&format!("Mirror: {}", mirror_path.display()));
 
     // Expand environment variables in git repository URLs
     for git in &mut sdk_config.gits {
@@ -1019,7 +1010,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         workspace_path: &workspace_path,
         config_name: SDK_CONFIG_FILE,
         original_config_path: &config_path,
-        mirror_path: &sdk_config.mirror,
+        mirror_path: &mirror_path,
         original_identifier: Some(&config.target),
         target_version: config.version.as_deref(),
         skip_mirror,
@@ -1057,15 +1048,20 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         } else {
             messages::info("Skipping mirror operations (no_mirror = true in user config)");
         }
-        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, true)
+        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, None)
     } else {
-        messages::verbose(&format!("Mirror: {}", sdk_config.mirror().display()));
+        messages::verbose(&format!("Mirror: {}", mirror_path.display()));
 
         // Update mirror repositories
-        update_mirror_repos(&filtered_config);
+        update_mirror_repos(&filtered_config, &mirror_path);
 
         // Update workspace repositories
-        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, false)
+        update_workspace_repos_with_result(
+            &filtered_config,
+            &workspace_path,
+            true,
+            Some(&mirror_path),
+        )
     };
 
     // Process copy_files after git repositories are cloned
@@ -1077,7 +1073,6 @@ pub(crate) fn handle_init_command(config: InitConfig) {
                 copy_files.len()
             ));
             let config_source_dir = config_path.parent().unwrap_or(Path::new("."));
-            let mirror_path = expand_config_mirror_path(&sdk_config);
             if let Err(e) = process_copy_files(
                 &workspace_path,
                 config_source_dir,
@@ -1143,6 +1138,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             if let Err(e) = install_toolchains_if_available(
                 &workspace_path,
                 &dest_config_path,
+                &mirror_path,
                 config.symlink,
                 config.verbose,
             ) {
@@ -1156,6 +1152,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             if let Err(e) = install_pip_packages_if_available(
                 &workspace_path,
                 &dest_config_path,
+                &mirror_path,
                 config.symlink,
             ) {
                 messages::error(&format!("Failed to install Python packages: {}", e));
@@ -1278,7 +1275,6 @@ pub(crate) fn handle_init_command(config: InitConfig) {
 /// Temporary struct to hold filtered git configurations for operations
 pub(crate) struct FilteredSdkConfig {
     pub(crate) gits: Vec<config::GitConfig>,
-    pub(crate) mirror: PathBuf,
     pub(crate) makefile_include: Option<config::MakefileInclude>,
     pub(crate) build_folder: Option<String>,
     pub(crate) envsetup: Option<config::SdkTarget>,
@@ -1288,10 +1284,6 @@ pub(crate) struct FilteredSdkConfig {
 impl config::SdkConfigCore for FilteredSdkConfig {
     fn gits(&self) -> &Vec<config::GitConfig> {
         &self.gits
-    }
-
-    fn mirror(&self) -> &PathBuf {
-        &self.mirror
     }
 
     fn install(&self) -> &Option<Vec<config::InstallConfig>> {
@@ -1405,7 +1397,6 @@ pub(crate) fn create_filtered_sdk_config<T: config::SdkConfigCore>(
     let filtered_gits = filter_git_configs(sdk_config.gits(), pattern_regex);
     FilteredSdkConfig {
         gits: filtered_gits,
-        mirror: sdk_config.mirror().to_path_buf(),
         makefile_include: sdk_config.makefile_include().cloned(),
         build_folder: sdk_config.build_folder().clone(),
         envsetup: sdk_config.envsetup().clone(),

@@ -24,12 +24,11 @@ fn test_load_valid_minimal_config() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
 
-    let config = create_minimal_sdk_config(fixture.path());
+    let config = create_minimal_sdk_config();
     write_sdk_config(&config, &config_path);
 
     let loaded = load_config(&config_path).expect("Should load minimal config");
     assert_eq!(loaded.gits.len(), 0);
-    assert_eq!(loaded.mirror, fixture.path());
 }
 
 #[test]
@@ -37,7 +36,7 @@ fn test_load_config_with_repositories() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
 
-    let mut config = create_minimal_sdk_config(fixture.path());
+    let mut config = create_minimal_sdk_config();
     config.gits = vec![
         GitConfig {
             name: "repo1".to_string(),
@@ -122,7 +121,7 @@ fn test_load_config_with_dependencies() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
 
-    let config = create_complex_sdk_config(fixture.path());
+    let config = create_complex_sdk_config();
     write_sdk_config(&config, &config_path);
 
     let loaded = load_config(&config_path).expect("Should load complex config");
@@ -156,15 +155,16 @@ fn test_load_config_invalid_yaml() {
 }
 
 #[test]
-fn test_load_config_missing_required_fields() {
+fn test_load_config_without_mirror_field() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("incomplete.yml");
 
-    // Missing 'mirror' field
+    // 'mirror' is no longer a required manifest field. A config without it
+    // loads successfully; the mirror is resolved separately.
     fixture.write_file("incomplete.yml", "gits: []");
 
-    let result = load_config(&config_path);
-    assert!(result.is_err());
+    let loaded = load_config(&config_path).expect("Config without mirror should load");
+    assert_eq!(loaded.gits.len(), 0);
 }
 
 #[test]
@@ -172,11 +172,11 @@ fn test_load_core_config() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
 
-    let config = create_minimal_sdk_config(fixture.path());
+    let config = create_minimal_sdk_config();
     write_sdk_config(&config, &config_path);
 
     let loaded = load_config(&config_path).expect("Should load core config");
-    assert_eq!(loaded.mirror, fixture.path());
+    assert_eq!(loaded.gits.len(), 0);
 }
 
 #[test]
@@ -285,13 +285,12 @@ fn test_config_serialization_roundtrip() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
 
-    let original = create_complex_sdk_config(fixture.path());
+    let original = create_complex_sdk_config();
     write_sdk_config(&original, &config_path);
 
     let loaded = load_config(&config_path).expect("Should load config");
 
-    // Verify all fields match
-    assert_eq!(loaded.mirror, original.mirror);
+    // Verify all fields match.
     assert_eq!(loaded.gits.len(), original.gits.len());
 
     for (loaded_git, original_git) in loaded.gits.iter().zip(original.gits.iter()) {
@@ -336,11 +335,12 @@ gits:
 }
 
 #[test]
-fn test_config_path_expansion() {
+fn test_manifest_mirror_key_is_ignored_but_loads() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
 
-    // Test that environment variable-style paths work
+    // A manifest carrying the deprecated `mirror:` key still loads; the key is
+    // simply dropped (mirror is configured via --mirror or the user config).
     let yaml_content = r#"mirror: /tmp/mirror
 gits:
   - name: test
@@ -351,7 +351,8 @@ gits:
     fixture.write_file("sdk.yml", yaml_content);
 
     let loaded = load_config(&config_path).expect("Should load config");
-    assert_eq!(loaded.mirror.to_str().unwrap(), "/tmp/mirror");
+    assert_eq!(loaded.gits.len(), 1);
+    assert_eq!(loaded.gits[0].name, "test");
 }
 
 #[test]
@@ -1022,37 +1023,31 @@ linux-aarch64:
 }
 
 #[test]
-fn test_user_config_mirror_override_priority() {
-    use dsdk_cli::config::UserConfig;
+fn test_resolve_mirror_cli_override_wins() {
+    use dsdk_cli::workspace::resolve_mirror;
+    use std::path::{Path, PathBuf};
+
+    // The --mirror CLI override takes precedence over user config and the
+    // built-in default, regardless of any manifest contents.
+    let resolved = resolve_mirror(Some(Path::new("/explicit/cli/mirror")));
+    assert_eq!(resolved, PathBuf::from("/explicit/cli/mirror"));
+}
+
+#[test]
+fn test_apply_to_sdk_config_no_longer_overrides_mirror() {
+    use dsdk_cli::config::{CopyFileConfig, UserConfig};
 
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
 
-    // Create SDK config with one mirror path
-    let sdk_mirror = fixture.path().join("sdk-mirror");
-    let mut config = create_minimal_sdk_config(&sdk_mirror);
-    config.gits = vec![GitConfig {
-        name: "test-repo".to_string(),
-        url: "https://github.com/example/test.git".to_string(),
-        commit: "main".to_string(),
-        build_depends_on: None,
-        git_depends_on: None,
-        build: None,
-        documentation_dir: None,
-    }];
+    let config = create_minimal_sdk_config();
     write_sdk_config(&config, &config_path);
+    let mut loaded_sdk_config = load_config(&config_path).expect("Should load SDK config");
 
-    // Load SDK config
-    let loaded_sdk_config = load_config(&config_path).expect("Should load SDK config");
-    assert_eq!(
-        loaded_sdk_config.mirror, sdk_mirror,
-        "SDK config should have sdk-mirror"
-    );
-
-    // Create user config with different mirror path
-    let user_mirror = fixture.path().join("user-mirror");
-    let user_config = UserConfig {
-        mirror: Some(user_mirror.clone()),
+    // A user config that sets only `mirror` produces no SdkConfig overrides:
+    // the mirror is resolved separately (via resolve_mirror), not applied here.
+    let mirror_only = UserConfig {
+        mirror: Some(fixture.path().join("user-mirror")),
         default_source: None,
         alternate_sources: None,
         default_workspace: None,
@@ -1065,47 +1060,14 @@ fn test_user_config_mirror_override_priority() {
         cert_validation: None,
         no_dividers: None,
     };
-
-    // Apply user config overrides to SDK config
-    let mut overridden_sdk_config = loaded_sdk_config.clone();
-    let override_count = user_config.apply_to_sdk_config(&mut overridden_sdk_config, false);
-
-    // Verify that user config mirror overrides SDK config mirror
-    assert_eq!(override_count, 1, "Should have 1 override applied");
     assert_eq!(
-        overridden_sdk_config.mirror, user_mirror,
-        "User config mirror should override SDK config mirror"
+        mirror_only.apply_to_sdk_config(&mut loaded_sdk_config, false),
+        0,
+        "mirror-only user config should apply no SdkConfig overrides"
     );
-    assert_ne!(
-        overridden_sdk_config.mirror, sdk_mirror,
-        "Mirror should not be the SDK default"
-    );
-}
 
-#[test]
-fn test_user_config_mirror_override_with_multiple_overrides() {
-    use dsdk_cli::config::{CopyFileConfig, UserConfig};
-
-    let fixture = TestFixture::new();
-    let config_path = fixture.path().join("sdk.yml");
-
-    // Create SDK config
-    let sdk_mirror = fixture.path().join("sdk-mirror");
-    let config = create_minimal_sdk_config(&sdk_mirror);
-    write_sdk_config(&config, &config_path);
-
-    // Load SDK config
-    let loaded_sdk_config = load_config(&config_path).expect("Should load SDK config");
-
-    // Create user config with multiple overrides
-    let user_mirror = fixture.path().join("user-mirror");
-    let user_config = UserConfig {
-        mirror: Some(user_mirror.clone()),
-        default_source: Some("https://github.com/example/manifests.git".to_string()),
-        alternate_sources: None,
-        default_workspace: Some(fixture.path().join("workspace")),
-        workspace_prefix: Some("test-".to_string()),
-        no_mirror: Some(true),
+    // copy_files is still applied by apply_to_sdk_config.
+    let with_copy_files = UserConfig {
         copy_files: Some(vec![CopyFileConfig {
             source: "test.txt".to_string(),
             dest: "test-dest.txt".to_string(),
@@ -1114,26 +1076,14 @@ fn test_user_config_mirror_override_with_multiple_overrides() {
             post_data: None,
             symlink: None,
         }]),
-        shell: None,
-        shell_arg: None,
-        documentation_dirs: None,
-        cert_validation: None,
-        no_dividers: None,
+        ..Default::default()
     };
-
-    // Apply user config overrides to SDK config
-    let mut overridden_sdk_config = loaded_sdk_config;
-    let override_count = user_config.apply_to_sdk_config(&mut overridden_sdk_config, false);
-
-    // Verify that user config mirror is applied even with multiple overrides
-    assert!(
-        override_count >= 1,
-        "Should have at least 1 override applied"
-    );
     assert_eq!(
-        overridden_sdk_config.mirror, user_mirror,
-        "User config mirror should override SDK config mirror even with multiple overrides"
+        with_copy_files.apply_to_sdk_config(&mut loaded_sdk_config, false),
+        1,
+        "copy_files user config should still apply one override"
     );
+    assert!(loaded_sdk_config.copy_files.is_some());
 }
 
 #[test]

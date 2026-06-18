@@ -66,7 +66,6 @@ fn test_discover_with_default_docs_directory() {
     create_test_repo(workspace, "repo1", "docs", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -102,7 +101,6 @@ fn test_discover_with_doc_directory() {
     create_test_repo(workspace, "repo1", "doc", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -138,7 +136,6 @@ fn test_discover_with_documentation_directory() {
     create_test_repo(workspace, "repo1", "documentation", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -174,7 +171,6 @@ fn test_discover_with_documents_directory() {
     create_test_repo(workspace, "repo1", "documents", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -210,7 +206,6 @@ fn test_discover_with_root_directory() {
     create_test_repo(workspace, "repo1", ".", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -246,7 +241,6 @@ fn test_discover_with_user_config_directories() {
     create_test_repo(workspace, "repo1", "my_docs", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -287,7 +281,6 @@ fn test_discover_with_per_git_custom_directory() {
     create_test_repo(workspace, "repo1", "special_docs", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", Some("special_docs".to_string()))],
         toolchains: None,
         copy_files: None,
@@ -330,7 +323,6 @@ fn test_discover_first_match_wins() {
     fs::write(repo_path.join("doc").join("index.rst"), "OTHER").unwrap();
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -368,7 +360,6 @@ fn test_discover_combined_search_list() {
     create_test_repo(workspace, "repo3", "git_docs", true); // Per-git config
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![
             create_git_config("repo1", None),
             create_git_config("repo2", None),
@@ -426,7 +417,6 @@ fn test_discover_empty_strings_skipped() {
     create_test_repo(workspace, "repo1", "docs", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", Some("".to_string()))], // Empty string
         toolchains: None,
         copy_files: None,
@@ -466,7 +456,6 @@ fn test_discover_deduplication() {
     create_test_repo(workspace, "repo1", "docs", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", Some("docs".to_string()))], // Duplicate
         toolchains: None,
         copy_files: None,
@@ -507,7 +496,6 @@ fn test_discover_no_documentation_found() {
     create_test_repo(workspace, "repo1", "docs", false); // No index.rst
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -540,7 +528,6 @@ fn test_discover_without_user_config() {
     create_test_repo(workspace, "repo1", "docs", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,
@@ -576,7 +563,6 @@ fn test_discover_with_comma_separated_user_dirs() {
     create_test_repo(workspace, "repo2", "custom2", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![
             create_git_config("repo1", None),
             create_git_config("repo2", None),
@@ -619,7 +605,6 @@ fn test_discover_with_empty_entries_in_comma_list() {
     create_test_repo(workspace, "repo1", "docs", true);
 
     let sdk_config = SdkConfig {
-        mirror: PathBuf::from("/tmp/mirror"),
         gits: vec![create_git_config("repo1", None)],
         toolchains: None,
         copy_files: None,

@@ -15,9 +15,9 @@
 # Supports all commands and options:
 #   - list-targets: --source (-s), --target (-t)
 #   - init: --target (-t), --source (-s), --version (-v), --workspace (-w),
-#           --no-mirror, --force, --match, --verbose, --install, --full, --symlink,
-#           --yes (-y), --cert-validation, --no-includes
-#   - update: --no-mirror, --match, --all, --verbose (-v), --cert-validation
+#           --no-mirror, --mirror, --force, --match, --verbose, --install, --full,
+#           --symlink, --yes (-y), --cert-validation, --no-includes
+#   - update: --no-mirror, --mirror, --match, --all, --verbose (-v), --cert-validation
 #   - foreach: command, --match
 #   - makefile: --no-dividers, --no-includes
 #   - add: --name (-n), --url (-u), --commit
@@ -180,7 +180,7 @@ _cim_completions() {
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --force --match --install --full --symlink --yes -y --verbose --cert-validation --no-includes --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --mirror --force --match --install --full --symlink --yes -y --verbose --cert-validation --no-includes --help" -- "${cur}") )
                     return 0
                     ;;
             esac
@@ -198,7 +198,7 @@ _cim_completions() {
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--no-mirror --match --all --verbose -v --cert-validation --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--no-mirror --mirror --match --all --verbose -v --cert-validation --help" -- "${cur}") )
                     return 0
                     ;;
             esac

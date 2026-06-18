@@ -814,7 +814,7 @@ pub fn expand_manifest_vars(s: &str, vars: &std::collections::HashMap<String, St
 /// 1. Loading SDK config from sdk.yml
 /// 2. Loading user config
 /// 3. Applying user config overrides to SDK config
-/// 4. Expanding environment variables in mirror path
+/// 4. Expanding environment variables in git repository URLs and manifest vars
 ///
 /// # Arguments
 ///
@@ -823,7 +823,7 @@ pub fn expand_manifest_vars(s: &str, vars: &std::collections::HashMap<String, St
 ///
 /// # Returns
 ///
-/// Result containing the SdkConfig with user overrides applied and mirror path expanded
+/// Result containing the SdkConfig with user overrides applied
 pub fn load_config_with_user_overrides(
     config_path: &Path,
     verbose: bool,
@@ -857,18 +857,6 @@ pub fn load_config_with_user_overrides(
             messages::info(&format!("Warning: Failed to load user config: {}", e));
         }
     }
-
-    // Expand environment variables in mirror path
-    let original_mirror = sdk_config.mirror.to_string_lossy().to_string();
-    let expanded_mirror = expand_config_mirror_path(&sdk_config);
-    if verbose && original_mirror != expanded_mirror.to_string_lossy() {
-        messages::verbose(&format!(
-            "Expanded mirror: {} -> {}",
-            original_mirror,
-            expanded_mirror.display()
-        ));
-    }
-    sdk_config.mirror = expanded_mirror;
 
     // Expand environment variables in git repository URLs
     for git in &mut sdk_config.gits {
@@ -936,15 +924,23 @@ pub fn expand_manifest_vars_in_config(sdk_config: &mut config::SdkConfig) {
     }
 }
 
-/// Expand environment variables in the mirror path of a config
+/// Resolve the effective mirror cache directory, highest priority first:
 ///
-/// This function takes a config and returns a new PathBuf with environment variables
-/// expanded in the mirror path. This is needed because the YAML parser treats
-/// $HOME and similar variables as literal strings. Used by init and update commands.
-pub fn expand_config_mirror_path<T: config::SdkConfigCore>(config: &T) -> PathBuf {
-    let mirror_str = config.mirror().to_string_lossy();
-    let expanded = expand_env_vars(&mirror_str);
-    PathBuf::from(expanded)
+/// 1. `cli_override` — the `--mirror` flag passed to `init` / `update`.
+/// 2. `mirror` in `~/.config/cim/config.toml` (the user config).
+/// 3. The built-in default, `config::default_mirror()` (`$HOME/tmp/mirror`).
+///
+/// Environment variables (e.g. `$HOME`) in the chosen value are expanded.
+pub fn resolve_mirror(cli_override: Option<&Path>) -> PathBuf {
+    let raw = if let Some(cli) = cli_override {
+        cli.to_path_buf()
+    } else if let Ok(Some(user_config)) = config::UserConfig::load() {
+        user_config.mirror.unwrap_or_else(config::default_mirror)
+    } else {
+        config::default_mirror()
+    };
+
+    PathBuf::from(expand_env_vars(&raw.to_string_lossy()))
 }
 
 /// Download a file from URL to a temporary location
@@ -1248,30 +1244,12 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_config_mirror_path() {
-        // Create a test config with environment variable in mirror path
+    fn test_resolve_mirror_cli_override_is_expanded() {
+        // A --mirror override containing an environment variable is expanded.
         std::env::set_var("TEST_MIRROR_VAR", "/tmp/test-mirror");
 
-        let test_config = config::SdkConfig {
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            toolchains: None,
-            install: None,
-            copy_files: None,
-            mirror: PathBuf::from("$TEST_MIRROR_VAR/repos"),
-            gits: vec![],
-            direnv: None,
-        };
-
-        let expanded = expand_config_mirror_path(&test_config);
-        assert_eq!(expanded, PathBuf::from("/tmp/test-mirror/repos"));
+        let resolved = resolve_mirror(Some(Path::new("$TEST_MIRROR_VAR/repos")));
+        assert_eq!(resolved, PathBuf::from("/tmp/test-mirror/repos"));
 
         // Cleanup
         std::env::remove_var("TEST_MIRROR_VAR");

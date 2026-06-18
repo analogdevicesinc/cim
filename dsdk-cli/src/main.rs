@@ -70,6 +70,7 @@ fn main() {
             version,
             workspace,
             no_mirror,
+            mirror,
             force,
             r#match,
             verbose,
@@ -96,6 +97,7 @@ fn main() {
                 version: version.clone(),
                 workspace: workspace.clone(),
                 no_mirror: *no_mirror,
+                mirror: mirror.clone(),
                 force: *force,
                 match_pattern: r#match.as_deref(),
                 verbose: *verbose,
@@ -112,6 +114,7 @@ fn main() {
         }
         Commands::Update {
             no_mirror,
+            mirror,
             r#match,
             all,
             verbose,
@@ -119,6 +122,7 @@ fn main() {
         } => {
             handle_update_command(
                 *no_mirror,
+                mirror.clone(),
                 r#match.as_deref(),
                 *all,
                 *verbose,

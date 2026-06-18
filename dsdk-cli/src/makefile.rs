@@ -762,14 +762,12 @@ pub(crate) fn add_install_target(makefile: &mut String, install: &config::Instal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_generate_makefile_content_empty() {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -809,7 +807,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![git_config],
             copy_files: None,
             makefile_include: None,
@@ -857,7 +854,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![git1, git2],
             copy_files: None,
             makefile_include: None,
@@ -945,7 +941,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![git_config],
             copy_files: None,
             makefile_include: None,
@@ -989,7 +984,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1025,7 +1019,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1066,7 +1059,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1093,7 +1085,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1142,7 +1133,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1181,7 +1171,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1222,7 +1211,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1249,7 +1237,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1298,7 +1285,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1382,7 +1368,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1428,7 +1413,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1463,7 +1447,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -1519,7 +1502,6 @@ mod tests {
                     "cd repo && DOCKER_DEFAULT_PLATFORM=${{ DOCKER_DEFAULT_PLATFORM }} ./run.sh --new".to_string(),
                 ]),
             }]),
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: None,
@@ -1578,7 +1560,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![],
             copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -1629,7 +1610,6 @@ mod tests {
                 sentinel: Some("opt/.my-tool-installed".to_string()),
                 commands: Some(vec!["echo install".to_string()]),
             }]),
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![git_config],
             copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -1705,7 +1685,6 @@ mod tests {
                 sentinel: Some("opt/.my-tool-installed".to_string()),
                 commands: Some(vec!["echo install".to_string()]),
             }]),
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![git_config],
             copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -1856,7 +1835,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -1895,7 +1873,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -1937,7 +1914,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -1988,7 +1964,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "linux".to_string(),
                 url: "https://example.com/linux.git".to_string(),
@@ -2041,7 +2016,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -2095,7 +2069,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -2145,7 +2118,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -2223,7 +2195,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -2272,7 +2243,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -2351,7 +2321,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![
                 config::GitConfig {
                     name: "qemu".to_string(),
@@ -2418,7 +2387,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![
                 config::GitConfig {
                     name: "qemu".to_string(),
@@ -2484,7 +2452,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![
                 config::GitConfig {
                     name: "qemu".to_string(),
@@ -2553,7 +2520,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -2661,7 +2627,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![
                 config::GitConfig {
                     name: "u-boot".to_string(),
@@ -2724,7 +2689,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -2769,7 +2733,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -2811,7 +2774,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "zephyrproject/zephyr".to_string(),
                 url: "https://example.com/zephyr.git".to_string(),
@@ -2975,7 +2937,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -3025,7 +2986,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "linux".to_string(),
                 url: "https://example.com/linux.git".to_string(),
@@ -3073,7 +3033,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "zephyr".to_string(),
                 url: "https://example.com/zephyr.git".to_string(),
@@ -3132,7 +3091,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![
                 config::GitConfig {
                     name: "u-boot".to_string(),
@@ -3194,7 +3152,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
@@ -3248,7 +3205,6 @@ mod tests {
         let config = config::SdkConfig {
             toolchains: None,
             install: None,
-            mirror: PathBuf::from("/tmp/mirror"),
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),

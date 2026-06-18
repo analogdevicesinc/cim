@@ -11,8 +11,8 @@
 
 use crate::cli::InstallCommand;
 use dsdk_cli::workspace::{
-    get_current_workspace, load_config_with_user_overrides, require_workspace_config, OS_DEPS_FILE,
-    PYTHON_DEPS_FILE,
+    get_current_workspace, load_config_with_user_overrides, require_workspace_config,
+    resolve_mirror, OS_DEPS_FILE, PYTHON_DEPS_FILE,
 };
 use dsdk_cli::{config, messages, toolchain_manager};
 use std::io;
@@ -74,14 +74,14 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                     return;
                 }
 
-                // Mirror path already expanded in _sdk_config with user overrides applied
+                // Resolve mirror from user config / built-in default.
                 if let Err(e) = install_python_packages_from_file(
                     &python_deps_path,
                     *force,
                     *symlink,
                     profile.as_deref(),
                     &workspace_path,
-                    &_sdk_config.mirror,
+                    &resolve_mirror(None),
                 ) {
                     messages::error(&format!("Failed to install Python packages: {}", e));
                     std::process::exit(1);
@@ -100,11 +100,11 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             // Set verbose mode for messages module
             dsdk_cli::messages::set_verbose(*verbose);
 
-            // Use _sdk_config that already has user overrides applied and mirror expanded
+            // Resolve mirror from user config / built-in default.
             // Create toolchain manager and install toolchains
             let toolchain_manager = toolchain_manager::ToolchainManager::new(
                 workspace_path.clone(),
-                _sdk_config.mirror.clone(),
+                resolve_mirror(None),
             );
 
             if let Err(e) = toolchain_manager.install_toolchains(

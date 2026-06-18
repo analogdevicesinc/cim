@@ -19,12 +19,12 @@ use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
 use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::workspace::{
-    expand_config_mirror_path, get_all_sources, require_workspace_config, WorkspaceMarker,
+    get_all_sources, require_workspace_config, resolve_mirror, WorkspaceMarker,
     WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{config, docker_manager, git_operations, messages};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use threadpool::ThreadPool;
@@ -376,6 +376,7 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
 /// Supports environment variable expansion in mirror paths (e.g., $HOME, ${HOME})
 pub(crate) fn handle_update_command(
     no_mirror: bool,
+    mirror_override: Option<PathBuf>,
     match_pattern: Option<&str>,
     all: bool,
     verbose: bool,
@@ -424,10 +425,9 @@ pub(crate) fn handle_update_command(
         }
     };
 
-    // Expand environment variables in mirror path
-    let expanded_mirror = expand_config_mirror_path(&sdk_config);
-    messages::verbose(&format!("Mirror: {}", expanded_mirror.display()));
-    sdk_config.mirror = expanded_mirror;
+    // Resolve the mirror directory: --mirror flag > user config > built-in default.
+    let mirror_path = resolve_mirror(mirror_override.as_deref());
+    messages::verbose(&format!("Mirror: {}", mirror_path.display()));
 
     // Determine match pattern: --all disables filtering, CLI --match takes
     // precedence over stored workspace marker pattern.
@@ -516,13 +516,13 @@ pub(crate) fn handle_update_command(
 
     if skip_mirror {
         // Update workspace repositories directly from remote URLs
-        update_workspace_repos(&filtered_config, &workspace_path, false, true);
+        update_workspace_repos(&filtered_config, &workspace_path, false, None);
     } else {
         // Update mirror repositories in parallel
-        update_mirror_repos(&filtered_config);
+        update_mirror_repos(&filtered_config, &mirror_path);
 
         // Update workspace repositories (single-threaded to avoid conflicts)
-        update_workspace_repos(&filtered_config, &workspace_path, false, false);
+        update_workspace_repos(&filtered_config, &workspace_path, false, Some(&mirror_path));
     }
 
     // When --all is used, clear the stored match pattern from the workspace
@@ -559,10 +559,10 @@ pub(crate) enum MirrorOperationResult {
 }
 
 /// Update mirror repositories in parallel
-pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
+pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T, mirror_path: &Path) {
     // Create or update mirror directory
-    if !sdk_config.mirror().exists() {
-        if let Err(e) = std::fs::create_dir_all(sdk_config.mirror()) {
+    if !mirror_path.exists() {
+        if let Err(e) = std::fs::create_dir_all(mirror_path) {
             messages::error(&format!("Error creating mirror directory: {}", e));
             return;
         }
@@ -573,7 +573,7 @@ pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
 
     for git_cfg in sdk_config.gits() {
         let git_cfg = git_cfg.clone();
-        let mirror_path = sdk_config.mirror().clone();
+        let mirror_path = mirror_path.to_path_buf();
 
         pool.execute(move || {
             let repo_mirror_path = dsdk_cli::git_manager::get_mirror_repo_path(
@@ -682,7 +682,7 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
     sdk_config: &T,
     workspace_path: &Path,
     is_init: bool,
-    no_mirror: bool,
+    mirror_path: Option<&Path>,
 ) {
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
@@ -695,7 +695,7 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
         }
     };
 
-    let mirror_path = (!no_mirror).then(|| sdk_config.mirror().clone());
+    let mirror_path = mirror_path.map(|p| p.to_path_buf());
 
     for tier in &tiers {
         let pool = ThreadPool::new(4);
@@ -731,7 +731,7 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
     sdk_config: &T,
     workspace_path: &Path,
     is_init: bool,
-    no_mirror: bool,
+    mirror_path: Option<&Path>,
 ) -> bool {
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
@@ -746,7 +746,7 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
 
     let any_failed = Arc::new(AtomicBool::new(false));
 
-    let mirror_path = (!no_mirror).then(|| sdk_config.mirror().clone());
+    let mirror_path = mirror_path.map(|p| p.to_path_buf());
 
     for tier in &tiers {
         let pool = ThreadPool::new(4);

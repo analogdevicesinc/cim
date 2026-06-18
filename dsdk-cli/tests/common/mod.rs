@@ -146,9 +146,8 @@ impl MockGitRepo {
 }
 
 /// Create a minimal SDK configuration for testing
-pub fn create_minimal_sdk_config(mirror_path: &Path) -> SdkConfig {
+pub fn create_minimal_sdk_config() -> SdkConfig {
     SdkConfig {
-        mirror: mirror_path.to_path_buf(),
         gits: vec![],
         toolchains: None,
         install: None,
@@ -168,9 +167,8 @@ pub fn create_minimal_sdk_config(mirror_path: &Path) -> SdkConfig {
 
 /// Create a basic SDK configuration with one repository
 #[allow(dead_code)]
-pub fn create_basic_sdk_config(mirror_path: &Path, repo_url: &str) -> SdkConfig {
+pub fn create_basic_sdk_config(repo_url: &str) -> SdkConfig {
     SdkConfig {
-        mirror: mirror_path.to_path_buf(),
         gits: vec![GitConfig {
             name: "test-repo".to_string(),
             url: repo_url.to_string(),
@@ -197,9 +195,8 @@ pub fn create_basic_sdk_config(mirror_path: &Path, repo_url: &str) -> SdkConfig 
 }
 
 /// Create an SDK configuration with multiple repositories and dependencies
-pub fn create_complex_sdk_config(mirror_path: &Path) -> SdkConfig {
+pub fn create_complex_sdk_config() -> SdkConfig {
     SdkConfig {
-        mirror: mirror_path.to_path_buf(),
         gits: vec![
             GitConfig {
                 name: "base-lib".to_string(),
@@ -319,16 +316,13 @@ mod tests {
 
     #[test]
     fn test_create_minimal_sdk_config() {
-        let fixture = TestFixture::new();
-        let config = create_minimal_sdk_config(fixture.path());
+        let config = create_minimal_sdk_config();
         assert_eq!(config.gits.len(), 0);
-        assert_eq!(config.mirror, fixture.path());
     }
 
     #[test]
     fn test_create_complex_sdk_config() {
-        let fixture = TestFixture::new();
-        let config = create_complex_sdk_config(fixture.path());
+        let config = create_complex_sdk_config();
         assert_eq!(config.gits.len(), 3);
         assert_eq!(config.gits[0].name, "base-lib");
         assert!(config.gits[0].build_depends_on.is_none());

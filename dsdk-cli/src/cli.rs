@@ -88,6 +88,13 @@ pub enum Commands {
         /// Skip mirror operations and clone directly from remote URLs
         #[arg(long, help = "Skip mirror, clone directly from remote repos")]
         no_mirror: bool,
+        /// Override the mirror cache directory for this invocation
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Mirror cache directory (overrides config file and default)"
+        )]
+        mirror: Option<PathBuf>,
         /// Force initialization by removing existing workspace directory
         #[arg(long, help = "Force workspace creation (removes existing")]
         force: bool,
@@ -134,6 +141,13 @@ pub enum Commands {
         /// Skip mirror operations and clone directly from remote URLs
         #[arg(long, help = "Skip mirror, only update workspace from remote URLs")]
         no_mirror: bool,
+        /// Override the mirror cache directory for this invocation
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Mirror cache directory (overrides config file and default)"
+        )]
+        mirror: Option<PathBuf>,
         /// Only update repositories matching the given regex pattern
         #[arg(long, help = "Only update repositories matching this regex pattern")]
         r#match: Option<String>,
@@ -591,6 +605,7 @@ mod tests {
                 version,
                 workspace: _,
                 no_mirror: _,
+                mirror: _,
                 force: _,
                 r#match: _,
                 verbose: _,

@@ -14,9 +14,9 @@ use dsdk_cli::download::{
     DownloadConfig,
 };
 use dsdk_cli::workspace::{
-    copy_dir_recursive, expand_config_mirror_path, expand_env_vars, expand_manifest_vars_in_config,
-    is_url, load_config_with_user_overrides, require_workspace_config,
-    resolve_config_source_dir_from_marker,
+    copy_dir_recursive, expand_env_vars, expand_manifest_vars_in_config, is_url,
+    load_config_with_user_overrides, require_workspace_config,
+    resolve_config_source_dir_from_marker, resolve_mirror,
 };
 
 #[cfg(test)]
@@ -718,8 +718,8 @@ pub(crate) fn handle_copy_files_hash_command(
         return;
     }
 
-    // Expand mirror path (always use base config, not user overrides)
-    let mirror_path = expand_config_mirror_path(&sdk_config);
+    // Resolve mirror from user config / built-in default.
+    let mirror_path = resolve_mirror(None);
 
     // Determine the base directory for resolving relative source paths in copy_files.
     // If config_source_dir is a remote URL, re-clone the repo to a fresh temp directory.
@@ -918,7 +918,7 @@ pub(crate) fn handle_toolchains_hash_command(
         return;
     }
 
-    let mirror_path = expand_config_mirror_path(&sdk_config);
+    let mirror_path = resolve_mirror(None);
 
     // Filter toolchains to only those applicable to this host
     let host_info = dsdk_cli::toolchain_manager::detect_host_info();
@@ -1100,7 +1100,7 @@ pub(crate) fn handle_sync_files_hash_command(
     }
 
     // Expand mirror path
-    let mirror_path = expand_config_mirror_path(&sdk_config);
+    let mirror_path = resolve_mirror(None);
 
     // Determine the base directory for resolving relative source paths in copy_files.
     // If config_source_dir is a remote URL, re-clone the repo to a fresh temp directory.
