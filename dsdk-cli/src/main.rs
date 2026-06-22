@@ -77,6 +77,7 @@ fn main() {
             no_sudo,
             symlink,
             yes,
+            depth,
             cert_validation,
         } => {
             // Validate that target is provided
@@ -102,6 +103,7 @@ fn main() {
                 no_sudo: *no_sudo,
                 symlink: *symlink,
                 yes: *yes,
+                depth: *depth,
                 _cert_validation: cert_validation.as_deref(),
             });
         }
@@ -112,12 +114,14 @@ fn main() {
             r#match,
             all,
             verbose,
+            depth,
             cert_validation,
         } => {
             handle_update_command(
                 r#match.as_deref(),
                 *all,
                 *verbose,
+                *depth,
                 cert_validation.as_deref(),
             );
         }

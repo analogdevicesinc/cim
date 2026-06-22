@@ -113,6 +113,7 @@ pub fn strip_unc_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
 /// Clone repository to specified path
 /// Works uniformly for branches (refs/heads/*), tags (refs/tags/*), commit SHAs, and HEAD.
 /// Uses init + remote add + fetch + checkout FETCH_HEAD.
+/// Depth 0 fetches all commits of the reference.
 pub fn clone_repo(url: &str, path: &Path, refspec: &str, depth: u32) -> Result<GitResult> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -148,13 +149,17 @@ pub fn fetch_all(repo_path: &Path) -> Result<GitResult> {
     git_command(&["fetch", "--all"], Some(repo_path))
 }
 
-/// Fetch a specific refspec with a depth limit
+/// Fetch a specific refspec, optionally with a depth limit.
 pub fn fetch_ref(repo_path: &Path, remote: &str, refspec: &str, depth: u32) -> Result<GitResult> {
-    let depth_str = depth.to_string();
-    git_command(
-        &["fetch", remote, refspec, "--depth", &depth_str],
-        Some(repo_path),
-    )
+    if depth > 0 {
+        let depth_str = depth.to_string();
+        git_command(
+            &["fetch", remote, refspec, "--depth", &depth_str],
+            Some(repo_path),
+        )
+    } else {
+        git_command(&["fetch", remote, refspec], Some(repo_path))
+    }
 }
 
 /// Fetch all remotes with tags

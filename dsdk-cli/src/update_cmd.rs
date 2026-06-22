@@ -377,6 +377,7 @@ pub(crate) fn handle_update_command(
     match_pattern: Option<&str>,
     all: bool,
     verbose: bool,
+    depth: u32,
     _cert_validation: Option<&str>,
 ) {
     // Start background version check so it runs concurrently with the update
@@ -477,10 +478,10 @@ pub(crate) fn handle_update_command(
     let filtered_config = create_filtered_sdk_config(&sdk_config, &match_regex);
 
     // Update mirror repositories in parallel
-    update_mirror_repos(&filtered_config);
+    update_mirror_repos(&filtered_config, depth);
 
     // Update workspace repositories
-    update_workspace_repos(&filtered_config, &workspace_path, false);
+    update_workspace_repos(&filtered_config, &workspace_path, false, depth);
 
     // When --all is used, clear the stored match pattern from the workspace
     // marker so subsequent updates without --all still update everything.
@@ -516,7 +517,7 @@ pub(crate) enum MirrorOperationResult {
 }
 
 /// Update mirror repositories in parallel
-pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
+pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T, depth: u32) {
     // Create or update mirror directory
     if !sdk_config.mirror().exists() {
         if let Err(e) = std::fs::create_dir_all(sdk_config.mirror()) {
@@ -549,8 +550,13 @@ pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
                     let refs = git_operations::ls_remote(&git_cfg.url, true, true)?;
                     let (fetch_refspec, update_ref_name, _) =
                         git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
-                    if !git_operations::fetch_ref(&repo_mirror_path, "origin", &fetch_refspec, 1)?
-                        .is_success()
+                    if !git_operations::fetch_ref(
+                        &repo_mirror_path,
+                        "origin",
+                        &fetch_refspec,
+                        depth,
+                    )?
+                    .is_success()
                     {
                         return Ok(MirrorOperationResult::Failed);
                     }
@@ -583,8 +589,13 @@ pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
                     let refs = git_operations::ls_remote(&git_cfg.url, true, true)?;
                     let (fetch_refspec, update_ref_name, _) =
                         git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
-                    if !git_operations::fetch_ref(&repo_mirror_path, "origin", &fetch_refspec, 1)?
-                        .is_success()
+                    if !git_operations::fetch_ref(
+                        &repo_mirror_path,
+                        "origin",
+                        &fetch_refspec,
+                        depth,
+                    )?
+                    .is_success()
                     {
                         return Ok(MirrorOperationResult::Failed);
                     }
@@ -623,6 +634,7 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
     sdk_config: &T,
     workspace_path: &Path,
     is_init: bool,
+    depth: u32,
 ) {
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
@@ -649,9 +661,14 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
                 let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
                 let success = if repo_workspace_path.join(".git").exists() {
-                    handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, &mirror_path)
+                    handle_existing_workspace_repo(
+                        &git_cfg,
+                        &repo_workspace_path,
+                        &mirror_path,
+                        depth,
+                    )
                 } else {
-                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path)
+                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path, depth)
                 };
 
                 // Print result immediately
@@ -670,6 +687,7 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
     sdk_config: &T,
     workspace_path: &Path,
     is_init: bool,
+    depth: u32,
 ) -> bool {
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
@@ -699,9 +717,14 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
                 let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
                 let success = if repo_workspace_path.join(".git").exists() {
-                    handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, &mirror_path)
+                    handle_existing_workspace_repo(
+                        &git_cfg,
+                        &repo_workspace_path,
+                        &mirror_path,
+                        depth,
+                    )
                 } else {
-                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path)
+                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path, depth)
                 };
 
                 // Print result immediately and track failures
@@ -723,6 +746,7 @@ pub(crate) fn handle_existing_workspace_repo(
     git_cfg: &config::GitConfig,
     repo_path: &Path,
     mirror_path: &Path,
+    depth: u32,
 ) -> bool {
     let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
     let (fetch_refspec, update_ref_name, sha) =
@@ -735,8 +759,9 @@ pub(crate) fn handle_existing_workspace_repo(
     // Fetch into the mirror; worktrees share the object store so no
     // separate fetch into the workspace is needed.
     let success = if !git_operations::cat_file(&mirror_repo_path, &target) {
-        let fetch_ok = git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1)
-            .is_ok_and(|r| r.is_success());
+        let fetch_ok =
+            git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, depth)
+                .is_ok_and(|r| r.is_success());
         if fetch_ok {
             let _ = git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
             true
@@ -807,6 +832,7 @@ pub(crate) fn clone_repo_to_workspace(
     git_cfg: &config::GitConfig,
     repo_path: &Path,
     mirror_path: &Path,
+    depth: u32,
 ) -> bool {
     // Remove directory if it exists but is not a git repo / worktree
     if repo_path.exists() && !repo_path.join(".git").exists() {
@@ -831,7 +857,7 @@ pub(crate) fn clone_repo_to_workspace(
 
     // Ensure the commit is present in the mirror, fetching it if needed
     if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
-        let _ = git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, 1);
+        let _ = git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, depth);
         let _ = git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
     }
 

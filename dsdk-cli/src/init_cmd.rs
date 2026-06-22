@@ -693,6 +693,7 @@ pub(crate) struct InitConfig<'a> {
     pub(crate) no_sudo: bool,
     pub(crate) symlink: bool,
     pub(crate) yes: bool,
+    pub(crate) depth: u32,
     pub(crate) _cert_validation: Option<&'a str>,
 }
 
@@ -1044,10 +1045,11 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     messages::verbose(&format!("Mirror: {}", sdk_config.mirror().display()));
 
     // Update mirror repositories
-    update_mirror_repos(&filtered_config);
+    update_mirror_repos(&filtered_config, config.depth);
 
     // Update workspace repositories
-    let any_failed = update_workspace_repos_with_result(&filtered_config, &workspace_path, true);
+    let any_failed =
+        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, config.depth);
 
     // Process copy_files after git repositories are cloned
     let mut copy_files_failed = false;

@@ -118,6 +118,14 @@ pub enum Commands {
         /// Skip all confirmation prompts
         #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
         yes: bool,
+        /// Fetch depth
+        #[arg(
+            long,
+            value_name = "N",
+            default_value = "0",
+            help = "Fetch depth, 0 indicates all history"
+        )]
+        depth: u32,
         /// Certificate validation mode for downloads (strict, relaxed, auto)
         #[arg(
             long,
@@ -140,6 +148,14 @@ pub enum Commands {
         /// Enable verbose output
         #[arg(short, long, help = "Show detailed progress information")]
         verbose: bool,
+        /// Fetch depth
+        #[arg(
+            long,
+            value_name = "N",
+            default_value = "0",
+            help = "Fetch depth, 0 indicates all history"
+        )]
+        depth: u32,
         /// Certificate validation mode for downloads (strict, relaxed, auto)
         #[arg(
             long,
@@ -592,6 +608,7 @@ mod tests {
                 no_sudo: _,
                 symlink: _,
                 yes: _,
+                depth: _,
                 cert_validation: _,
             }) => {
                 assert_eq!(target, &Some("my-target".to_string()));
