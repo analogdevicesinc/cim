@@ -11,8 +11,7 @@
 
 use crate::cli::{Cli, DockerCommand};
 use crate::init_cmd::{
-    compile_match_regex, create_filtered_sdk_config, get_latest_commit_for_branch,
-    get_latest_commit_for_branch_with_remote, is_branch_reference, list_target_versions,
+    compile_match_regex, create_filtered_sdk_config, list_target_versions,
     list_targets_from_source, setup_direnv, source_label,
 };
 use crate::version::{print_update_notice, spawn_version_check};
@@ -375,10 +374,10 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
 ///
 /// Supports environment variable expansion in mirror paths (e.g., $HOME, ${HOME})
 pub(crate) fn handle_update_command(
-    no_mirror: bool,
     match_pattern: Option<&str>,
     all: bool,
     verbose: bool,
+    depth: u32,
     _cert_validation: Option<&str>,
 ) {
     // Start background version check so it runs concurrently with the update
@@ -406,7 +405,7 @@ pub(crate) fn handle_update_command(
     };
 
     // Load and apply user config overrides if present
-    let user_config = match config::UserConfig::load() {
+    let _user_config = match config::UserConfig::load() {
         Ok(Some(user_config)) => {
             let override_count = user_config.apply_to_sdk_config(&mut sdk_config, verbose);
             if override_count > 0 && verbose {
@@ -478,52 +477,11 @@ pub(crate) fn handle_update_command(
     // Create filtered config based on match pattern
     let filtered_config = create_filtered_sdk_config(&sdk_config, &match_regex);
 
-    // Read workspace marker to get stored no_mirror preference
-    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
-    let workspace_no_mirror = if marker_path.exists() {
-        match fs::read_to_string(&marker_path) {
-            Ok(content) => serde_yaml::from_str::<WorkspaceMarker>(&content)
-                .ok()
-                .and_then(|m| m.no_mirror)
-                .unwrap_or(false),
-            Err(_) => false,
-        }
-    } else {
-        false
-    };
+    // Update mirror repositories in parallel
+    update_mirror_repos(&filtered_config, depth);
 
-    // Determine if we should skip mirror with precedence:
-    // CLI flag > workspace marker preference > user config > default (false)
-    let (skip_mirror, mirror_source) = if no_mirror {
-        (true, "CLI flag --no-mirror")
-    } else if workspace_no_mirror {
-        (true, "workspace preference")
-    } else if user_config
-        .as_ref()
-        .and_then(|uc| uc.no_mirror)
-        .unwrap_or(false)
-    {
-        (true, "user config")
-    } else {
-        (false, "default (using mirrors)")
-    };
-
-    if skip_mirror {
-        messages::info(&format!("Skipping mirror operations ({})", mirror_source));
-    } else {
-        messages::verbose(&format!("Using mirror operations ({})", mirror_source));
-    }
-
-    if skip_mirror {
-        // Update workspace repositories directly from remote URLs
-        update_workspace_repos(&filtered_config, &workspace_path, false, true);
-    } else {
-        // Update mirror repositories in parallel
-        update_mirror_repos(&filtered_config);
-
-        // Update workspace repositories (single-threaded to avoid conflicts)
-        update_workspace_repos(&filtered_config, &workspace_path, false, false);
-    }
+    // Update workspace repositories
+    update_workspace_repos(&filtered_config, &workspace_path, false, depth);
 
     // When --all is used, clear the stored match pattern from the workspace
     // marker so subsequent updates without --all still update everything.
@@ -559,7 +517,7 @@ pub(crate) enum MirrorOperationResult {
 }
 
 /// Update mirror repositories in parallel
-pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
+pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T, depth: u32) {
     // Create or update mirror directory
     if !sdk_config.mirror().exists() {
         if let Err(e) = std::fs::create_dir_all(sdk_config.mirror()) {
@@ -588,77 +546,71 @@ pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T) {
                 // Update remote URL in case it changed in the config
                 let _ = git_operations::remote_set_url(&repo_mirror_path, "origin", &git_cfg.url);
 
-                let fetch_result = git_operations::fetch_all_with_tags(&repo_mirror_path);
-
-                match fetch_result {
-                    Ok(result) if result.is_success() => {
-                        // If the commit is a branch, update the branch to latest commit
-                        if is_branch_reference(&repo_mirror_path, &git_cfg.commit) {
-                            // Get the latest commit hash for the remote branch
-                            if let Some(latest_commit) =
-                                git_operations::get_latest_commit_for_remote_branch(
-                                    &repo_mirror_path,
-                                    "origin",
-                                    &git_cfg.commit,
-                                )
-                            {
-                                // Update the local branch to point to the latest commit
-                                let update_result = git_operations::update_ref(
-                                    &repo_mirror_path,
-                                    &format!("refs/heads/{}", git_cfg.commit),
-                                    &latest_commit,
-                                );
-
-                                // Return success status of the update
-                                match update_result {
-                                    Ok(up_result) => {
-                                        if up_result.is_success() {
-                                            MirrorOperationResult::Updated
-                                        } else {
-                                            MirrorOperationResult::Failed
-                                        }
-                                    }
-                                    Err(_) => MirrorOperationResult::Failed,
-                                }
-                            } else {
-                                // Failed to get latest commit
-                                MirrorOperationResult::Failed
-                            }
-                        } else {
-                            // Non-branch commit, fetch completed successfully
-                            MirrorOperationResult::Updated
-                        }
+                (|| -> anyhow::Result<MirrorOperationResult> {
+                    let refs = git_operations::ls_remote(&git_cfg.url, true, true)?;
+                    let (fetch_refspec, update_ref_name, _) =
+                        git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+                    if !git_operations::fetch_ref(
+                        &repo_mirror_path,
+                        "origin",
+                        &fetch_refspec,
+                        depth,
+                    )?
+                    .is_success()
+                    {
+                        return Ok(MirrorOperationResult::Failed);
                     }
-                    Ok(_) => MirrorOperationResult::Failed,
-                    Err(_) => MirrorOperationResult::Failed,
-                }
+                    let ur = git_operations::update_ref(
+                        &repo_mirror_path,
+                        &update_ref_name,
+                        "FETCH_HEAD",
+                    )?;
+                    Ok(if ur.is_success() {
+                        MirrorOperationResult::Updated
+                    } else {
+                        MirrorOperationResult::Failed
+                    })
+                })()
+                .unwrap_or(MirrorOperationResult::Failed)
             } else {
-                // Clone new mirror
-                messages::progress(&git_cfg.name, "cloning new repository");
-                let spinner = messages::Spinner::start(&git_cfg.name, "cloning mirror…");
-                let clone_result = git_operations::clone_mirror(&git_cfg.url, &repo_mirror_path);
-                spinner.finish();
+                // init mirror repository
+                messages::progress(&git_cfg.name, "initializing new repository");
 
-                match clone_result {
-                    Ok(result) => {
-                        if result.is_success() {
-                            // Ensure all tags are fetched after initial clone
-                            match git_operations::fetch_tags(&repo_mirror_path, Some("origin")) {
-                                Ok(fetch_result) if fetch_result.is_success() => {
-                                    MirrorOperationResult::Cloned
-                                }
-                                _ => {
-                                    // Tag fetch failed, but clone succeeded - still report as cloned
-                                    // since the repository is functional even without all tags
-                                    MirrorOperationResult::Cloned
-                                }
-                            }
-                        } else {
-                            MirrorOperationResult::Failed
-                        }
+                (|| -> anyhow::Result<MirrorOperationResult> {
+                    std::fs::create_dir_all(&repo_mirror_path)?;
+                    if !git_operations::init_repo(&repo_mirror_path, true)?.is_success() {
+                        return Ok(MirrorOperationResult::Failed);
                     }
-                    Err(_) => MirrorOperationResult::Failed,
-                }
+                    if !git_operations::remote_add(&repo_mirror_path, "origin", &git_cfg.url)?
+                        .is_success()
+                    {
+                        return Ok(MirrorOperationResult::Failed);
+                    }
+                    let refs = git_operations::ls_remote(&git_cfg.url, true, true)?;
+                    let (fetch_refspec, update_ref_name, _) =
+                        git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+                    if !git_operations::fetch_ref(
+                        &repo_mirror_path,
+                        "origin",
+                        &fetch_refspec,
+                        depth,
+                    )?
+                    .is_success()
+                    {
+                        return Ok(MirrorOperationResult::Failed);
+                    }
+                    let ur = git_operations::update_ref(
+                        &repo_mirror_path,
+                        &update_ref_name,
+                        "FETCH_HEAD",
+                    )?;
+                    Ok(if ur.is_success() {
+                        MirrorOperationResult::Cloned
+                    } else {
+                        MirrorOperationResult::Failed
+                    })
+                })()
+                .unwrap_or(MirrorOperationResult::Failed)
             };
 
             // Print result immediately
@@ -682,7 +634,7 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
     sdk_config: &T,
     workspace_path: &Path,
     is_init: bool,
-    no_mirror: bool,
+    depth: u32,
 ) {
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
@@ -695,7 +647,7 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
         }
     };
 
-    let mirror_path = (!no_mirror).then(|| sdk_config.mirror().clone());
+    let mirror_path = sdk_config.mirror().clone();
 
     for tier in &tiers {
         let pool = ThreadPool::new(4);
@@ -706,13 +658,17 @@ pub(crate) fn update_workspace_repos<T: config::SdkConfigCore>(
             let mirror_path = mirror_path.clone();
 
             pool.execute(move || {
-                let mirror_path = mirror_path.as_deref();
                 let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
-                let success = if repo_workspace_path.join(".git").is_dir() {
-                    handle_existing_workspace_repo(&git_cfg, &repo_workspace_path, mirror_path)
+                let success = if repo_workspace_path.join(".git").exists() {
+                    handle_existing_workspace_repo(
+                        &git_cfg,
+                        &repo_workspace_path,
+                        &mirror_path,
+                        depth,
+                    )
                 } else {
-                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, mirror_path)
+                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path, depth)
                 };
 
                 // Print result immediately
@@ -731,7 +687,7 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
     sdk_config: &T,
     workspace_path: &Path,
     is_init: bool,
-    no_mirror: bool,
+    depth: u32,
 ) -> bool {
     let action = if is_init { "Initializing" } else { "Updating" };
     messages::status(&format!("\n{} workspace repositories...", action));
@@ -746,7 +702,7 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
 
     let any_failed = Arc::new(AtomicBool::new(false));
 
-    let mirror_path = (!no_mirror).then(|| sdk_config.mirror().clone());
+    let mirror_path = sdk_config.mirror().clone();
 
     for tier in &tiers {
         let pool = ThreadPool::new(4);
@@ -760,14 +716,15 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
             pool.execute(move || {
                 let repo_workspace_path = workspace_path.join(&git_cfg.name);
 
-                let success = if repo_workspace_path.join(".git").is_dir() {
+                let success = if repo_workspace_path.join(".git").exists() {
                     handle_existing_workspace_repo(
                         &git_cfg,
                         &repo_workspace_path,
-                        mirror_path.as_deref(),
+                        &mirror_path,
+                        depth,
                     )
                 } else {
-                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, mirror_path.as_deref())
+                    clone_repo_to_workspace(&git_cfg, &repo_workspace_path, &mirror_path, depth)
                 };
 
                 // Print result immediately and track failures
@@ -788,64 +745,32 @@ pub(crate) fn update_workspace_repos_with_result<T: config::SdkConfigCore>(
 pub(crate) fn handle_existing_workspace_repo(
     git_cfg: &config::GitConfig,
     repo_path: &Path,
-    mirror_path: Option<&Path>,
+    mirror_path: &Path,
+    depth: u32,
 ) -> bool {
     let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
     let (fetch_refspec, update_ref_name, sha) =
         git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
     let target = sha.unwrap_or_else(|| git_cfg.commit.clone());
 
-    // Track which remote was used to fetch so we can resolve "latest" against
-    // the right remote-tracking ref.  When a mirror is in use the workspace
-    // fetches from "mirror", so origin/* is stale and mirror/* is current.
-    let preferred_remote: Option<&str> = mirror_path.map(|_| "mirror");
+    let mirror_repo_path =
+        dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
-    let success = if let Some(mirror_path) = mirror_path {
-        let mirror_repo_path =
-            dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
-
-        let _ = git_operations::remote_set_url(repo_path, "origin", &git_cfg.url);
-        let _ = git_operations::remote_add(
-            repo_path,
-            "mirror",
-            &git_operations::path_to_file_url(&mirror_repo_path),
-        );
-
-        if mirror_repo_path.exists() {
-            if !git_operations::cat_file(&mirror_repo_path, &target) {
-                let fetch_ok =
-                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1))
-                        .is_ok_and(|r| r.is_success());
-                if fetch_ok {
-                    let _ = git_operations::update_ref(
-                        &mirror_repo_path,
-                        &update_ref_name,
-                        "FETCH_HEAD",
-                    );
-                }
-            }
-            // Local mirror: no depth limit — objects are on disk, no network cost,
-            // and shallow fetches would write a .git/shallow file that cuts history.
-            //
-            // Use a mapping refspec for branches so that git updates the
-            // refs/remotes/mirror/<branch> tracking ref in the workspace.
-            // Without this, the fetch only writes FETCH_HEAD and
-            // get_latest_commit_for_branch_with_remote("mirror") would find nothing.
-            let mirror_fetch_refspec =
-                if let Some(branch) = fetch_refspec.strip_prefix("refs/heads/") {
-                    format!("refs/heads/{}:refs/remotes/mirror/{}", branch, branch)
-                } else {
-                    fetch_refspec.clone()
-                };
-            git_operations::fetch_ref(repo_path, "mirror", &mirror_fetch_refspec, None)
-                .is_ok_and(|r| r.is_success())
+    // Fetch into the mirror; worktrees share the object store so no
+    // separate fetch into the workspace is needed.
+    let success = if !git_operations::cat_file(&mirror_repo_path, &target) {
+        let fetch_ok =
+            git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, depth)
+                .is_ok_and(|r| r.is_success());
+        if fetch_ok {
+            let _ = git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
+            true
         } else {
-            git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, Some(1))
-                .is_ok_and(|r| r.is_success())
+            messages::error(&format!("{} (fetch failed)", git_cfg.name));
+            false
         }
     } else {
-        git_operations::fetch_ref(repo_path, "origin", &fetch_refspec, Some(1))
-            .is_ok_and(|r| r.is_success())
+        true
     };
 
     if success {
@@ -853,73 +778,30 @@ pub(crate) fn handle_existing_workspace_repo(
         match dsdk_cli::git_manager::repo_has_pending_changes(repo_path) {
             Ok(false) => {
                 // Clean: safe to reset
-                // Check if the commit is a branch reference
-                if is_branch_reference(repo_path, &git_cfg.commit) {
-                    // For branches, get the latest commit and checkout that.
-                    // Pass the preferred remote so we read the freshly-fetched
-                    // tracking ref (mirror/*) rather than the stale origin/*.
-                    if let Some(latest_commit) = get_latest_commit_for_branch_with_remote(
-                        repo_path,
-                        &git_cfg.commit,
-                        preferred_remote,
-                    ) {
-                        let checkout_output = git_operations::checkout(repo_path, &latest_commit);
-                        match checkout_output {
-                            Ok(result) if result.is_success() => {
-                                messages::success(&format!(
-                                    "{} (updated {} to latest: {})",
-                                    git_cfg.name,
-                                    git_cfg.commit,
-                                    &latest_commit[..8]
-                                ));
-                                true
-                            }
-                            _ => {
-                                messages::error(&format!(
-                                    "{} (failed to checkout latest {})",
-                                    git_cfg.name, latest_commit
-                                ));
-                                false
-                            }
-                        }
-                    } else {
-                        // Fallback to original behavior if we can't get latest
-                        let checkout_result = git_operations::checkout(repo_path, &git_cfg.commit);
-                        match checkout_result {
-                            Ok(result) if result.is_success() => {
-                                messages::success(&format!(
-                                    "{} (updated to {})",
-                                    git_cfg.name, git_cfg.commit
-                                ));
-                                true
-                            }
-                            _ => {
-                                messages::error(&format!(
-                                    "{} (failed to checkout {})",
-                                    git_cfg.name, git_cfg.commit
-                                ));
-                                false
-                            }
-                        }
-                    }
-                } else {
-                    // For tags and specific commits, use the exact reference
-                    let checkout_result = git_operations::checkout(repo_path, &git_cfg.commit);
-                    match checkout_result {
-                        Ok(result) if result.is_success() => {
+                let checkout_output = git_operations::checkout(repo_path, &target);
+                match checkout_output {
+                    Ok(result) if result.is_success() => {
+                        if fetch_refspec.starts_with("refs/heads/") {
+                            messages::success(&format!(
+                                "{} (updated {} to latest: {})",
+                                git_cfg.name,
+                                git_cfg.commit,
+                                &target[..8]
+                            ));
+                        } else {
                             messages::success(&format!(
                                 "{} (pinned to {})",
                                 git_cfg.name, git_cfg.commit
                             ));
-                            true
                         }
-                        _ => {
-                            messages::error(&format!(
-                                "{} (failed to checkout {})",
-                                git_cfg.name, git_cfg.commit
-                            ));
-                            false
-                        }
+                        true
+                    }
+                    _ => {
+                        messages::error(&format!(
+                            "{} (failed to checkout {})",
+                            git_cfg.name, target
+                        ));
+                        false
                     }
                 }
             }
@@ -949,11 +831,11 @@ pub(crate) fn handle_existing_workspace_repo(
 pub(crate) fn clone_repo_to_workspace(
     git_cfg: &config::GitConfig,
     repo_path: &Path,
-    mirror_path: Option<&Path>,
+    mirror_path: &Path,
+    depth: u32,
 ) -> bool {
-    // Remove directory if it exists but is not a git repo (e.g., created by
-    // a parent repo clone in a previous tier)
-    if repo_path.exists() && !repo_path.join(".git").is_dir() {
+    // Remove directory if it exists but is not a git repo / worktree
+    if repo_path.exists() && !repo_path.join(".git").exists() {
         if let Err(e) = std::fs::remove_dir_all(repo_path) {
             messages::error(&format!(
                 "{} (failed to remove non-git directory: {})",
@@ -964,109 +846,27 @@ pub(crate) fn clone_repo_to_workspace(
     }
 
     messages::progress(&git_cfg.name, "cloning repository");
-    let spinner = messages::Spinner::start(&git_cfg.name, "cloning…");
 
-    if let Some(mirror_path) = mirror_path {
-        let mirror_repo_path =
-            dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
+    let mirror_repo_path =
+        dsdk_cli::git_manager::get_mirror_repo_path(mirror_path, &git_cfg.name, &git_cfg.url);
 
-        if mirror_repo_path.exists() {
-            // git clone --reference refuses shallow repositories; unshallow before cloning
-            if mirror_repo_path.join("shallow").exists() {
-                messages::progress(&git_cfg.name, "mirror is shallow, unshallowing");
-                let ok = git_operations::fetch_unshallow(&mirror_repo_path)
-                    .is_ok_and(|r| r.is_success());
-                if !ok {
-                    messages::error(&format!("{} (failed to unshallow mirror)", git_cfg.name));
-                    return false;
-                }
-            }
+    let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+    let (fetch_refspec, update_ref_name, sha) =
+        git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+    let target_sha = sha.unwrap_or_else(|| git_cfg.commit.clone());
 
-            spinner.set_action(&git_cfg.name, "resolving refs…");
-            let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
-            let (fetch_refspec, update_ref_name, sha) =
-                git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
-            let target_sha = sha.unwrap_or_else(|| git_cfg.commit.clone());
-
-            // Ensure the commit is present in the mirror, fetching it if needed
-            if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
-                spinner.set_action(&git_cfg.name, "fetching into mirror…");
-                let fetch_ok =
-                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1))
-                        .is_ok_and(|r| r.is_success());
-                if fetch_ok {
-                    let _ = git_operations::update_ref(
-                        &mirror_repo_path,
-                        &update_ref_name,
-                        "FETCH_HEAD",
-                    );
-                } else {
-                    spinner.finish();
-                    messages::error(&format!(
-                        "{} (commit {} not found in remote — check the commit hash in sdk.yml)",
-                        git_cfg.name, target_sha
-                    ));
-                    return false;
-                }
-            }
-
-            spinner.set_action(&git_cfg.name, "cloning from mirror…");
-            let mirror_url = git_operations::path_to_file_url(&mirror_repo_path);
-            let result =
-                git_operations::clone_repo(&mirror_url, repo_path, Some(&mirror_repo_path));
-            match result {
-                Ok(result) if result.is_success() => {
-                    // Set origin to upstream and add mirror remote
-                    let _ = git_operations::remote_set_url(repo_path, "origin", &git_cfg.url);
-                    let _ = git_operations::remote_add(
-                        repo_path,
-                        "mirror",
-                        &git_operations::path_to_file_url(&mirror_repo_path),
-                    );
-                    spinner.set_action(&git_cfg.name, "checking out…");
-                    let ok = checkout_commit(git_cfg, repo_path);
-                    spinner.finish();
-                    return ok;
-                }
-                Ok(result) => {
-                    spinner.finish();
-                    messages::error(&format!(
-                        "{} (clone failed: {})",
-                        git_cfg.name,
-                        result.stderr.trim()
-                    ));
-                    return false;
-                }
-                Err(e) => {
-                    spinner.finish();
-                    messages::error(&format!("{} (clone failed: {})", git_cfg.name, e));
-                    return false;
-                }
-            }
-        }
+    // Ensure the commit is present in the mirror, fetching it if needed
+    if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
+        let _ = git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, depth);
+        let _ = git_operations::update_ref(&mirror_repo_path, &update_ref_name, "FETCH_HEAD");
     }
 
-    // Direct clone (no mirror, or mirror path not yet on disk)
-    let result = git_operations::clone_repo(&git_cfg.url, repo_path, None);
+    // Use a worktree from the mirror instead of a redundant clone
+    let result = git_operations::worktree_add(&mirror_repo_path, repo_path, &target_sha);
     match result {
-        Ok(result) if result.is_success() => {
-            spinner.set_action(&git_cfg.name, "checking out…");
-            let ok = checkout_commit(git_cfg, repo_path);
-            spinner.finish();
-            ok
-        }
-        Ok(result) => {
-            spinner.finish();
-            messages::error(&format!(
-                "{} (clone failed: {})",
-                git_cfg.name,
-                result.stderr.trim()
-            ));
-            false
-        }
-        Err(e) => {
-            spinner.finish();
-            messages::error(&format!("{} (clone failed: {})", git_cfg.name, e));
+        Ok(result) if result.is_success() => checkout_commit(git_cfg, repo_path),
+        _ => {
+            messages::error(&format!("{} (worktree add failed)", git_cfg.name));
             false
         }
     }
@@ -1074,70 +874,33 @@ pub(crate) fn clone_repo_to_workspace(
 
 /// Checkout the specified commit for a repository
 pub(crate) fn checkout_commit(git_cfg: &config::GitConfig, repo_path: &Path) -> bool {
-    // Check if the commit is a branch reference
-    if is_branch_reference(repo_path, &git_cfg.commit) {
-        // For branches, get the latest commit and checkout that
-        if let Some(latest_commit) = get_latest_commit_for_branch(repo_path, &git_cfg.commit) {
-            let output = git_operations::checkout(repo_path, &latest_commit);
-
-            match output {
-                Ok(result) if result.is_success() => {
-                    messages::success(&format!(
-                        "{} (cloned and checked out {} to latest: {})",
-                        git_cfg.name,
-                        git_cfg.commit,
-                        &latest_commit[..8]
-                    ));
-                    true
-                }
-                _ => {
-                    messages::error(&format!(
-                        "{} (cloned, but failed to checkout latest {})",
-                        git_cfg.name, latest_commit
-                    ));
-                    false
-                }
-            }
-        } else {
-            // Fallback to original behavior
-            let output = git_operations::checkout(repo_path, &git_cfg.commit);
-
-            match output {
-                Ok(result) if result.is_success() => {
-                    messages::success(&format!(
-                        "{} (cloned and checked out to {})",
-                        git_cfg.name, git_cfg.commit
-                    ));
-                    true
-                }
-                _ => {
-                    messages::error(&format!(
-                        "{} (cloned, but failed to checkout to {})",
-                        git_cfg.name, git_cfg.commit
-                    ));
-                    false
-                }
-            }
-        }
-    } else {
-        // For tags and specific commits, use the exact reference
-        let output = git_operations::checkout(repo_path, &git_cfg.commit);
-
-        match output {
-            Ok(result) if result.is_success() => {
+    let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+    let (fetch_refspec, _, sha) = git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
+    let target = sha.unwrap_or_else(|| git_cfg.commit.clone());
+    let output = git_operations::checkout(repo_path, &target);
+    match output {
+        Ok(result) if result.is_success() => {
+            if fetch_refspec.starts_with("refs/heads/") {
+                messages::success(&format!(
+                    "{} (cloned and checked out {} to latest: {})",
+                    git_cfg.name,
+                    git_cfg.commit,
+                    &target[..8]
+                ));
+            } else {
                 messages::success(&format!(
                     "{} (cloned and pinned to {})",
                     git_cfg.name, git_cfg.commit
                 ));
-                true
             }
-            _ => {
-                messages::error(&format!(
-                    "{} (cloned, but failed to checkout to {})",
-                    git_cfg.name, git_cfg.commit
-                ));
-                false
-            }
+            true
+        }
+        _ => {
+            messages::error(&format!(
+                "{} (cloned, but failed to checkout to {})",
+                git_cfg.name, target
+            ));
+            false
         }
     }
 }

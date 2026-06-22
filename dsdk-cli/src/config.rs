@@ -932,10 +932,6 @@ pub struct UserConfig {
     #[serde(default)]
     pub alternate_sources: Option<Vec<AlternateSourceConfig>>,
 
-    /// Skip mirror operations (behaves as if --no-mirror flag is always specified)
-    #[serde(default)]
-    pub no_mirror: Option<bool>,
-
     /// Additional files to copy during initialization (merged with manifest)
     #[serde(default)]
     pub copy_files: Option<Vec<CopyFileConfig>>,
@@ -1097,23 +1093,6 @@ impl UserConfig {
 #
 # [[alternate_sources]]
 # url = "/home/user/experimental-manifests"
-
-# =============================================================================
-# Skip Mirror Operations
-# =============================================================================
-# Skip mirror operations and clone repositories directly from remote URLs.
-# Behaves as if --no-mirror flag is always specified.
-#
-# Default: false
-# Use cases:
-#   - Avoid local mirror overhead for single workspace use
-#   - Reduce disk space usage when mirror is not needed
-#   - Simplify workflow when always working with latest remote versions
-#   - CI/CD environments where mirror adds no value
-#
-# Examples:
-# no_mirror = true
-# no_mirror = false
 
 # =============================================================================
 # Additional Copy Files
@@ -1377,9 +1356,6 @@ impl UserConfig {
                 lines.push(format!("alternate_sources.{}.url={}", idx, alt.url));
             }
         }
-        if let Some(no_mirror) = self.no_mirror {
-            lines.push(format!("no_mirror={}", no_mirror));
-        }
         if let Some(ref files) = self.copy_files {
             for (idx, file) in files.iter().enumerate() {
                 lines.push(format!("copy_files.{}.source={}", idx, file.source));
@@ -1416,7 +1392,6 @@ impl UserConfig {
                 .map(|p| p.display().to_string()),
             "workspace_prefix" => self.workspace_prefix.clone(),
             "default_source" => self.default_source.clone(),
-            "no_mirror" => self.no_mirror.map(|b| b.to_string()),
             "shell" => self.shell.clone(),
             "shell_arg" => self.shell_arg.clone(),
             "documentation_dirs" => self.documentation_dirs.clone(),
@@ -1835,7 +1810,6 @@ build:
         assert!(config.mirror.is_none());
         assert!(config.default_workspace.is_none());
         assert!(config.default_source.is_none());
-        assert!(config.no_mirror.is_none());
         assert!(config.copy_files.is_none());
     }
 

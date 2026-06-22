@@ -69,7 +69,6 @@ fn main() {
             source,
             version,
             workspace,
-            no_mirror,
             force,
             r#match,
             verbose,
@@ -78,6 +77,7 @@ fn main() {
             no_sudo,
             symlink,
             yes,
+            depth,
             cert_validation,
         } => {
             // Validate that target is provided
@@ -95,7 +95,6 @@ fn main() {
                 source: source.clone(),
                 version: version.clone(),
                 workspace: workspace.clone(),
-                no_mirror: *no_mirror,
                 force: *force,
                 match_pattern: r#match.as_deref(),
                 verbose: *verbose,
@@ -104,6 +103,7 @@ fn main() {
                 no_sudo: *no_sudo,
                 symlink: *symlink,
                 yes: *yes,
+                depth: *depth,
                 _cert_validation: cert_validation.as_deref(),
             });
         }
@@ -111,17 +111,17 @@ fn main() {
             handle_foreach_command(command, r#match.as_deref());
         }
         Commands::Update {
-            no_mirror,
             r#match,
             all,
             verbose,
+            depth,
             cert_validation,
         } => {
             handle_update_command(
-                *no_mirror,
                 r#match.as_deref(),
                 *all,
                 *verbose,
+                *depth,
                 cert_validation.as_deref(),
             );
         }

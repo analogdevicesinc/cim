@@ -111,69 +111,27 @@ pub fn strip_unc_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
 // ---------------------------------------------------------------
 
 /// Clone repository to specified path
-pub fn clone_repo(url: &str, path: &Path, reference: Option<&Path>) -> Result<GitResult> {
-    let mut args = vec!["clone".to_string()];
-
-    if let Some(ref_path) = reference {
-        args.push("--reference".to_string());
-        args.push(ref_path.to_string_lossy().to_string());
+/// Works uniformly for branches (refs/heads/*), tags (refs/tags/*), commit SHAs, and HEAD.
+/// Uses init + remote add + fetch + checkout FETCH_HEAD.
+/// Depth 0 fetches all commits of the reference.
+pub fn clone_repo(url: &str, path: &Path, refspec: &str, depth: u32) -> Result<GitResult> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("Failed to create parent directory: {}", e))?;
     }
-
-    args.push(url.to_string());
-    args.push(path.to_string_lossy().to_string());
-
-    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    git_command(&args_str, None)
-}
-
-/// Convert a shallow repository to a full clone
-pub fn fetch_unshallow(repo_path: &Path) -> Result<GitResult> {
-    git_command(&["fetch", "--unshallow"], Some(repo_path))
-}
-
-/// Clone repository with shallow depth
-pub fn clone_repo_shallow(url: &str, path: &Path, depth: u32) -> Result<GitResult> {
-    let depth_str = depth.to_string();
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec!["clone", "--depth", &depth_str, url, &path_str];
-
-    git_command(&args, None)
-}
-
-/// Clone repository with single branch
-pub fn clone_repo_single_branch(url: &str, path: &Path, branch: &str) -> Result<GitResult> {
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec![
-        "clone",
-        "--single-branch",
-        "--branch",
-        branch,
-        url,
-        &path_str,
-    ];
-    git_command(&args, None)
-}
-
-/// Clone repository with shallow depth and single branch
-pub fn clone_repo_shallow_single_branch(
-    url: &str,
-    path: &Path,
-    branch: &str,
-    depth: u32,
-) -> Result<GitResult> {
-    let depth_str = depth.to_string();
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec![
-        "clone",
-        "--depth",
-        &depth_str,
-        "--single-branch",
-        "--branch",
-        branch,
-        url,
-        &path_str,
-    ];
-    git_command(&args, None)
+    let init_result = init_repo(path, false)?;
+    if !init_result.is_success() {
+        return Ok(init_result);
+    }
+    let remote_result = remote_add(path, "origin", url)?;
+    if !remote_result.is_success() {
+        return Ok(remote_result);
+    }
+    let fetch_result = fetch_ref(path, "origin", refspec, depth)?;
+    if !fetch_result.is_success() {
+        return Ok(fetch_result);
+    }
+    checkout(path, "FETCH_HEAD")
 }
 
 // ---------------------------------------------------------------
@@ -191,22 +149,16 @@ pub fn fetch_all(repo_path: &Path) -> Result<GitResult> {
     git_command(&["fetch", "--all"], Some(repo_path))
 }
 
-/// Fetch a specific refspec, optionally with a depth limit
-pub fn fetch_ref(
-    repo_path: &Path,
-    remote: &str,
-    refspec: &str,
-    depth: Option<u32>,
-) -> Result<GitResult> {
-    match depth {
-        Some(d) => {
-            let depth_str = d.to_string();
-            git_command(
-                &["fetch", remote, refspec, "--depth", &depth_str],
-                Some(repo_path),
-            )
-        }
-        None => git_command(&["fetch", remote, refspec], Some(repo_path)),
+/// Fetch a specific refspec, optionally with a depth limit.
+pub fn fetch_ref(repo_path: &Path, remote: &str, refspec: &str, depth: u32) -> Result<GitResult> {
+    if depth > 0 {
+        let depth_str = depth.to_string();
+        git_command(
+            &["fetch", remote, refspec, "--depth", &depth_str],
+            Some(repo_path),
+        )
+    } else {
+        git_command(&["fetch", remote, refspec], Some(repo_path))
     }
 }
 
@@ -251,6 +203,33 @@ pub fn fetch_tags(repo_path: &Path, remote: Option<&str>) -> Result<GitResult> {
 /// Checkout commit/branch/tag
 pub fn checkout(repo_path: &Path, commit_ref: &str) -> Result<GitResult> {
     git_command(&["checkout", commit_ref], Some(repo_path))
+}
+
+/// Add a git worktree at `worktree_path` from the repository at `repo_path`,
+/// checking out `commit_ref` in detached-HEAD mode.
+pub fn worktree_add(repo_path: &Path, worktree_path: &Path, commit_ref: &str) -> Result<GitResult> {
+    let wt = worktree_path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF-8 worktree path"))?;
+    git_command(
+        &["worktree", "add", "--detach", wt, commit_ref],
+        Some(repo_path),
+    )
+}
+
+/// Remove a previously added worktree.
+pub fn worktree_remove(repo_path: &Path, worktree_path: &Path) -> Result<GitResult> {
+    let wt = worktree_path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF-8 worktree path"))?;
+    git_command(&["worktree", "remove", "--force", wt], Some(repo_path))
+}
+
+/// Check whether `path` is a git worktree (has a `.git` *file* rather than
+/// a `.git` directory, pointing back to a parent repository).
+pub fn is_worktree(path: &Path) -> bool {
+    let dot_git = path.join(".git");
+    dot_git.is_file()
 }
 
 /// List remote references
@@ -330,95 +309,6 @@ pub fn list_local_branches(repo_path: &Path) -> Result<Vec<String>> {
         .collect();
 
     Ok(branches)
-}
-
-/// Check if reference is a branch
-pub fn is_branch_reference(repo_path: &Path, commit_ref: &str) -> bool {
-    // Check remote branch
-    let remote_ref = format!("refs/remotes/origin/{}", commit_ref);
-    if git_command(&["show-ref", "--verify", &remote_ref], Some(repo_path)).is_ok_and(|r| r.success)
-    {
-        return true;
-    }
-
-    // Check local branch
-    let local_ref = format!("refs/heads/{}", commit_ref);
-    git_command(&["show-ref", "--verify", &local_ref], Some(repo_path)).is_ok_and(|r| r.success)
-}
-
-/// Get latest commit hash for branch
-pub fn get_latest_commit_for_branch(repo_path: &Path, branch_name: &str) -> Option<String> {
-    get_latest_commit_for_branch_with_remote(repo_path, branch_name, None)
-}
-
-/// Get latest commit hash for branch, checking `preferred_remote` first.
-/// Pass `Some("mirror")` when the workspace fetched from a local mirror so that
-/// the freshly-updated `mirror/<branch>` tracking ref is used instead of the
-/// stale `origin/<branch>` ref (which is never fetched in the mirror path).
-pub fn get_latest_commit_for_branch_with_remote(
-    repo_path: &Path,
-    branch_name: &str,
-    preferred_remote: Option<&str>,
-) -> Option<String> {
-    // Try preferred remote first (e.g. "mirror/platform-sdk")
-    if let Some(remote) = preferred_remote {
-        let remote_branch = format!("{}/{}", remote, branch_name);
-        if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-            if result.success {
-                return Some(result.stdout.trim().to_string());
-            }
-        }
-    }
-
-    // Try origin/
-    let remote_branch = format!("origin/{}", branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    // Fallback to local branch
-    if let Ok(result) = git_command(&["rev-parse", branch_name], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    None
-}
-
-/// Get latest commit hash for remote branch after fetch (works in bare repos)
-pub fn get_latest_commit_for_remote_branch(
-    repo_path: &Path,
-    remote: &str,
-    branch_name: &str,
-) -> Option<String> {
-    // In bare repos after fetch, we can use origin/branch notation
-    let remote_branch = format!("{}/{}", remote, branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    // For mirror repos, branches are stored directly as refs/heads/{branch}
-    // Try refs/heads/{branch} directly (this works for mirror repos)
-    let heads_ref = format!("refs/heads/{}", branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &heads_ref], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    // Try just the branch name as a final fallback
-    if let Ok(result) = git_command(&["rev-parse", branch_name], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    None
 }
 
 // ---------------------------------------------------------------
@@ -528,19 +418,6 @@ pub fn create_branch_force(
 pub fn clone_bare(url: &str, path: &Path) -> Result<GitResult> {
     let path_str = path.to_string_lossy().to_string();
     let args = vec!["clone", "--bare", url, &path_str];
-    git_command(&args, None)
-}
-
-/// Clone repository as mirror (for mirroring)
-pub fn clone_mirror(url: &str, path: &Path) -> Result<GitResult> {
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| anyhow!("Failed to create parent directory: {}", e))?;
-    }
-
-    let path_str = path.to_string_lossy().to_string();
-    let args = vec!["clone", "--mirror", url, &path_str];
     git_command(&args, None)
 }
 

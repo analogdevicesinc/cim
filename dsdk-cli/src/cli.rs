@@ -85,9 +85,6 @@ pub enum Commands {
             help = "Directory where to create the workspace"
         )]
         workspace: Option<PathBuf>,
-        /// Skip mirror operations and clone directly from remote URLs
-        #[arg(long, help = "Skip mirror, clone directly from remote repos")]
-        no_mirror: bool,
         /// Force initialization by removing existing workspace directory
         #[arg(long, help = "Force workspace creation (removes existing")]
         force: bool,
@@ -121,6 +118,14 @@ pub enum Commands {
         /// Skip all confirmation prompts
         #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
         yes: bool,
+        /// Fetch depth
+        #[arg(
+            long,
+            value_name = "N",
+            default_value = "0",
+            help = "Fetch depth, 0 indicates all history"
+        )]
+        depth: u32,
         /// Certificate validation mode for downloads (strict, relaxed, auto)
         #[arg(
             long,
@@ -131,9 +136,6 @@ pub enum Commands {
     },
     /// Update all git repositories
     Update {
-        /// Skip mirror operations and clone directly from remote URLs
-        #[arg(long, help = "Skip mirror, only update workspace from remote URLs")]
-        no_mirror: bool,
         /// Only update repositories matching the given regex pattern
         #[arg(long, help = "Only update repositories matching this regex pattern")]
         r#match: Option<String>,
@@ -146,6 +148,14 @@ pub enum Commands {
         /// Enable verbose output
         #[arg(short, long, help = "Show detailed progress information")]
         verbose: bool,
+        /// Fetch depth
+        #[arg(
+            long,
+            value_name = "N",
+            default_value = "0",
+            help = "Fetch depth, 0 indicates all history"
+        )]
+        depth: u32,
         /// Certificate validation mode for downloads (strict, relaxed, auto)
         #[arg(
             long,
@@ -590,7 +600,6 @@ mod tests {
                 source,
                 version,
                 workspace: _,
-                no_mirror: _,
                 force: _,
                 r#match: _,
                 verbose: _,
@@ -599,6 +608,7 @@ mod tests {
                 no_sudo: _,
                 symlink: _,
                 yes: _,
+                depth: _,
                 cert_validation: _,
             }) => {
                 assert_eq!(target, &Some("my-target".to_string()));
