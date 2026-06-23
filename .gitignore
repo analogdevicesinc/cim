@@ -25,3 +25,4 @@ AGENTS.md
 .DS_Store
 Thumbs.db
 Dockerfile
+!.devcontainer/Dockerfile
