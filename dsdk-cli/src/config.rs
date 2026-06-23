@@ -684,6 +684,13 @@ fn default_python_profile() -> String {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SdkConfig {
+    /// DEPRECATED: machine-local mirror cache path. Prefer the `--mirror` flag
+    /// or the `mirror` key in `~/.config/cim/config.toml`. Honored for backward
+    /// compatibility (below `--mirror` and the user config in precedence), but
+    /// will be removed in a future release. Optional and defaulted so manifests
+    /// without the key still load.
+    #[serde(default)]
+    pub mirror: Option<PathBuf>,
     pub gits: Vec<GitConfig>,
     #[serde(default)]
     pub toolchains: Option<Vec<ToolchainConfig>>,
@@ -1013,10 +1020,12 @@ impl UserConfig {
 # Resolution order (highest priority first):
 #   1. --mirror <DIR>     command-line flag (init / update)
 #   2. mirror = ...       this config file
-#   3. $HOME/tmp/mirror   built-in default
+#   3. mirror: in sdk.yml  manifest key (DEPRECATED — will be removed)
+#   4. $HOME/tmp/mirror   built-in default
 #
-# Note: a `mirror:` key in sdk.yml is ignored. Configure the mirror here or
-# with --mirror instead.
+# Note: the `mirror:` key in sdk.yml is deprecated. It is still honored for
+# backward compatibility but ranks below this file and --mirror. Prefer setting
+# the mirror here or with --mirror.
 #
 # Use cases:
 #   - Store on faster SSD for better performance
@@ -1676,15 +1685,20 @@ gits:
     }
 
     #[test]
-    fn test_manifest_mirror_key_is_ignored() {
-        // A manifest carrying a `mirror:` key still parses; the key is dropped.
+    fn test_manifest_mirror_key_is_parsed() {
+        // A manifest carrying a `mirror:` key now parses into the field
+        // (deprecated, but honored for backward compatibility).
         let yaml = "mirror: /some/manifest/mirror\ngits: []\n";
         let dir = tempdir().unwrap();
         let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
         let mut file = File::create(&file_path).unwrap();
         file.write_all(yaml.as_bytes()).unwrap();
 
-        assert!(load_config(&file_path).is_ok());
+        let config = load_config(&file_path).unwrap();
+        assert_eq!(
+            config.mirror.as_deref(),
+            Some(std::path::Path::new("/some/manifest/mirror"))
+        );
     }
 
     #[test]

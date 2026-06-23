@@ -719,7 +719,7 @@ pub(crate) fn handle_copy_files_hash_command(
     }
 
     // Resolve mirror from user config / built-in default.
-    let mirror_path = resolve_mirror(None);
+    let mirror_path = resolve_mirror(None, sdk_config.mirror.as_deref());
 
     // Determine the base directory for resolving relative source paths in copy_files.
     // If config_source_dir is a remote URL, re-clone the repo to a fresh temp directory.
@@ -918,7 +918,7 @@ pub(crate) fn handle_toolchains_hash_command(
         return;
     }
 
-    let mirror_path = resolve_mirror(None);
+    let mirror_path = resolve_mirror(None, sdk_config.mirror.as_deref());
 
     // Filter toolchains to only those applicable to this host
     let host_info = dsdk_cli::toolchain_manager::detect_host_info();
@@ -1100,7 +1100,7 @@ pub(crate) fn handle_sync_files_hash_command(
     }
 
     // Expand mirror path
-    let mirror_path = resolve_mirror(None);
+    let mirror_path = resolve_mirror(None, sdk_config.mirror.as_deref());
 
     // Determine the base directory for resolving relative source paths in copy_files.
     // If config_source_dir is a remote URL, re-clone the repo to a fresh temp directory.

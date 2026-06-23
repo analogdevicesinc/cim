@@ -928,19 +928,48 @@ pub fn expand_manifest_vars_in_config(sdk_config: &mut config::SdkConfig) {
 ///
 /// 1. `cli_override` — the `--mirror` flag passed to `init` / `update`.
 /// 2. `mirror` in `~/.config/cim/config.toml` (the user config).
-/// 3. The built-in default, `config::default_mirror()` (`$HOME/tmp/mirror`).
+/// 3. `manifest_mirror` — the DEPRECATED `mirror:` key in `sdk.yml`. A one-time
+///    deprecation warning is printed when this layer is the one used.
+/// 4. The built-in default, `config::default_mirror()` (`$HOME/tmp/mirror`).
 ///
 /// Environment variables (e.g. `$HOME`) in the chosen value are expanded.
-pub fn resolve_mirror(cli_override: Option<&Path>) -> PathBuf {
+pub fn resolve_mirror(cli_override: Option<&Path>, manifest_mirror: Option<&Path>) -> PathBuf {
     let raw = if let Some(cli) = cli_override {
         cli.to_path_buf()
     } else if let Ok(Some(user_config)) = config::UserConfig::load() {
-        user_config.mirror.unwrap_or_else(config::default_mirror)
+        // User config wins over the manifest, mirroring pre-refactor behavior.
+        // If the user config exists but has no `mirror`, fall through to the
+        // manifest value, then the built-in default.
+        match user_config.mirror {
+            Some(m) => m,
+            None => manifest_mirror
+                .map(|m| {
+                    warn_manifest_mirror_deprecated();
+                    m.to_path_buf()
+                })
+                .unwrap_or_else(config::default_mirror),
+        }
+    } else if let Some(m) = manifest_mirror {
+        warn_manifest_mirror_deprecated();
+        m.to_path_buf()
     } else {
         config::default_mirror()
     };
 
     PathBuf::from(expand_env_vars(&raw.to_string_lossy()))
+}
+
+/// Emit the `sdk.yml` `mirror:` deprecation notice at most once per process.
+fn warn_manifest_mirror_deprecated() {
+    use std::sync::Once;
+    static WARN_ONCE: Once = Once::new();
+    WARN_ONCE.call_once(|| {
+        messages::info(
+            "Deprecation: the `mirror:` key in sdk.yml is deprecated and will be \
+             removed in a future release. Set the mirror via `--mirror` or the \
+             `mirror` key in ~/.config/cim/config.toml instead.",
+        );
+    });
 }
 
 /// Download a file from URL to a temporary location
@@ -1248,11 +1277,22 @@ mod tests {
         // A --mirror override containing an environment variable is expanded.
         std::env::set_var("TEST_MIRROR_VAR", "/tmp/test-mirror");
 
-        let resolved = resolve_mirror(Some(Path::new("$TEST_MIRROR_VAR/repos")));
+        let resolved = resolve_mirror(Some(Path::new("$TEST_MIRROR_VAR/repos")), None);
         assert_eq!(resolved, PathBuf::from("/tmp/test-mirror/repos"));
 
         // Cleanup
         std::env::remove_var("TEST_MIRROR_VAR");
+    }
+
+    #[test]
+    fn test_resolve_mirror_cli_override_beats_manifest() {
+        // The --mirror flag short-circuits before UserConfig::load() and wins
+        // over a manifest `mirror:` value.
+        let resolved = resolve_mirror(
+            Some(Path::new("/from/cli")),
+            Some(Path::new("/from/manifest")),
+        );
+        assert_eq!(resolved, PathBuf::from("/from/cli"));
     }
 
     #[test]

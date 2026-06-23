@@ -856,8 +856,8 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         }
     }
 
-    // Resolve the mirror directory: --mirror flag > user config > built-in default.
-    let mirror_path = resolve_mirror(config.mirror.as_deref());
+    // Resolve the mirror directory: --mirror flag > user config > manifest > built-in default.
+    let mirror_path = resolve_mirror(config.mirror.as_deref(), sdk_config.mirror.as_deref());
     messages::verbose(&format!("Mirror: {}", mirror_path.display()));
 
     // Expand environment variables in git repository URLs

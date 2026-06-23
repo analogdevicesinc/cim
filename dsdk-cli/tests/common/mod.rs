@@ -148,6 +148,7 @@ impl MockGitRepo {
 /// Create a minimal SDK configuration for testing
 pub fn create_minimal_sdk_config() -> SdkConfig {
     SdkConfig {
+        mirror: None,
         gits: vec![],
         toolchains: None,
         install: None,
@@ -169,6 +170,7 @@ pub fn create_minimal_sdk_config() -> SdkConfig {
 #[allow(dead_code)]
 pub fn create_basic_sdk_config(repo_url: &str) -> SdkConfig {
     SdkConfig {
+        mirror: None,
         gits: vec![GitConfig {
             name: "test-repo".to_string(),
             url: repo_url.to_string(),
@@ -197,6 +199,7 @@ pub fn create_basic_sdk_config(repo_url: &str) -> SdkConfig {
 /// Create an SDK configuration with multiple repositories and dependencies
 pub fn create_complex_sdk_config() -> SdkConfig {
     SdkConfig {
+        mirror: None,
         gits: vec![
             GitConfig {
                 name: "base-lib".to_string(),

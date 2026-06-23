@@ -29,7 +29,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
     };
 
     // Load SDK config with user config overrides applied
-    let _sdk_config = match load_config_with_user_overrides(&config_path, false) {
+    let sdk_config = match load_config_with_user_overrides(&config_path, false) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!(
@@ -81,7 +81,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                     *symlink,
                     profile.as_deref(),
                     &workspace_path,
-                    &resolve_mirror(None),
+                    &resolve_mirror(None, sdk_config.mirror.as_deref()),
                 ) {
                     messages::error(&format!("Failed to install Python packages: {}", e));
                     std::process::exit(1);
@@ -104,11 +104,11 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             // Create toolchain manager and install toolchains
             let toolchain_manager = toolchain_manager::ToolchainManager::new(
                 workspace_path.clone(),
-                resolve_mirror(None),
+                resolve_mirror(None, sdk_config.mirror.as_deref()),
             );
 
             if let Err(e) = toolchain_manager.install_toolchains(
-                _sdk_config.toolchains.as_ref(),
+                sdk_config.toolchains.as_ref(),
                 *force,
                 *symlink,
                 cert_validation.as_deref(),
@@ -122,15 +122,15 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             all,
             force,
         } => {
-            // Use _sdk_config that already has user overrides applied
+            // Use sdk_config that already has user overrides applied
             // Check if install section exists
-            if _sdk_config.install.is_none() || _sdk_config.install.as_ref().unwrap().is_empty() {
+            if sdk_config.install.is_none() || sdk_config.install.as_ref().unwrap().is_empty() {
                 messages::error("No install section found in sdk.yml");
                 messages::info("The install section defines components that can be installed.");
                 return;
             }
 
-            let install_configs = _sdk_config.install.as_ref().unwrap();
+            let install_configs = sdk_config.install.as_ref().unwrap();
 
             // Handle --list flag
             if *list {

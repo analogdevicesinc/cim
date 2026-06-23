@@ -742,6 +742,7 @@ mod tests {
         fs::write(docs_path.join("index.rst"), index_content).unwrap();
 
         let sdk_config = SdkConfig {
+            mirror: None,
             gits: vec![crate::config::GitConfig {
                 name: "test-repo".to_string(),
                 url: "https://example.com/test-repo.git".to_string(),

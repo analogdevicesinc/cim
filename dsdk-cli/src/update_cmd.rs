@@ -425,8 +425,8 @@ pub(crate) fn handle_update_command(
         }
     };
 
-    // Resolve the mirror directory: --mirror flag > user config > built-in default.
-    let mirror_path = resolve_mirror(mirror_override.as_deref());
+    // Resolve the mirror directory: --mirror flag > user config > manifest > built-in default.
+    let mirror_path = resolve_mirror(mirror_override.as_deref(), sdk_config.mirror.as_deref());
     messages::verbose(&format!("Mirror: {}", mirror_path.display()));
 
     // Determine match pattern: --all disables filtering, CLI --match takes
