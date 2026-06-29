@@ -1,0 +1,19 @@
+{
+    "name": "cim (Rust)",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "remoteUser": "vscode",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "vadimcn.vscode-lldb"
+            ],
+            "settings": {
+                "rust-analyzer.check.command": "clippy"
+            }
+        }
+    }
+}
