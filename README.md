@@ -47,6 +47,52 @@ sudo apt install -y git make tar unzip python3 python3-pip python3-venv curl wge
 - [Rust 1.56+](https://rust-lang.org/tools/install/) (to build from source)
 - Docker (for containerized development)
 
+### Install Script (Linux and macOS)
+
+The quickest way to install the latest release:
+
+```bash
+curl -fsSL https://analogdevicesinc.github.io/cim/install.sh | sh
+```
+
+The script detects your OS and architecture (including musl systems such as Alpine), downloads the matching release, installs the `cim` binary, and tells you whether `~/.local/bin` is on your `PATH`.
+
+It always installs the latest release, and takes no arguments — the environment variables below are the only way to configure it. To install some other version, download it from the [releases page](https://github.com/analogdevicesinc/cim/releases) as described under [Download Precompiled Binary](#download-precompiled-binary).
+
+#### Upgrading
+
+Once `cim` is installed, upgrade it with the CLI itself — no need for the install script:
+
+```bash
+cim utils update
+```
+
+It resolves the `cim` on your `PATH`, compares it against the latest GitHub release, and reports `cim is already up to date` without downloading anything when there is nothing newer. Otherwise it replaces that binary in place, keeping the previous one alongside it as `cim.old` so a failed replacement can be rolled back. Self-update is unavailable on Windows; download a new release manually there.
+
+If your `cim` lives somewhere you cannot write, such as `/usr/local/bin` on a machine where you are not root, run the upgrade with `sudo` so the process replacing the binary has permission to that directory:
+
+```bash
+sudo cim utils update
+```
+
+Re-running the install script also upgrades an existing install, and `CIM_FORCE=1` makes it reinstall even when the version already matches — useful for repairing a damaged binary:
+
+```bash
+curl -fsSL https://analogdevicesinc.github.io/cim/install.sh | CIM_FORCE=1 sh
+```
+
+#### System-wide install
+
+By default the binary lands in `~/.local/bin` (a per-user location). To install to a different directory, set `CIM_BIN_DIR`. For a system-wide install into `/usr/local/bin` — available to every user and usually already on `PATH` — run the pipe under `sudo` so the shell writing the file has permission to that directory:
+
+```bash
+curl -fsSL https://analogdevicesinc.github.io/cim/install.sh | sudo CIM_BIN_DIR=/usr/local/bin sh
+```
+
+Note that `sudo` here elevates `sh` (the process that writes the binary), not `curl`. Keep `CIM_BIN_DIR=...` after `sudo` so the variable reaches the elevated shell.
+
+`CIM_BIN_DIR` takes precedence over the `PATH` lookup described above: set it and the script installs exactly there, regardless of where a `cim` may already exist. If that new copy ends up shadowed by another `cim` earlier in your `PATH`, the script warns you and names the file that will actually run.
+
 ### Download Precompiled Binary
 
 `cim` is distributed as a single binary (no installer needed). Download the [latest release](https://github.com/analogdevicesinc/cim/releases) for your platform from GitHub and place it in a directory on your PATH.
