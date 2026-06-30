@@ -47,6 +47,20 @@ sudo apt install -y git make tar unzip python3 python3-pip python3-venv curl wge
 - [Rust 1.56+](https://rust-lang.org/tools/install/) (to build from source)
 - Docker (for containerized development)
 
+### Install Script (Linux and macOS)
+
+The quickest way to install the latest release:
+
+```bash
+curl -fsSL https://analogdevicesinc.github.io/cim/install.sh | sh
+```
+
+The script detects your OS and architecture, downloads the matching release, installs the `cim` binary, and tells you whether `~/.local/bin` is on your `PATH`. To install a specific version instead of the latest, set `CIM_VERSION`:
+
+```bash
+curl -fsSL https://analogdevicesinc.github.io/cim/install.sh | CIM_VERSION=v1.1.12 sh
+```
+
 ### Download Precompiled Binary
 
 `cim` is distributed as a single binary (no installer needed). Download the [latest release](https://github.com/analogdevicesinc/cim/releases) for your platform from GitHub and place it in a directory on your PATH.
