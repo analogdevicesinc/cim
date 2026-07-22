@@ -20,7 +20,7 @@ test:
 # Run clippy linter
 clippy:
 	@echo "Running clippy..."
-	cargo clippy
+	cargo clippy --all-targets --all-features -- -D warnings
 
 # Format code
 fmt:

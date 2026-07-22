@@ -73,7 +73,7 @@ pub fn get_mirror_repo_path(mirror_path: &Path, name: &str, url: &str) -> PathBu
         // URL mismatch: need a separate mirror directory
         messages::verbose(&format!(
             "Mirror '{}' exists with a different URL ({}), using separate mirror for {}",
-            name, &existing_url, url
+            name, existing_url, url
         ));
     }
 
