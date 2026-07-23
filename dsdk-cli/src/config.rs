@@ -204,6 +204,16 @@ where
     })
 }
 
+/// Custom deserializer that treats a missing or null `gits:` key as an empty
+/// list, matching the old serde_yaml behavior noyalib no longer provides for
+/// free.
+fn deserialize_gits<'de, D>(deserializer: D) -> Result<Vec<GitConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<Vec<GitConfig>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// Structured form of `makefile_include` when both explicit include directives
 /// and an auto-discovery exclusion list are needed.
 ///
@@ -699,6 +709,7 @@ fn default_python_profile() -> String {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SdkConfig {
+    #[serde(default, deserialize_with = "deserialize_gits")]
     pub gits: Vec<GitConfig>,
     #[serde(default)]
     pub toolchains: Option<Vec<ToolchainConfig>>,

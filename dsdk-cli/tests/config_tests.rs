@@ -215,6 +215,31 @@ fn test_load_config_without_mirror_field() {
 }
 
 #[test]
+fn test_load_config_with_null_gits() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("null-gits.yml");
+
+    // A bare `gits:` key with nothing after it (YAML null) must be treated
+    // as an empty list, not a type-mismatch error.
+    fixture.write_file("null-gits.yml", "gits:\n");
+
+    let loaded = load_config(&config_path).expect("Config with null gits should load");
+    assert_eq!(loaded.gits.len(), 0);
+}
+
+#[test]
+fn test_load_config_with_missing_gits() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("missing-gits.yml");
+
+    // Omitting the `gits:` key entirely should also default to an empty list.
+    fixture.write_file("missing-gits.yml", "mirror: /tmp/mirror");
+
+    let loaded = load_config(&config_path).expect("Config without gits key should load");
+    assert_eq!(loaded.gits.len(), 0);
+}
+
+#[test]
 fn test_load_core_config() {
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
