@@ -534,8 +534,12 @@ fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::er
         venv_path.display()
     ));
 
-    // Prefer uv when available: `uv venv` creates a standard venv and does not
-    // need a separate ensurepip/upgrade step (uv manages installs itself).
+    // Prefer uv when available: `uv venv` creates a standard venv. By default
+    // uv does not install pip into it (it expects callers to use `uv pip
+    // install`), but the generated Makefiles activate the venv and invoke
+    // plain `pip install`, so pip must be physically present. `--seed`
+    // installs pip/setuptools/wheel, matching the ensurepip step the stdlib
+    // fallback below performs.
     //
     // Pin the interpreter to the same `python3` the stdlib fallback would use.
     // Without `--python`, uv applies its own discovery and may prefer a
@@ -544,7 +548,7 @@ fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::er
     // "identical with or without uv" guarantee.
     if uv_available() {
         let mut command = std::process::Command::new("uv");
-        command.arg("venv");
+        command.arg("venv").arg("--seed");
         if let Some(python) = resolve_system_python() {
             command.arg("--python").arg(python);
         }
