@@ -101,6 +101,20 @@ pub enum Commands {
         /// Only initialize repositories matching the given regex pattern
         #[arg(long, help = "Only clone repositories matching this regex pattern")]
         r#match: Option<String>,
+        /// Only initialize repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Only clone repositories in these comma-separated group(s)"
+        )]
+        include_group: Option<String>,
+        /// Exclude repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Exclude repositories in these comma-separated group(s)"
+        )]
+        exclude_group: Option<String>,
         /// Enable verbose output
         #[arg(long, help = "Show detailed progress information")]
         verbose: bool,
@@ -151,6 +165,20 @@ pub enum Commands {
         /// Only update repositories matching the given regex pattern
         #[arg(long, help = "Only update repositories matching this regex pattern")]
         r#match: Option<String>,
+        /// Only update repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Only update repositories in these comma-separated group(s)"
+        )]
+        include_group: Option<String>,
+        /// Exclude repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Exclude repositories in these comma-separated group(s)"
+        )]
+        exclude_group: Option<String>,
         /// Update all repositories, ignoring the stored match pattern
         #[arg(
             long,
@@ -175,6 +203,20 @@ pub enum Commands {
         /// Only execute command in repositories matching the given regex pattern
         #[arg(long, help = "Only run command in repositories matching this regex")]
         r#match: Option<String>,
+        /// Only execute command in repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Only run command in repositories in these comma-separated group(s)"
+        )]
+        include_group: Option<String>,
+        /// Exclude repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Exclude repositories in these comma-separated group(s)"
+        )]
+        exclude_group: Option<String>,
     },
     /// Generate a Makefile from configuration
     Makefile {
@@ -608,6 +650,8 @@ mod tests {
                 mirror: _,
                 force: _,
                 r#match: _,
+                include_group: _,
+                exclude_group: _,
                 verbose: _,
                 install: _,
                 full: _,

@@ -13,7 +13,7 @@ use crate::cli::{Cli, DockerCommand};
 use crate::init_cmd::{
     compile_match_regex, create_filtered_sdk_config, get_latest_commit_for_branch,
     get_latest_commit_for_branch_with_remote, is_branch_reference, list_target_versions,
-    list_targets_from_source, setup_direnv, source_label,
+    list_targets_from_source, parse_group_list, setup_direnv, source_label,
 };
 use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
@@ -374,10 +374,13 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
 /// Update all git repositories in the mirror and workspace
 ///
 /// Supports environment variable expansion in mirror paths (e.g., $HOME, ${HOME})
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_update_command(
     no_mirror: bool,
     mirror_override: Option<PathBuf>,
     match_pattern: Option<&str>,
+    include_group: Option<&str>,
+    exclude_group: Option<&str>,
     all: bool,
     verbose: bool,
     _cert_validation: Option<&str>,
@@ -475,8 +478,46 @@ pub(crate) fn handle_update_command(
         None
     };
 
-    // Create filtered config based on match pattern
-    let filtered_config = create_filtered_sdk_config(&sdk_config, &match_regex);
+    // Determine group selection: --all disables filtering, CLI flags take
+    // precedence over the stored workspace marker selection.
+    let (effective_include_groups, effective_exclude_groups): (Option<String>, Option<String>) =
+        if all {
+            (None, None)
+        } else if include_group.is_some() || exclude_group.is_some() {
+            (
+                include_group.map(|s| s.to_string()),
+                exclude_group.map(|s| s.to_string()),
+            )
+        } else {
+            let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
+            if marker_path.exists() {
+                match fs::read_to_string(&marker_path) {
+                    Ok(content) => {
+                        let marker = noyalib::from_str::<WorkspaceMarker>(&content).ok();
+                        (
+                            marker.as_ref().and_then(|m| m.include_groups.clone()),
+                            marker.as_ref().and_then(|m| m.exclude_groups.clone()),
+                        )
+                    }
+                    Err(_) => (None, None),
+                }
+            } else {
+                (None, None)
+            }
+        };
+
+    let include_groups = effective_include_groups
+        .as_deref()
+        .map(parse_group_list)
+        .unwrap_or_default();
+    let exclude_groups = effective_exclude_groups
+        .as_deref()
+        .map(parse_group_list)
+        .unwrap_or_default();
+
+    // Create filtered config based on match pattern and group selection
+    let filtered_config =
+        create_filtered_sdk_config(&sdk_config, &match_regex, &include_groups, &exclude_groups);
 
     // Read workspace marker to get stored no_mirror preference
     let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
@@ -528,10 +569,18 @@ pub(crate) fn handle_update_command(
     // When --all is used, clear the stored match pattern from the workspace
     // marker so subsequent updates without --all still update everything.
     if all {
-        use dsdk_cli::workspace::update_workspace_marker_match_pattern;
+        use dsdk_cli::workspace::{
+            update_workspace_marker_groups, update_workspace_marker_match_pattern,
+        };
         if let Err(e) = update_workspace_marker_match_pattern(&workspace_path, None) {
             messages::info(&format!(
                 "Note: failed to clear match pattern from workspace marker: {}",
+                e
+            ));
+        }
+        if let Err(e) = update_workspace_marker_groups(&workspace_path, None, None) {
+            messages::info(&format!(
+                "Note: failed to clear group filter from workspace marker: {}",
                 e
             ));
         }

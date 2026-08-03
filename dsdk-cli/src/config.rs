@@ -373,6 +373,12 @@ pub struct GitConfig {
         deserialize_with = "deserialize_string_or_vec"
     )]
     pub python_deps: Option<Vec<String>>,
+    /// Optional group name(s) this repository belongs to. Used by
+    /// `cim init`/`cim update` `--include-group`/`--exclude-group` filtering.
+    /// Accepts a single string or a list. A repository with no `group:` set
+    /// implicitly belongs to the "default" group.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub group: Option<Vec<String>>,
 }
 
 /// Configuration for installing a component/tool in the workspace.

@@ -229,7 +229,12 @@ pub(crate) fn handle_add_command(name: &str, url: &str, commit: &str) {
 }
 
 /// Execute a command in each git repository workspace
-pub(crate) fn handle_foreach_command(command: &str, match_pattern: Option<&str>) {
+pub(crate) fn handle_foreach_command(
+    command: &str,
+    match_pattern: Option<&str>,
+    include_group: Option<&str>,
+    exclude_group: Option<&str>,
+) {
     let (workspace_path, config_path) = match require_workspace_config() {
         Ok(paths) => paths,
         Err(e) => {
@@ -269,8 +274,12 @@ pub(crate) fn handle_foreach_command(command: &str, match_pattern: Option<&str>)
         None
     };
 
-    // Create filtered config based on match pattern
-    let filtered_config = create_filtered_sdk_config(&sdk_config, &match_regex);
+    let include_groups = include_group.map(parse_group_list).unwrap_or_default();
+    let exclude_groups = exclude_group.map(parse_group_list).unwrap_or_default();
+
+    // Create filtered config based on match pattern and group selection
+    let filtered_config =
+        create_filtered_sdk_config(&sdk_config, &match_regex, &include_groups, &exclude_groups);
 
     messages::status(&format!(
         "Executing '{}' in each repository workspace...\n",
@@ -699,6 +708,8 @@ pub(crate) struct InitConfig<'a> {
     pub(crate) mirror: Option<PathBuf>,
     pub(crate) force: bool,
     pub(crate) match_pattern: Option<&'a str>,
+    pub(crate) include_group: Option<&'a str>,
+    pub(crate) exclude_group: Option<&'a str>,
     pub(crate) verbose: bool,
     pub(crate) install: bool,
     pub(crate) full: bool,
@@ -898,6 +909,16 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         None
     };
 
+    // Parse group include/exclude selections, if provided
+    let include_groups = config
+        .include_group
+        .map(parse_group_list)
+        .unwrap_or_default();
+    let exclude_groups = config
+        .exclude_group
+        .map(parse_group_list)
+        .unwrap_or_default();
+
     // Determine workspace path (default: $HOME/{prefix}{target-name} or user config)
     let workspace_path = config.workspace.unwrap_or_else(|| {
         if let Some(ref uc) = user_config {
@@ -1030,6 +1051,8 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             None
         },
         match_pattern: config.match_pattern,
+        include_group: config.include_group,
+        exclude_group: config.exclude_group,
     }) {
         messages::error(&format!("Error creating workspace marker: {}", e));
         return;
@@ -1046,7 +1069,8 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     }
 
     // Create filtered config based on match pattern
-    let filtered_config = create_filtered_sdk_config(&sdk_config, &match_regex);
+    let filtered_config =
+        create_filtered_sdk_config(&sdk_config, &match_regex, &include_groups, &exclude_groups);
 
     // Show workspace status (similar to update command)
     messages::verbose(&format!("Workspace: {}", workspace_path.display()));
@@ -1399,12 +1423,79 @@ pub(crate) fn filter_git_configs(
     }
 }
 
+/// Name of the implicit group a repository belongs to when it has no
+/// explicit `group:` entries set in sdk.yml.
+pub(crate) const DEFAULT_GROUP: &str = "default";
+
+/// Split a comma-separated `--include-group`/`--exclude-group` value into a
+/// trimmed, non-empty list of group names.
+pub(crate) fn parse_group_list(pattern: &str) -> Vec<String> {
+    pattern
+        .split(',')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .map(|p| p.to_string())
+        .collect()
+}
+
+/// Filter git configurations by group membership.
+///
+/// A repository with no `group:` set implicitly belongs to the "default"
+/// group. When `include` is non-empty, only repositories whose group set
+/// intersects `include` are kept. Repositories whose group set intersects
+/// `exclude` are then dropped. Both lists empty is a no-op.
+pub(crate) fn filter_git_configs_by_group(
+    gits: &[config::GitConfig],
+    include: &[String],
+    exclude: &[String],
+) -> Vec<config::GitConfig> {
+    if include.is_empty() && exclude.is_empty() {
+        return gits.to_vec();
+    }
+
+    fn groups_of(git_cfg: &config::GitConfig) -> Vec<&str> {
+        match &git_cfg.group {
+            Some(groups) if !groups.is_empty() => groups.iter().map(|g| g.as_str()).collect(),
+            _ => vec![DEFAULT_GROUP],
+        }
+    }
+
+    let filtered: Vec<_> = gits
+        .iter()
+        .filter(|git_cfg| {
+            let groups = groups_of(git_cfg);
+            let included =
+                include.is_empty() || groups.iter().any(|g| include.iter().any(|i| i == g));
+            let excluded = groups.iter().any(|g| exclude.iter().any(|e| e == g));
+            included && !excluded
+        })
+        .cloned()
+        .collect();
+
+    if filtered.len() != gits.len() {
+        messages::status(&format!(
+            "Filtered {} repositories out of {} total by group:",
+            filtered.len(),
+            gits.len()
+        ));
+        for git_cfg in &filtered {
+            messages::status(&format!("  - {}", git_cfg.name));
+        }
+    }
+
+    filtered
+}
+
 /// Create a filtered SDK config for operations
 pub(crate) fn create_filtered_sdk_config<T: config::SdkConfigCore>(
     sdk_config: &T,
     pattern_regex: &Option<Regex>,
+    include_groups: &[String],
+    exclude_groups: &[String],
 ) -> FilteredSdkConfig {
-    let filtered_gits = filter_git_configs(sdk_config.gits(), pattern_regex);
+    let group_filtered_gits =
+        filter_git_configs_by_group(sdk_config.gits(), include_groups, exclude_groups);
+    let filtered_gits = filter_git_configs(&group_filtered_gits, pattern_regex);
     FilteredSdkConfig {
         gits: filtered_gits,
         makefile_include: sdk_config.makefile_include().cloned(),

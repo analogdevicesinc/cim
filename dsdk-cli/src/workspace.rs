@@ -120,6 +120,14 @@ pub struct WorkspaceMarker {
     /// Regex pattern used to filter repositories during init (--match option)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_pattern: Option<String>,
+    /// Comma-separated group names to include, used to filter repositories
+    /// during init (--include-group option)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_groups: Option<String>,
+    /// Comma-separated group names to exclude, used to filter repositories
+    /// during init (--exclude-group option)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_groups: Option<String>,
 }
 
 /// Find the workspace root by walking up directories looking for .workspace marker
@@ -151,6 +159,8 @@ pub struct CreateWorkspaceMarkerParams<'a> {
     pub skip_mirror: bool,
     pub source_url: Option<&'a str>,
     pub match_pattern: Option<&'a str>,
+    pub include_group: Option<&'a str>,
+    pub exclude_group: Option<&'a str>,
 }
 
 /// Create workspace marker file
@@ -216,6 +226,8 @@ pub fn create_workspace_marker(
         no_mirror: if params.skip_mirror { Some(true) } else { None },
         config_source_dir,
         match_pattern: params.match_pattern.map(|s| s.to_string()),
+        include_groups: params.include_group.map(|s| s.to_string()),
+        exclude_groups: params.exclude_group.map(|s| s.to_string()),
     };
 
     fs::write(&marker_path, noyalib::to_string(&marker)?)?;
@@ -236,6 +248,23 @@ pub fn update_workspace_marker_match_pattern(
     let content = fs::read_to_string(&marker_path)?;
     let mut marker: WorkspaceMarker = noyalib::from_str(&content)?;
     marker.match_pattern = match_pattern.map(|s| s.to_string());
+    fs::write(&marker_path, noyalib::to_string(&marker)?)?;
+    Ok(())
+}
+
+/// Update the include_groups/exclude_groups fields in an existing workspace
+/// marker file. Pass `None` for either argument to clear that stored
+/// selection.
+pub fn update_workspace_marker_groups(
+    workspace_path: &Path,
+    include_groups: Option<&str>,
+    exclude_groups: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
+    let content = fs::read_to_string(&marker_path)?;
+    let mut marker: WorkspaceMarker = noyalib::from_str(&content)?;
+    marker.include_groups = include_groups.map(|s| s.to_string());
+    marker.exclude_groups = exclude_groups.map(|s| s.to_string());
     fs::write(&marker_path, noyalib::to_string(&marker)?)?;
     Ok(())
 }
@@ -1181,6 +1210,8 @@ mod tests {
             no_mirror: Some(true),
             config_source_dir: Some("/path/to/source".to_string()),
             match_pattern: None,
+            include_groups: None,
+            exclude_groups: None,
         };
 
         let serialized = noyalib::to_string(&marker).expect("Failed to serialize marker");
@@ -1224,6 +1255,8 @@ mod tests {
             skip_mirror: false,
             source_url: None,
             match_pattern: None,
+            include_group: None,
+            exclude_group: None,
         });
         assert!(result.is_ok());
 
