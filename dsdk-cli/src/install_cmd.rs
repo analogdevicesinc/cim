@@ -43,18 +43,9 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
 
     match install_command {
         InstallCommand::OsDeps { yes, no_sudo } => {
-            // Look for os-dependencies.yml file in workspace (copied via copy_files)
-            let os_deps_path = workspace_path.join(OS_DEPS_FILE);
-            if os_deps_path.exists() {
-                match config::load_os_dependencies(&os_deps_path) {
-                    Ok(os_deps) => {
-                        install_prerequisites(&os_deps, *yes, *no_sudo);
-                    }
-                    Err(e) => {
-                        messages::error(&format!("Failed to load os-dependencies.yml: {}", e));
-                    }
-                }
-            } else {
+            // Process every os-dependencies.yml-family file in the workspace:
+            // the primary target's own file, plus one per extends: ancestor.
+            if !install_os_deps_from_workspace(&workspace_path, *yes, *no_sudo) {
                 messages::error("os-dependencies.yml not found in workspace.");
                 messages::error("This file is copied automatically during 'cim init'.");
             }
@@ -65,15 +56,18 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             profile,
             list_profiles,
         } => {
-            // Look for python-dependencies.yml file in workspace (copied via copy_files)
-            let python_deps_path = workspace_path.join(PYTHON_DEPS_FILE);
+            let python_deps_files =
+                dsdk_cli::workspace::discover_dependency_files(&workspace_path, PYTHON_DEPS_FILE);
 
             // Show available profiles if user requested the list
             if *list_profiles {
-                if python_deps_path.exists() {
-                    list_available_profiles(&python_deps_path);
-                } else {
+                if python_deps_files.is_empty() {
                     messages::error("python-dependencies.yml not found in workspace.");
+                } else {
+                    for path in &python_deps_files {
+                        messages::status(&format!("--- {} ---", path.display()));
+                        list_available_profiles(path);
+                    }
                 }
                 return;
             }
@@ -95,25 +89,26 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                 }
             }
 
-            // Shared workspace venv from python-dependencies.yml profiles (docs,
-            // lint, and other workspace-wide cim tooling).
-            if python_deps_path.exists() {
-                // Resolve mirror from user config / built-in default.
-                if let Err(e) = install_python_packages_from_file(
-                    &python_deps_path,
-                    *force,
-                    *symlink,
-                    profile.as_deref(),
-                    &workspace_path,
-                    &resolve_mirror(None),
-                ) {
+            // Shared workspace venv from every python-dependencies.yml-family
+            // file (docs, lint, and other workspace-wide cim tooling).
+            match install_pip_from_workspace(
+                &workspace_path,
+                *force,
+                *symlink,
+                profile.as_deref(),
+                &resolve_mirror(None),
+            ) {
+                Ok(true) => {}
+                Ok(false) if !sdk_config.gits.iter().any(|g| g.python_deps.is_some()) => {
+                    // Nothing to do from either source: report the missing profiles file.
+                    messages::error("python-dependencies.yml not found in workspace.");
+                    messages::error("This file is copied automatically during 'cim init'.");
+                }
+                Ok(false) => {}
+                Err(e) => {
                     messages::error(&format!("Failed to install Python packages: {}", e));
                     std::process::exit(1);
                 }
-            } else if !sdk_config.gits.iter().any(|g| g.python_deps.is_some()) {
-                // Nothing to do from either source: report the missing profiles file.
-                messages::error("python-dependencies.yml not found in workspace.");
-                messages::error("This file is copied automatically during 'cim init'.");
             }
         }
         InstallCommand::Toolchains {
@@ -1145,6 +1140,77 @@ fn non_interactive_flag(command: &str) -> Option<&'static str> {
 }
 
 /// Install prerequisites based on OS dependencies configuration
+/// Install OS dependencies from every `os-dependencies.yml`-family file
+/// found in the workspace: the primary target's own file, plus one for
+/// every `extends:` ancestor that contributed one (`<target>-os-dependencies.yml`,
+/// copied in verbatim by `cim init`; see `workspace::discover_dependency_files`).
+///
+/// These files are not merged/overlay-able -- each is installed from in
+/// full, independently. Running the underlying package manager command more
+/// than once (e.g. `brew install`/`apt install` for both the primary and an
+/// inherited file) is expected and harmless.
+///
+/// Returns `true` if at least one file was found and processed.
+pub(crate) fn install_os_deps_from_workspace(
+    workspace_path: &Path,
+    skip_prompt: bool,
+    no_sudo: bool,
+) -> bool {
+    let files = dsdk_cli::workspace::discover_dependency_files(workspace_path, OS_DEPS_FILE);
+    if files.is_empty() {
+        return false;
+    }
+
+    for path in &files {
+        messages::status(&format!(
+            "Installing OS dependencies from {}",
+            path.display()
+        ));
+        match config::load_os_dependencies(path) {
+            Ok(os_deps) => install_prerequisites(&os_deps, skip_prompt, no_sudo),
+            Err(e) => messages::error(&format!("Failed to load {}: {}", path.display(), e)),
+        }
+    }
+    true
+}
+
+/// Install Python packages from every `python-dependencies.yml`-family file
+/// found in the workspace, mirroring `install_os_deps_from_workspace`
+/// above: the primary target's own file plus one per `extends:` ancestor
+/// that contributed one. Each file's own `default:` profile is used unless
+/// `profile_override` is given, in which case it's applied to every file
+/// (falling back to that file's own profiles only if present in it).
+///
+/// Returns `true` if at least one file was found and processed.
+pub(crate) fn install_pip_from_workspace(
+    workspace_path: &Path,
+    force: bool,
+    symlink: bool,
+    profile_override: Option<&str>,
+    mirror_path: &Path,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let files = dsdk_cli::workspace::discover_dependency_files(workspace_path, PYTHON_DEPS_FILE);
+    if files.is_empty() {
+        return Ok(false);
+    }
+
+    for path in &files {
+        messages::status(&format!(
+            "Installing Python packages from {}",
+            path.display()
+        ));
+        install_python_packages_from_file(
+            path,
+            force,
+            symlink,
+            profile_override,
+            workspace_path,
+            mirror_path,
+        )?;
+    }
+    Ok(true)
+}
+
 pub(crate) fn install_prerequisites(
     os_deps: &config::OsDependencies,
     skip_prompt: bool,

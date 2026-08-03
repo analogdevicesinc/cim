@@ -27,6 +27,48 @@ pub const PYTHON_DEPS_FILE: &str = "python-dependencies.yml";
 /// Filename for the workspace marker
 pub const WORKSPACE_MARKER_FILE: &str = ".workspace";
 
+/// Discover every file in `workspace_path` matching `base_filename` -- either
+/// the bare name (the primary target's own file, e.g. `os-dependencies.yml`)
+/// or an ancestor-prefixed name (`<target>-os-dependencies.yml`, copied in
+/// verbatim from an `extends:` ancestor by `cim init`, mirroring how
+/// `<target>-sdk.yml` is named).
+///
+/// Returns paths sorted with the bare-named file first (if present), then
+/// ancestor files in alphabetical order, for deterministic output. Since
+/// os-dependencies.yml/python-dependencies.yml are not overlay-able (each
+/// level's file is applied independently, in full -- see the module docs in
+/// `overlay.rs`), callers are expected to process every returned file
+/// separately; running the same underlying install command more than once
+/// (e.g. `brew install`/`apt install`/`pip install`) is expected and fine.
+pub fn discover_dependency_files(workspace_path: &Path, base_filename: &str) -> Vec<PathBuf> {
+    let bare_path = workspace_path.join(base_filename);
+    let mut ancestor_paths: Vec<PathBuf> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(workspace_path) {
+        let suffix = format!("-{}", base_filename);
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name != base_filename && name.ends_with(&suffix) {
+                ancestor_paths.push(path);
+            }
+        }
+    }
+    ancestor_paths.sort();
+
+    let mut result = Vec::with_capacity(ancestor_paths.len() + 1);
+    if bare_path.exists() {
+        result.push(bare_path);
+    }
+    result.extend(ancestor_paths);
+    result
+}
+
 /// Get the user's home directory path.
 ///
 /// Tries `HOME` first (Unix/macOS), falls back to `USERPROFILE` (Windows).
@@ -1252,6 +1294,60 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let workspace_path = temp_dir.path().to_path_buf();
         (temp_dir, workspace_path)
+    }
+
+    #[test]
+    fn test_discover_dependency_files_none_present() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        assert!(discover_dependency_files(&workspace_path, OS_DEPS_FILE).is_empty());
+    }
+
+    #[test]
+    fn test_discover_dependency_files_bare_only() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        fs::write(workspace_path.join(OS_DEPS_FILE), "linux: {}\n").unwrap();
+
+        let found = discover_dependency_files(&workspace_path, OS_DEPS_FILE);
+        assert_eq!(found, vec![workspace_path.join(OS_DEPS_FILE)]);
+    }
+
+    #[test]
+    fn test_discover_dependency_files_bare_and_ancestor() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        fs::write(workspace_path.join(OS_DEPS_FILE), "linux: {}\n").unwrap();
+        fs::write(
+            workspace_path.join("example-os-dependencies.yml"),
+            "linux: {}\n",
+        )
+        .unwrap();
+        // Unrelated file that happens to end with a similar suffix should
+        // not be picked up.
+        fs::write(workspace_path.join("not-related.yml"), "linux: {}\n").unwrap();
+
+        let found = discover_dependency_files(&workspace_path, OS_DEPS_FILE);
+        assert_eq!(
+            found,
+            vec![
+                workspace_path.join(OS_DEPS_FILE),
+                workspace_path.join("example-os-dependencies.yml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_discover_dependency_files_ancestor_only_no_bare() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        fs::write(
+            workspace_path.join("platform-sdk-python-dependencies.yml"),
+            "profiles: {}\ndefault: docs\n",
+        )
+        .unwrap();
+
+        let found = discover_dependency_files(&workspace_path, PYTHON_DEPS_FILE);
+        assert_eq!(
+            found,
+            vec![workspace_path.join("platform-sdk-python-dependencies.yml")]
+        );
     }
 
     #[test]

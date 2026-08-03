@@ -11,8 +11,7 @@
 
 use crate::cli::DocsCommand;
 use crate::install_cmd::{
-    ensure_docs_dependencies, install_git_python_deps, install_prerequisites,
-    install_python_packages_from_file, is_container_environment,
+    ensure_docs_dependencies, install_git_python_deps, is_container_environment,
 };
 use crate::makefile::generate_makefile_content;
 use crate::update_cmd::{update_mirror_repos, update_workspace_repos_with_result};
@@ -548,6 +547,37 @@ pub(crate) fn resolve_local_copy_file_sources(
     }
 }
 
+/// Find `os-dependencies.yml`/`python-dependencies.yml` sitting next to a
+/// single level's own sdk.yml (at `config_path`), returning `TargetFilePair`
+/// entries for whichever of the two exist, named the same way sdk.yml is:
+/// bare for the primary target, `<target>-<file>` for an ancestor. These
+/// files are not overlay-able -- each level's own file (if any) is simply
+/// copied in as-is; `cim install os-deps`/`cim install pip` process every
+/// discovered file independently (see `workspace::discover_dependency_files`).
+fn discover_sibling_dep_files(
+    config_path: &Path,
+    target: &str,
+    is_primary: bool,
+) -> Vec<TargetFilePair> {
+    let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut pairs = Vec::new();
+    for base_filename in [OS_DEPS_FILE, PYTHON_DEPS_FILE] {
+        let source_path = dir.join(base_filename);
+        if source_path.exists() {
+            let dest_name = if is_primary {
+                base_filename.to_string()
+            } else {
+                format!("{}-{}", target, base_filename)
+            };
+            pairs.push(TargetFilePair {
+                dest_name,
+                source_path,
+            });
+        }
+    }
+    pairs
+}
+
 /// One target's sdk.yml that must be copied into the workspace, along with
 /// the destination filename it should get there. The primary
 /// (originally-requested) target always keeps the bare `sdk.yml` name;
@@ -634,12 +664,14 @@ fn resolve_extends_chain_from_source_inner(
     }
 
     let Some(extends) = derived.extends.clone() else {
+        let mut files_to_copy = vec![TargetFilePair {
+            dest_name: sdk_dest_name,
+            source_path: config_path.to_path_buf(),
+        }];
+        files_to_copy.extend(discover_sibling_dep_files(config_path, target, is_primary));
         return Ok(ExtendsResolution {
             merged: derived,
-            files_to_copy: vec![TargetFilePair {
-                dest_name: sdk_dest_name,
-                source_path: config_path.to_path_buf(),
-            }],
+            files_to_copy,
         });
     };
 
@@ -702,6 +734,7 @@ fn resolve_extends_chain_from_source_inner(
         dest_name: sdk_dest_name,
         source_path: config_path.to_path_buf(),
     }];
+    files_to_copy.extend(discover_sibling_dep_files(config_path, target, is_primary));
     files_to_copy.extend(base_resolution.files_to_copy);
 
     let merged = overlay::apply_overlay(base_resolution.merged, derived, &overlay_config)
@@ -720,30 +753,13 @@ pub(crate) fn install_os_deps_if_available(
     skip_prompt: bool,
     no_sudo: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if os-dependencies.yml exists
-    let os_deps_path = workspace_path.join(OS_DEPS_FILE);
-    if !os_deps_path.exists() {
+    // Processes every os-dependencies.yml-family file in the workspace: the
+    // primary target's own file, plus one per extends: ancestor.
+    if !crate::install_cmd::install_os_deps_from_workspace(workspace_path, skip_prompt, no_sudo) {
         messages::status(
             "No os-dependencies.yml found in workspace, skipping OS dependencies installation",
         );
-        return Ok(());
     }
-
-    // Load OS dependencies
-    let os_deps = match config::load_os_dependencies(&os_deps_path) {
-        Ok(deps) => deps,
-        Err(e) => {
-            messages::info(&format!(
-                "Skipping OS dependencies installation: Failed to load os-dependencies.yml: {}",
-                e
-            ));
-            return Ok(()); // Non-fatal, continue with next steps
-        }
-    };
-
-    // Call install_prerequisites which will display package list and prompt for confirmation
-    // unless skip_prompt is true (from --yes flag)
-    install_prerequisites(&os_deps, skip_prompt, no_sudo);
 
     Ok(())
 }
@@ -832,56 +848,28 @@ pub(crate) fn install_pip_packages_if_available(
         }
     }
 
-    // Check if python-dependencies.yml exists
-    let python_deps_path = workspace_path.join(PYTHON_DEPS_FILE);
-    if !python_deps_path.exists() {
-        messages::status(
-            "No python-dependencies.yml found in workspace, skipping pip installation",
-        );
-        return Ok(());
-    }
-
-    // Load Python dependencies to check if there are packages to install
-    let python_deps = match config::load_python_dependencies(&python_deps_path) {
-        Ok(deps) => deps,
-        Err(e) => {
-            messages::info(&format!(
-                "Skipping pip installation: Failed to load python-dependencies.yml: {}",
-                e
-            ));
-            return Ok(()); // Non-fatal, continue with next steps
-        }
-    };
-
-    // Check if the default profile has any packages
-    let has_packages = python_deps
-        .profiles
-        .get(&python_deps.default)
-        .map(|profile| !profile.packages.is_empty())
-        .unwrap_or(false);
-
-    if !has_packages {
-        messages::status(&format!(
-            "No Python packages in default profile '{}', skipping pip installation",
-            python_deps.default
-        ));
-        return Ok(());
-    }
-
+    // Install Python packages from every python-dependencies.yml-family
+    // file in the workspace: the primary target's own file, plus one per
+    // extends: ancestor. Each file's own default profile is used.
     messages::status("");
-    messages::status("Installing Python packages...");
-
-    // Install Python packages using the default profile
-    install_python_packages_from_file(
-        &python_deps_path,
-        false,   // force = false
-        symlink, // symlink = from parameter
-        None,    // profile = None (use default)
+    match crate::install_cmd::install_pip_from_workspace(
         workspace_path,
+        false, // force = false
+        symlink,
+        None, // profile = None (use each file's own default)
         mirror_path,
-    )?;
+    ) {
+        Ok(true) => {
+            messages::success("Python packages installation completed");
+        }
+        Ok(false) => {
+            messages::status(
+                "No python-dependencies.yml found in workspace, skipping pip installation",
+            );
+        }
+        Err(e) => return Err(e),
+    }
 
-    messages::success("Python packages installation completed");
     Ok(())
 }
 
@@ -2540,6 +2528,51 @@ gits:
             "resolved source {} should point at base-sdk's own extra.mk",
             resolved_source.display()
         );
+    }
+
+    #[test]
+    fn test_resolve_extends_chain_tracks_os_and_python_deps_files_per_level() {
+        let (_temp_dir, root) = create_test_workspace();
+
+        // base-sdk has its own os-dependencies.yml and python-dependencies.yml
+        write_target(&root, "base-sdk", "gits: []\n", None);
+        fs::write(
+            root.join("targets").join("base-sdk").join(OS_DEPS_FILE),
+            "linux: {}\n",
+        )
+        .expect("Failed to write base-sdk os-dependencies.yml");
+        fs::write(
+            root.join("targets").join("base-sdk").join(PYTHON_DEPS_FILE),
+            "profiles: {}\ndefault: docs\n",
+        )
+        .expect("Failed to write base-sdk python-dependencies.yml");
+
+        // drone-target has only its own os-dependencies.yml (no python-deps)
+        write_target(&root, "drone-target", "gits: []\nextends: base-sdk\n", None);
+        fs::write(
+            root.join("targets").join("drone-target").join(OS_DEPS_FILE),
+            "linux: {}\n",
+        )
+        .expect("Failed to write drone-target os-dependencies.yml");
+
+        let config_path = resolve_target_config("drone-target", &root).expect("should resolve");
+        let sources = vec![root.to_string_lossy().to_string()];
+        let resolution = resolve_extends_chain_from_source(&config_path, "drone-target", &sources)
+            .expect("should resolve extends chain");
+
+        let dest_names: Vec<&str> = resolution
+            .files_to_copy
+            .iter()
+            .map(|f| f.dest_name.as_str())
+            .collect();
+
+        // Primary's own os-dependencies.yml keeps the bare name.
+        assert!(dest_names.contains(&"os-dependencies.yml"));
+        // Primary has no python-dependencies.yml of its own.
+        assert!(!dest_names.contains(&"python-dependencies.yml"));
+        // Ancestor's files get the <target>-<file> prefix.
+        assert!(dest_names.contains(&"base-sdk-os-dependencies.yml"));
+        assert!(dest_names.contains(&"base-sdk-python-dependencies.yml"));
     }
 
     #[test]
