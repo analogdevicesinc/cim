@@ -240,13 +240,16 @@ Initialize workspace from target.
 
 ```bash
 cim init --target NAME [--workspace PATH] [--version VERSION]
-          [--match REGEX] [--install] [--full] [--symlink] [--no-mirror]
+          [--match REGEX] [--include-group NAMES] [--exclude-group NAMES]
+          [--install] [--full] [--symlink] [--no-mirror]
 ```
 
 - `--install`: Install toolchains and pip packages after init
 - `--full`: Complete setup including OS dependencies (requires sudo)
 - `--symlink`: Install to mirror with symlinks in workspace
 - `--match REGEX`: Only clone repos matching pattern
+- `--include-group NAMES`: Only clone repos belonging to these comma-separated group(s)
+- `--exclude-group NAMES`: Skip repos belonging to these comma-separated group(s)
 - `--no-mirror`: Disable mirroring for this workspace
 
 #### update
@@ -255,12 +258,15 @@ Update git repos in workspace. By default, if the workspace was created
 with `--match`, only the matched repositories are updated.
 
 ```bash
-cim update [--match REGEX] [--all] [--no-mirror]
+cim update [--match REGEX] [--include-group NAMES] [--exclude-group NAMES]
+           [--all] [--no-mirror]
 ```
 
 - `--all`: Update all repositories, ignoring any stored match filter
   from init. Clears the stored filter so subsequent updates also cover
   all repositories.
+- `--include-group NAMES` / `--exclude-group NAMES`: same group filtering
+  as `init` (see [Repository Groups](#repository-groups)).
 
 #### makefile
 
@@ -332,9 +338,35 @@ generation, or other domain-specific build operations.
 Run command in each repo.
 
 ```bash
-cim foreach "COMMAND" [--match REGEX]
+cim foreach "COMMAND" [--match REGEX] [--include-group NAMES] [--exclude-group NAMES]
 # Example: cim foreach "git status"
 ```
+
+#### Repository Groups
+
+Each entry in `gits:` can declare one or more `group:` names:
+
+```yaml
+gits:
+  - name: docs-site
+    url: https://github.com/example/docs-site.git
+    commit: main
+    group: docs   # or a list: group: [docs, optional]
+```
+
+A repository with no `group:` set implicitly belongs to the `default`
+group. `--include-group`/`--exclude-group` (accepted by `init`, `update`,
+and `foreach`) take comma-separated group names and filter which
+repositories are cloned, updated, or targeted:
+
+```bash
+cim init -t my-sdk --include-group docs
+cim init -t my-sdk --exclude-group docs,optional
+```
+
+`--match` (regex on repository name) and `--include-group`/
+`--exclude-group` can be combined; a repository must satisfy both to be
+included.
 
 #### add
 
@@ -921,6 +953,106 @@ profiles:
 # Default profile to use when none specified
 default: docs
 ```
+
+### Composing Manifests: `extends:` and `overlay:`
+
+A target's `sdk.yml` can declare `extends: <base-target>` to build on top
+of another target instead of duplicating its whole manifest. This is
+useful when several targets share most of their `gits:`/`toolchains:`/
+`install:`/`copy_files:` content and only differ in a few places.
+
+A derived target's `sdk.yml` carries two distinct kinds of content:
+
+- **New entries** unique to this target: added directly to the normal
+  `gits:`/`toolchains:`/`install:`/`copy_files:`/`variables:` lists/maps,
+  exactly as in a target with no `extends:` at all. Scalar sections
+  (`build`/`test`/`clean`/`flash`/`envsetup`/`build_folder`/`direnv`/
+  `phases`) are plain whole-value overrides of the base's value.
+  `makefile_include:` is the one exception — it's merged additively (see
+  below), not overridden.
+- **`overlay:`** (a key on the same `sdk.yml`): `remove:`/`modify:`
+  operations against content *inherited* from the base. There is no
+  `add:` here — anything new goes directly in the sections above instead.
+
+```yaml
+# sdk.yml
+extends: example        # shorthand form
+# extends: example@v2.0 # shorthand with a pinned version (branch/tag)
+# extends:               # structured form, for a base target that lives
+#   target: example      # in a different manifest source than this one
+#   version: v2.0
+#   source: https://github.com/org/other-manifests
+
+gits:
+  - name: hello-world    # brand new repo, not present in "example"
+    url: https://github.com/octocat/Hello-World.git
+    commit: master
+
+overlay:
+  gits:
+    modify:
+      - name: git-sandbox  # inherited from "example"; only override build:
+        build: |
+          @echo "Custom build message"
+
+  toolchains:
+    remove:
+      - sh.rustup.rs        # drop a toolchain inherited from "example"
+
+  variables:
+    set:
+      GREETING: "Hello!"    # add/override a variable
+    remove:
+      - SOME_INHERITED_VAR
+```
+
+Merge order per list section is always fixed: **remove** (against the
+base only) → **combine** (base-after-removal plus this target's own new
+`sdk.yml` entries — a name/dest collision here is a hard error) →
+**modify** (against the combined result). `remove:`/`modify:` entries
+that don't exist, and `sdk.yml` entries that collide with an inherited
+name, are hard errors rather than silent no-ops.
+
+`makefile_include:` is merged additively rather than treated as a
+whole-value override: the base's `files:`/`exclude:` come first,
+followed by the derived target's own entries, with exact duplicates
+skipped. This matters for a shared base target extended by several
+independent derived targets — e.g. a low-level `platform-sdk` target
+extended by multiple teams' own targets — since each derived target can
+contribute its own `-include` directives and auto-discovery exclusions
+without having to know about or copy forward whatever the base (or any
+other derived target) already set.
+
+`os-dependencies.yml`/`python-dependencies.yml` are also per-level:
+each level of the `extends:` chain can have its own copy (not merged,
+just copied and processed independently), so `cim install os-deps`/
+`cim install pip` install packages from every level found in the
+workspace.
+
+`cim init` never flattens an `extends:` chain to disk — every level's
+original files are copied into the workspace verbatim so they stay
+independently recognizable and re-editable. The originally-requested
+target keeps the bare `sdk.yml`/`os-dependencies.yml`/
+`python-dependencies.yml` names at the workspace root; each ancestor's
+own files are copied into a `.cim/target-overlays/` subfolder (nested
+under the same `.cim/` directory already used for per-git Python venvs)
+with a `<target>-` prefix (e.g. `.cim/target-overlays/example-sdk.yml`,
+`.cim/target-overlays/example-os-dependencies.yml`), keeping the
+workspace root uncluttered:
+
+```bash
+ls -a $HOME/dsdk-overlay-example
+# sdk.yml                     <- overlay-example's own manifest (extends: example,
+#                                including its own overlay: remove/modify diff)
+# os-dependencies.yml         <- overlay-example's own OS package list
+# .cim/target-overlays/
+#   example-sdk.yml            <- example's original manifest, copied verbatim
+#   example-os-dependencies.yml <- example's own OS package list, copied verbatim
+```
+
+See [`targets/overlay-example`](https://github.com/joabech/cim-manifests/tree/main/targets/overlay-example)
+in the public manifests repository for a complete, working example that
+extends `targets/example`.
 
 ---
 

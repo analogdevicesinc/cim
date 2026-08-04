@@ -15,10 +15,12 @@
 # Supports all commands and options:
 #   - list-targets: --source (-s), --target (-t)
 #   - init: --target (-t), --source (-s), --version (-v), --workspace (-w),
-#           --no-mirror, --mirror, --force, --match, --verbose, --install, --full,
-#           --symlink, --yes (-y), --cert-validation, --no-includes
-#   - update: --no-mirror, --mirror, --match, --all, --verbose (-v), --cert-validation
-#   - foreach: command, --match
+#           --no-mirror, --mirror, --force, --match, --include-group,
+#           --exclude-group, --verbose, --install, --full, --symlink,
+#           --yes (-y), --cert-validation, --no-includes
+#   - update: --no-mirror, --mirror, --match, --include-group, --exclude-group,
+#             --all, --verbose (-v), --cert-validation
+#   - foreach: command, --match, --include-group, --exclude-group
 #   - makefile: --no-dividers, --no-includes
 #   - add: --name (-n), --url (-u), --commit
 #   - install os-deps: --yes (-y), --no-sudo
@@ -58,6 +60,19 @@ _cim_completions() {
     # Function to complete directory paths
     _complete_dir_path() {
         COMPREPLY=( $(compgen -d "${cur}") )
+    }
+
+    # Function to complete group names from gits:/group: entries in sdk.yml,
+    # always offering "default" (the implicit group for entries with no
+    # group: set) as well.
+    _complete_groups() {
+        local groups="default"
+        if [ -f "sdk.yml" ]; then
+            local from_file
+            from_file=$(grep "group:" sdk.yml 2>/dev/null | sed -E 's/.*group:[[:space:]]*//; s/[][,"'"'"']*//g')
+            groups="${groups} ${from_file}"
+        fi
+        COMPREPLY=( $(compgen -W "${groups}" -- "${cur}") )
     }
 
     # Function to complete config files (*.yml, *.yaml)
@@ -166,6 +181,10 @@ _cim_completions() {
                     COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
                     return 0
                     ;;
+                --include-group|--exclude-group)
+                    _complete_groups
+                    return 0
+                    ;;
                 --cert-validation)
                     COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
                     return 0
@@ -180,7 +199,7 @@ _cim_completions() {
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --mirror --force --match --install --full --symlink --yes -y --verbose --cert-validation --no-includes --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --mirror --force --match --include-group --exclude-group --install --full --symlink --yes -y --verbose --cert-validation --no-includes --help" -- "${cur}") )
                     return 0
                     ;;
             esac
@@ -193,12 +212,16 @@ _cim_completions() {
                     COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
                     return 0
                     ;;
+                --include-group|--exclude-group)
+                    _complete_groups
+                    return 0
+                    ;;
                 --cert-validation)
                     COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--no-mirror --mirror --match --all --verbose -v --cert-validation --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--no-mirror --mirror --match --include-group --exclude-group --all --verbose -v --cert-validation --help" -- "${cur}") )
                     return 0
                     ;;
             esac
@@ -211,13 +234,17 @@ _cim_completions() {
                     COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
                     return 0
                     ;;
+                --include-group|--exclude-group)
+                    _complete_groups
+                    return 0
+                    ;;
                 *)
                     # Complete common commands for foreach
                     if [ $COMP_CWORD -eq 2 ]; then
                         local common_commands="\"git status\" \"git pull\" \"git log\" \"git diff\" \"make clean\" ls pwd"
-                        COMPREPLY=( $(compgen -W "${common_commands} --match --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "${common_commands} --match --include-group --exclude-group --help" -- "${cur}") )
                     else
-                        COMPREPLY=( $(compgen -W "--match --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--match --include-group --exclude-group --help" -- "${cur}") )
                     fi
                     return 0
                     ;;
