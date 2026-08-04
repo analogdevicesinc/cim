@@ -1040,11 +1040,6 @@ pub(crate) fn install_python_packages_from_file(
         .into());
     }
 
-    messages::status(&format!(
-        "Installing Python packages from {}...",
-        python_deps_path.display()
-    ));
-
     // Create VenvManager for virtual environment operations
     let venv_manager = VenvManager::new(workspace_path.to_path_buf(), mirror_path.to_path_buf());
 

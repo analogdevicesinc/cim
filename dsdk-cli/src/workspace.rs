@@ -26,12 +26,20 @@ pub const OS_DEPS_FILE: &str = "os-dependencies.yml";
 pub const PYTHON_DEPS_FILE: &str = "python-dependencies.yml";
 /// Filename for the workspace marker
 pub const WORKSPACE_MARKER_FILE: &str = ".workspace";
+/// Subfolder (nested under the existing `.cim/` cim-internal directory,
+/// alongside per-git venvs) holding every `extends:` ancestor's own
+/// manifest/dependency files (`<target>-sdk.yml`,
+/// `<target>-os-dependencies.yml`, `<target>-python-dependencies.yml`),
+/// keeping the workspace root uncluttered with only the primary target's
+/// bare-named files.
+pub const OVERLAYS_DIR: &str = ".cim/target-overlays";
 
-/// Discover every file in `workspace_path` matching `base_filename` -- either
-/// the bare name (the primary target's own file, e.g. `os-dependencies.yml`)
-/// or an ancestor-prefixed name (`<target>-os-dependencies.yml`, copied in
-/// verbatim from an `extends:` ancestor by `cim init`, mirroring how
-/// `<target>-sdk.yml` is named).
+/// Discover every file matching `base_filename` for a workspace -- either
+/// the bare name at `workspace_path` root (the primary target's own file,
+/// e.g. `os-dependencies.yml`) or an ancestor-prefixed name
+/// (`<target>-os-dependencies.yml`) under `workspace_path/.cim/target-overlays/`,
+/// copied in verbatim from an `extends:` ancestor by `cim init`, mirroring
+/// how `<target>-sdk.yml` is named.
 ///
 /// Returns paths sorted with the bare-named file first (if present), then
 /// ancestor files in alphabetical order, for deterministic output. Since
@@ -44,7 +52,8 @@ pub fn discover_dependency_files(workspace_path: &Path, base_filename: &str) -> 
     let bare_path = workspace_path.join(base_filename);
     let mut ancestor_paths: Vec<PathBuf> = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(workspace_path) {
+    let overlays_dir = workspace_path.join(OVERLAYS_DIR);
+    if let Ok(entries) = fs::read_dir(&overlays_dir) {
         let suffix = format!("-{}", base_filename);
         for entry in entries.flatten() {
             let path = entry.path();
@@ -54,7 +63,7 @@ pub fn discover_dependency_files(workspace_path: &Path, base_filename: &str) -> 
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if name != base_filename && name.ends_with(&suffix) {
+            if name.ends_with(&suffix) {
                 ancestor_paths.push(path);
             }
         }
@@ -981,11 +990,12 @@ pub fn expand_manifest_vars(s: &str, vars: &std::collections::HashMap<String, St
 ///
 /// If the primary sdk.yml at `config_path` has no `extends:`, this behaves
 /// exactly like `config::load_config`. Otherwise, it follows the chain of
-/// `<target>-sdk.yml` files that `cim init` already copied into the same
-/// directory (no network access, no source re-fetch — consistent with
-/// `cim update`'s existing "never re-fetch from source" behavior), merging
-/// bottom-up via the overlay engine (each level's own `overlay:` key
-/// against its base), and validates dependency integrity once at the end.
+/// `<target>-sdk.yml` files that `cim init` already copied into the
+/// workspace's `.cim/target-overlays/` subfolder (no network access, no
+/// source re-fetch — consistent with `cim update`'s existing "never
+/// re-fetch from source" behavior), merging bottom-up via the overlay
+/// engine (each level's own `overlay:` key against its base), and validates
+/// dependency integrity once at the end.
 pub fn load_config_with_extends(
     config_path: &Path,
 ) -> Result<config::SdkConfig, Box<dyn std::error::Error>> {
@@ -1003,7 +1013,8 @@ pub fn load_config_with_extends(
 }
 
 /// Recursively resolve `extends:` for a single already-loaded config,
-/// looking up ancestor files by naming convention in `dir`.
+/// looking up ancestor files by naming convention under `dir`'s
+/// `.cim/target-overlays/` subfolder.
 fn resolve_local_extends_chain(
     dir: &Path,
     sdk_file_name: &str,
@@ -1013,8 +1024,9 @@ fn resolve_local_extends_chain(
         return Ok(derived);
     };
 
+    let overlays_dir = dir.join(OVERLAYS_DIR);
     let base_sdk_name = format!("{}-{}", extends.target, SDK_CONFIG_FILE);
-    let base_sdk_path = dir.join(&base_sdk_name);
+    let base_sdk_path = overlays_dir.join(&base_sdk_name);
     if !base_sdk_path.exists() {
         return Err(format!(
             "extends: base target '{}' declared in {} but {} not found in {}. \
@@ -1022,7 +1034,7 @@ fn resolve_local_extends_chain(
             extends.target,
             sdk_file_name,
             base_sdk_name,
-            dir.display()
+            overlays_dir.display()
         )
         .into());
     }
@@ -1315,21 +1327,23 @@ mod tests {
     fn test_discover_dependency_files_bare_and_ancestor() {
         let (_temp_dir, workspace_path) = create_test_workspace();
         fs::write(workspace_path.join(OS_DEPS_FILE), "linux: {}\n").unwrap();
+        let overlays_dir = workspace_path.join(OVERLAYS_DIR);
+        fs::create_dir_all(&overlays_dir).unwrap();
         fs::write(
-            workspace_path.join("example-os-dependencies.yml"),
+            overlays_dir.join("example-os-dependencies.yml"),
             "linux: {}\n",
         )
         .unwrap();
         // Unrelated file that happens to end with a similar suffix should
         // not be picked up.
-        fs::write(workspace_path.join("not-related.yml"), "linux: {}\n").unwrap();
+        fs::write(overlays_dir.join("not-related.yml"), "linux: {}\n").unwrap();
 
         let found = discover_dependency_files(&workspace_path, OS_DEPS_FILE);
         assert_eq!(
             found,
             vec![
                 workspace_path.join(OS_DEPS_FILE),
-                workspace_path.join("example-os-dependencies.yml"),
+                overlays_dir.join("example-os-dependencies.yml"),
             ]
         );
     }
@@ -1337,8 +1351,10 @@ mod tests {
     #[test]
     fn test_discover_dependency_files_ancestor_only_no_bare() {
         let (_temp_dir, workspace_path) = create_test_workspace();
+        let overlays_dir = workspace_path.join(OVERLAYS_DIR);
+        fs::create_dir_all(&overlays_dir).unwrap();
         fs::write(
-            workspace_path.join("platform-sdk-python-dependencies.yml"),
+            overlays_dir.join("platform-sdk-python-dependencies.yml"),
             "profiles: {}\ndefault: docs\n",
         )
         .unwrap();
@@ -1346,8 +1362,44 @@ mod tests {
         let found = discover_dependency_files(&workspace_path, PYTHON_DEPS_FILE);
         assert_eq!(
             found,
-            vec![workspace_path.join("platform-sdk-python-dependencies.yml")]
+            vec![overlays_dir.join("platform-sdk-python-dependencies.yml")]
         );
+    }
+
+    #[test]
+    fn test_load_config_with_extends_reads_ancestor_from_overlays_dir() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        fs::write(
+            workspace_path.join(SDK_CONFIG_FILE),
+            "extends: base-sdk\ngits: []\n",
+        )
+        .unwrap();
+        let overlays_dir = workspace_path.join(OVERLAYS_DIR);
+        fs::create_dir_all(&overlays_dir).unwrap();
+        fs::write(
+            overlays_dir.join("base-sdk-sdk.yml"),
+            "gits:\n  - name: base-repo\n    url: https://example.com/base.git\n    commit: main\n",
+        )
+        .unwrap();
+
+        let config_path = workspace_path.join(SDK_CONFIG_FILE);
+        let merged = load_config_with_extends(&config_path).expect("should resolve extends chain");
+        assert_eq!(merged.gits.len(), 1);
+        assert_eq!(merged.gits[0].name, "base-repo");
+    }
+
+    #[test]
+    fn test_load_config_with_extends_missing_ancestor_mentions_overlays_dir() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        fs::write(
+            workspace_path.join(SDK_CONFIG_FILE),
+            "extends: base-sdk\ngits: []\n",
+        )
+        .unwrap();
+
+        let config_path = workspace_path.join(SDK_CONFIG_FILE);
+        let err = load_config_with_extends(&config_path).unwrap_err();
+        assert!(err.to_string().contains(OVERLAYS_DIR));
     }
 
     #[test]
