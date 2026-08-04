@@ -9,7 +9,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use dsdk_cli::workspace::require_workspace_config;
+use dsdk_cli::workspace::{load_config_with_extends, require_workspace_config};
 use dsdk_cli::{config, messages, vscode_tasks_manager};
 
 const WORKSPACE_VARIABLE: &str = "WORKSPACE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))";
@@ -26,7 +26,7 @@ pub(crate) fn handle_makefile_command(no_dividers: bool) {
 
     let output_path = workspace_path.join("Makefile");
 
-    let mut sdk_config = match config::load_config(&config_path) {
+    let mut sdk_config = match load_config_with_extends(&config_path) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Error loading config: {}", e));

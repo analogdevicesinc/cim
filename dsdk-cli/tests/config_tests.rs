@@ -1250,3 +1250,84 @@ toolchains:
         "sha256 should be None when not specified"
     );
 }
+
+#[test]
+fn test_extends_absent_by_default() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("sdk.yml");
+
+    let config = create_minimal_sdk_config();
+    write_sdk_config(&config, &config_path);
+
+    let loaded = load_config(&config_path).expect("Should load config without extends");
+    assert!(loaded.extends.is_none());
+}
+
+#[test]
+fn test_extends_shorthand_with_version() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("sdk.yml");
+
+    let yaml_content = "gits: []\nextends: platform-sdk@v1.4.0\n";
+    std::fs::write(&config_path, yaml_content).expect("Failed to write config");
+
+    let loaded = load_config(&config_path).expect("Should load config with shorthand extends");
+    let extends = loaded.extends.expect("Should have extends section");
+    assert_eq!(extends.target, "platform-sdk");
+    assert_eq!(extends.version.as_deref(), Some("v1.4.0"));
+    assert!(extends.source.is_none());
+}
+
+#[test]
+fn test_extends_shorthand_without_version() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("sdk.yml");
+
+    let yaml_content = "gits: []\nextends: platform-sdk\n";
+    std::fs::write(&config_path, yaml_content).expect("Failed to write config");
+
+    let loaded = load_config(&config_path).expect("Should load config with bare shorthand extends");
+    let extends = loaded.extends.expect("Should have extends section");
+    assert_eq!(extends.target, "platform-sdk");
+    assert!(extends.version.is_none());
+    assert!(extends.source.is_none());
+}
+
+#[test]
+fn test_extends_structured_form() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("sdk.yml");
+
+    let yaml_content = r#"gits: []
+extends:
+  target: platform-sdk
+  version: v1.4.0
+  source: https://github.com/example/other-manifests
+"#;
+    std::fs::write(&config_path, yaml_content).expect("Failed to write config");
+
+    let loaded = load_config(&config_path).expect("Should load config with structured extends");
+    let extends = loaded.extends.expect("Should have extends section");
+    assert_eq!(extends.target, "platform-sdk");
+    assert_eq!(extends.version.as_deref(), Some("v1.4.0"));
+    assert_eq!(
+        extends.source.as_deref(),
+        Some("https://github.com/example/other-manifests")
+    );
+}
+
+#[test]
+fn test_extends_structured_form_without_version() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("sdk.yml");
+
+    let yaml_content = "gits: []\nextends:\n  target: platform-sdk\n";
+    std::fs::write(&config_path, yaml_content).expect("Failed to write config");
+
+    let loaded =
+        load_config(&config_path).expect("Should load config with minimal structured extends");
+    let extends = loaded.extends.expect("Should have extends section");
+    assert_eq!(extends.target, "platform-sdk");
+    assert!(extends.version.is_none());
+    assert!(extends.source.is_none());
+}

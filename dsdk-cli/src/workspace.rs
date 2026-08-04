@@ -16,7 +16,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Filename for the main SDK configuration manifest
+/// Filename for the main SDK configuration manifest. A target's `extends:`
+/// remove/modify diff against its base lives in this same file's `overlay:`
+/// key (see `overlay.rs`), not in a separate file.
 pub const SDK_CONFIG_FILE: &str = "sdk.yml";
 /// Filename for OS/system dependency definitions
 pub const OS_DEPS_FILE: &str = "os-dependencies.yml";
@@ -933,6 +935,65 @@ pub fn expand_manifest_vars(s: &str, vars: &std::collections::HashMap<String, St
     result
 }
 
+/// Load an SDK config from a workspace, resolving `extends:` locally.
+///
+/// If the primary sdk.yml at `config_path` has no `extends:`, this behaves
+/// exactly like `config::load_config`. Otherwise, it follows the chain of
+/// `<target>-sdk.yml` files that `cim init` already copied into the same
+/// directory (no network access, no source re-fetch — consistent with
+/// `cim update`'s existing "never re-fetch from source" behavior), merging
+/// bottom-up via the overlay engine (each level's own `overlay:` key
+/// against its base), and validates dependency integrity once at the end.
+pub fn load_config_with_extends(
+    config_path: &Path,
+) -> Result<config::SdkConfig, Box<dyn std::error::Error>> {
+    let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let primary = config::load_config(config_path)?;
+
+    if primary.extends.is_none() {
+        return Ok(primary);
+    }
+
+    let merged = resolve_local_extends_chain(dir, SDK_CONFIG_FILE, primary)?;
+    crate::overlay::validate_dependencies(&merged)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    Ok(merged)
+}
+
+/// Recursively resolve `extends:` for a single already-loaded config,
+/// looking up ancestor files by naming convention in `dir`.
+fn resolve_local_extends_chain(
+    dir: &Path,
+    sdk_file_name: &str,
+    derived: config::SdkConfig,
+) -> Result<config::SdkConfig, Box<dyn std::error::Error>> {
+    let Some(extends) = derived.extends.clone() else {
+        return Ok(derived);
+    };
+
+    let base_sdk_name = format!("{}-{}", extends.target, SDK_CONFIG_FILE);
+    let base_sdk_path = dir.join(&base_sdk_name);
+    if !base_sdk_path.exists() {
+        return Err(format!(
+            "extends: base target '{}' declared in {} but {} not found in {}. \
+             Re-run 'cim init', or copy the file in manually.",
+            extends.target,
+            sdk_file_name,
+            base_sdk_name,
+            dir.display()
+        )
+        .into());
+    }
+
+    let base_derived = config::load_config(&base_sdk_path)?;
+    let base_merged = resolve_local_extends_chain(dir, &base_sdk_name, base_derived)?;
+
+    let overlay_config = derived.overlay.clone().unwrap_or_default();
+
+    crate::overlay::apply_overlay(base_merged, derived, &overlay_config)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })
+}
+
 /// Load SDK config from a path and apply user config overrides if available
 ///
 /// This function encapsulates the common pattern of:
@@ -953,8 +1014,8 @@ pub fn load_config_with_user_overrides(
     config_path: &Path,
     verbose: bool,
 ) -> Result<config::SdkConfig, Box<dyn std::error::Error>> {
-    // Load SDK config
-    let mut sdk_config = config::load_config(config_path)?;
+    // Load SDK config, resolving extends: locally if present
+    let mut sdk_config = load_config_with_extends(config_path)?;
 
     // Load and apply user config overrides if present
     match config::UserConfig::load() {

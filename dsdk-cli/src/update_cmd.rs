@@ -19,8 +19,8 @@ use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
 use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::workspace::{
-    get_all_sources, require_workspace_config, resolve_mirror, WorkspaceMarker,
-    WORKSPACE_MARKER_FILE,
+    get_all_sources, load_config_with_extends, require_workspace_config, resolve_mirror,
+    WorkspaceMarker, WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{config, docker_manager, git_operations, messages};
 use std::fs;
@@ -401,7 +401,7 @@ pub(crate) fn handle_update_command(
 
     messages::workspace(&workspace_path);
 
-    let mut sdk_config = match config::load_config(&config_path) {
+    let mut sdk_config = match load_config_with_extends(&config_path) {
         Ok(config) => config,
         Err(e) => {
             messages::error(&format!("Failed to load config: {}", e));

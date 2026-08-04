@@ -17,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::messages;
+use crate::overlay::OverlayConfig;
 use crate::workspace;
 
 /// Custom deserializer for commit field that handles both strings and numbers
@@ -43,7 +44,9 @@ where
 
 /// Custom deserializer for fields that can be either a sequence of strings or a single multiline string
 /// This allows YAML to use either list format or block scalar format with |
-fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+pub(crate) fn deserialize_string_or_vec<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -713,6 +716,84 @@ fn default_python_profile() -> String {
     "docs".to_string()
 }
 
+/// Declares that a target's sdk.yml is based on another target ("base"),
+/// pinned to an explicit version (branch/tag). The actual remove/modify
+/// diff against the base lives in this same sdk.yml's `overlay:` key, not in
+/// this struct.
+///
+/// Accepts two YAML forms:
+///
+/// **Shorthand** — a single string, optionally with an `@version` suffix:
+/// ```yaml
+/// extends: platform-sdk@v1.4.0
+/// extends: platform-sdk
+/// ```
+///
+/// **Structured** — an object form, needed when the base target lives in a
+/// different manifest source than the current target:
+/// ```yaml
+/// extends:
+///   target: platform-sdk
+///   version: v1.4.0
+///   source: https://github.com/example/other-manifests
+/// ```
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ExtendsConfig {
+    /// Name of the base target (e.g. "platform-sdk").
+    pub target: String,
+    /// Explicit base version (branch or tag name) to resolve against.
+    pub version: Option<String>,
+    /// Optional manifest source override. When absent, the base target is
+    /// resolved from the same source(s) used to resolve the current target.
+    pub source: Option<String>,
+}
+
+/// Custom deserializer for the `extends:` key, accepting both the shorthand
+/// string form (`target` or `target@version`) and the structured mapping
+/// form (`{target, version, source}`).
+fn deserialize_extends<'de, D>(deserializer: D) -> Result<Option<ExtendsConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ExtendsValue {
+        Shorthand(String),
+        Structured {
+            target: String,
+            #[serde(default)]
+            version: Option<String>,
+            #[serde(default)]
+            source: Option<String>,
+        },
+    }
+
+    let value = Option::<ExtendsValue>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(ExtendsValue::Shorthand(s)) => {
+            let (target, version) = match s.rsplit_once('@') {
+                Some((t, v)) => (t.to_string(), Some(v.to_string())),
+                None => (s, None),
+            };
+            Some(ExtendsConfig {
+                target,
+                version,
+                source: None,
+            })
+        }
+        Some(ExtendsValue::Structured {
+            target,
+            version,
+            source,
+        }) => Some(ExtendsConfig {
+            target,
+            version,
+            source,
+        }),
+        None => None,
+    })
+}
+
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct SdkConfig {
     #[serde(default, deserialize_with = "deserialize_gits")]
@@ -725,6 +806,16 @@ pub struct SdkConfig {
     pub install: Option<Vec<InstallConfig>>,
     #[serde(default)]
     pub makefile_include: Option<MakefileInclude>,
+    /// Declares this target extends another ("base") target, pinned to an
+    /// explicit version. The remove/modify diff lives in this sdk.yml's own
+    /// `overlay:` key. See [`ExtendsConfig`] for the accepted forms.
+    #[serde(default, deserialize_with = "deserialize_extends")]
+    pub extends: Option<ExtendsConfig>,
+    /// Remove/modify diff against the `extends:` base target's content.
+    /// Only meaningful when `extends:` is set; new entries never go here --
+    /// they go directly in this sdk.yml's own `gits:`/`toolchains:`/etc.
+    #[serde(default)]
+    pub overlay: Option<OverlayConfig>,
     /// Workspace-relative directory in which per-git `<name>.mk` fragments are
     /// auto-discovered by `cim makefile`.  When absent the default location
     /// `build/` is used.  This is an optional convenience key; omitting it
