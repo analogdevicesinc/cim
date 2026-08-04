@@ -35,8 +35,8 @@
 //! base entry or one of this target's own new entries.
 
 use crate::config::{
-    deserialize_string_or_vec, CopyFileConfig, GitConfig, InstallConfig, SdkConfig, SdkConfigCore,
-    ToolchainConfig,
+    deserialize_string_or_vec, CopyFileConfig, GitConfig, InstallConfig, MakefileInclude,
+    MakefileIncludeConfig, SdkConfig, SdkConfigCore, ToolchainConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -550,6 +550,40 @@ pub fn merge_variables(
     })
 }
 
+/// Merge the `makefile_include:` section across an `extends:` chain.
+/// Unlike the other scalar sections, this one is additive rather than a
+/// whole-value override: `base`'s `files`/`exclude` come first, followed by
+/// `derived`'s own entries, with exact-duplicate strings/names skipped so a
+/// derived target repeating an inherited entry doesn't emit it twice.
+fn merge_makefile_include(
+    base: Option<MakefileInclude>,
+    derived: Option<MakefileInclude>,
+) -> Option<MakefileInclude> {
+    match (base, derived) {
+        (None, None) => None,
+        (Some(b), None) => Some(b),
+        (None, Some(d)) => Some(d),
+        (Some(b), Some(d)) => {
+            let mut files = b.files().to_vec();
+            for f in d.files() {
+                if !files.contains(f) {
+                    files.push(f.clone());
+                }
+            }
+            let mut exclude = b.exclude().to_vec();
+            for e in d.exclude() {
+                if !exclude.contains(e) {
+                    exclude.push(e.clone());
+                }
+            }
+            Some(MakefileInclude::Structured(MakefileIncludeConfig {
+                files,
+                exclude,
+            }))
+        }
+    }
+}
+
 /// Merge a base target's resolved `SdkConfig` with a derived target's own
 /// `SdkConfig` (the one declaring `extends:`) and that derived target's own
 /// `overlay:` key, producing the effective, in-memory `SdkConfig` for this
@@ -558,10 +592,11 @@ pub fn merge_variables(
 /// List sections (gits/toolchains/install/copy_files) in `derived` are the
 /// derived target's own new entries, merged with `base`'s list by
 /// concatenation (a name/dest collision with a base entry is a hard error;
-/// use the `overlay:` key's `modify:` to change a base entry instead). Scalar
-/// sections (build/test/clean/flash/envsetup/build_folder/makefile_include/
-/// direnv/phases) in `derived` override the corresponding value inherited
-/// from `base` when present.
+/// use the `overlay:` key's `modify:` to change a base entry instead).
+/// `makefile_include:` is merged additively (see `merge_makefile_include`).
+/// The remaining scalar sections (build/test/clean/flash/envsetup/
+/// build_folder/direnv/phases) in `derived` override the corresponding
+/// value inherited from `base` when present.
 pub fn apply_overlay(
     base: SdkConfig,
     derived: SdkConfig,
@@ -590,7 +625,7 @@ pub fn apply_overlay(
         toolchains,
         copy_files,
         install,
-        makefile_include: derived.makefile_include.or(base.makefile_include),
+        makefile_include: merge_makefile_include(base.makefile_include, derived.makefile_include),
         build_folder: derived.build_folder.or(base.build_folder),
         envsetup: derived.envsetup.or(base.envsetup),
         test: derived.test.or(base.test),

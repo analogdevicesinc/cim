@@ -22,7 +22,10 @@
 mod common;
 
 use common::{create_complex_sdk_config, create_minimal_sdk_config};
-use dsdk_cli::config::{CopyFileConfig, GitConfig, InstallConfig, ToolchainConfig};
+use dsdk_cli::config::{
+    CopyFileConfig, GitConfig, InstallConfig, MakefileInclude, MakefileIncludeConfig,
+    ToolchainConfig,
+};
 use dsdk_cli::overlay::{
     apply_overlay, compute_owned_entries, merge_copy_files, merge_gits, merge_install,
     merge_toolchains, merge_variables, validate_dependencies, CopyFilePatch, CopyFilesOverlay,
@@ -462,6 +465,72 @@ fn test_apply_overlay_missing_overlay_is_noop_on_lists() {
     let merged = apply_overlay(base, derived, &OverlayConfig::default())
         .expect("apply_overlay should succeed");
     assert_eq!(merged.gits.len(), base_len);
+}
+
+// ---------------------------------------------------------------------
+// apply_overlay: makefile_include is merged additively, not overridden
+// ---------------------------------------------------------------------
+
+#[test]
+fn test_apply_overlay_merges_makefile_include_files_and_exclude() {
+    let mut base = create_complex_sdk_config();
+    base.makefile_include = Some(MakefileInclude::Structured(MakefileIncludeConfig {
+        files: vec!["include base.mk".to_string()],
+        exclude: vec!["qemu".to_string()],
+    }));
+    let mut derived = create_minimal_sdk_config();
+    derived.makefile_include = Some(MakefileInclude::Structured(MakefileIncludeConfig {
+        files: vec!["include team-a.mk".to_string()],
+        exclude: vec!["trusted-services".to_string()],
+    }));
+
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let mi = merged.makefile_include.expect("makefile_include missing");
+    assert_eq!(
+        mi.files(),
+        &[
+            "include base.mk".to_string(),
+            "include team-a.mk".to_string()
+        ]
+    );
+    assert_eq!(
+        mi.exclude(),
+        &["qemu".to_string(), "trusted-services".to_string()]
+    );
+}
+
+#[test]
+fn test_apply_overlay_makefile_include_dedups_repeated_entries() {
+    let mut base = create_complex_sdk_config();
+    base.makefile_include = Some(MakefileInclude::Structured(MakefileIncludeConfig {
+        files: vec!["include shared.mk".to_string()],
+        exclude: vec!["qemu".to_string()],
+    }));
+    let mut derived = create_minimal_sdk_config();
+    derived.makefile_include = Some(MakefileInclude::Structured(MakefileIncludeConfig {
+        files: vec!["include shared.mk".to_string()],
+        exclude: vec!["qemu".to_string()],
+    }));
+
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let mi = merged.makefile_include.expect("makefile_include missing");
+    assert_eq!(mi.files(), &["include shared.mk".to_string()]);
+    assert_eq!(mi.exclude(), &["qemu".to_string()]);
+}
+
+#[test]
+fn test_apply_overlay_makefile_include_one_sided_is_preserved() {
+    let mut base = create_complex_sdk_config();
+    base.makefile_include = Some(MakefileInclude::Legacy(vec!["include base.mk".to_string()]));
+    let derived = create_minimal_sdk_config();
+
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let mi = merged.makefile_include.expect("makefile_include missing");
+    assert_eq!(mi.files(), &["include base.mk".to_string()]);
+    assert!(mi.exclude().is_empty());
 }
 
 // ---------------------------------------------------------------------
