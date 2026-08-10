@@ -1134,6 +1134,16 @@ pub(crate) fn install_python_packages_from_file(
     Ok(())
 }
 
+/// Returns the flag that makes the given package manager command
+/// non-interactive (skip its own confirmation prompt), if known.
+fn non_interactive_flag(command: &str) -> Option<&'static str> {
+    match command.split_whitespace().next()? {
+        "apt-get" | "apt" | "dnf" | "yum" | "zypper" => Some("-y"),
+        "pacman" => Some("--noconfirm"),
+        _ => None,
+    }
+}
+
 /// Install prerequisites based on OS dependencies configuration
 pub(crate) fn install_prerequisites(
     os_deps: &config::OsDependencies,
@@ -1232,6 +1242,14 @@ pub(crate) fn install_prerequisites(
                 messages::status("\nProceeding with installation (--yes flag specified)...");
             }
 
+            // Determine the package manager's non-interactive flag, if any,
+            // so `--yes` also suppresses the package manager's own prompt.
+            let non_interactive_flag = if skip_prompt {
+                non_interactive_flag(&distro_config.package_manager.command)
+            } else {
+                None
+            };
+
             // Build the full command with sudo if needed
             let mut cmd_parts: Vec<String> = Vec::new();
 
@@ -1259,6 +1277,9 @@ pub(crate) fn install_prerequisites(
 
             // Add packages to install
             let mut all_args = initial_args;
+            if let Some(flag) = non_interactive_flag {
+                all_args.push(flag.to_string());
+            }
             all_args.extend(packages.iter().cloned());
 
             if cmd_parts.is_empty() {
@@ -1383,6 +1404,18 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_non_interactive_flag() {
+        assert_eq!(non_interactive_flag("apt-get install"), Some("-y"));
+        assert_eq!(non_interactive_flag("apt install"), Some("-y"));
+        assert_eq!(non_interactive_flag("dnf install"), Some("-y"));
+        assert_eq!(non_interactive_flag("yum install"), Some("-y"));
+        assert_eq!(non_interactive_flag("zypper install"), Some("-y"));
+        assert_eq!(non_interactive_flag("pacman -S"), Some("--noconfirm"));
+        assert_eq!(non_interactive_flag("brew install"), None);
+        assert_eq!(non_interactive_flag(""), None);
+    }
 
     // Test helper function to create a temporary workspace
     fn create_test_workspace() -> (TempDir, PathBuf) {
