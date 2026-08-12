@@ -1627,21 +1627,13 @@ mod tests {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "master".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
             config::GitConfig {
                 name: "linux-stable".to_string(),
                 url: "https://example.com/linux.git".to_string(),
                 commit: "v6.1".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
         ];
 
@@ -1660,21 +1652,13 @@ mod tests {
                 name: "foo/zephyr".to_string(),
                 url: "https://example.com/foo/zephyr.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
             config::GitConfig {
                 name: "bar/zephyr".to_string(),
                 url: "https://example.com/bar/zephyr.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
         ];
 
@@ -1693,21 +1677,14 @@ mod tests {
                 name: "zephyrproject/zephyr".to_string(),
                 url: "https://example.com/zephyr.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
                 python_deps: Some(vec!["zephyrproject/zephyr/requirements.txt".to_string()]),
+                ..Default::default()
             },
             config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "master".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
         ];
 
@@ -1727,11 +1704,8 @@ mod tests {
             name: "zephyr".to_string(),
             url: "https://example.com/zephyr.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
             python_deps: Some(vec!["zephyr/requirements.txt".to_string()]),
+            ..Default::default()
         }];
 
         let mut user_vars = std::collections::HashMap::new();
@@ -1748,11 +1722,7 @@ mod tests {
             name: "u-boot".to_string(),
             url: "https://example.com/u-boot.git".to_string(),
             commit: "master".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         }];
 
         let mut user_vars = std::collections::HashMap::new();

@@ -50,11 +50,8 @@ fn create_git_config(name: &str, documentation_dir: Option<String>) -> GitConfig
         name: name.to_string(),
         url: format!("https://example.com/{}.git", name),
         commit: "main".to_string(),
-        build_depends_on: None,
-        git_depends_on: None,
-        build: None,
         documentation_dir,
-        python_deps: None,
+        ..Default::default()
     }
 }
 
@@ -68,19 +65,7 @@ fn test_discover_with_default_docs_directory() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -103,19 +88,7 @@ fn test_discover_with_doc_directory() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -138,19 +111,7 @@ fn test_discover_with_documentation_directory() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -173,19 +134,7 @@ fn test_discover_with_documents_directory() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -208,19 +157,7 @@ fn test_discover_with_root_directory() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -243,19 +180,7 @@ fn test_discover_with_user_config_directories() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let user_config = UserConfig {
@@ -283,19 +208,7 @@ fn test_discover_with_per_git_custom_directory() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", Some("special_docs".to_string()))],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -325,19 +238,7 @@ fn test_discover_first_match_wins() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -366,19 +267,7 @@ fn test_discover_combined_search_list() {
             create_git_config("repo2", None),
             create_git_config("repo3", Some("git_docs".to_string())),
         ],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let user_config = UserConfig {
@@ -418,20 +307,10 @@ fn test_discover_empty_strings_skipped() {
     create_test_repo(workspace, "repo1", "docs", true);
 
     let sdk_config = SdkConfig {
-        gits: vec![create_git_config("repo1", Some("".to_string()))], // Empty string
+        gits: vec![create_git_config("repo1", Some("".to_string()))],
+        // Empty string
         toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let user_config = UserConfig {
@@ -457,20 +336,10 @@ fn test_discover_deduplication() {
     create_test_repo(workspace, "repo1", "docs", true);
 
     let sdk_config = SdkConfig {
-        gits: vec![create_git_config("repo1", Some("docs".to_string()))], // Duplicate
+        gits: vec![create_git_config("repo1", Some("docs".to_string()))],
+        // Duplicate
         toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let user_config = UserConfig {
@@ -498,19 +367,7 @@ fn test_discover_no_documentation_found() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -530,19 +387,7 @@ fn test_discover_without_user_config() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     let doc_manager = DocManager::new(workspace.to_path_buf());
@@ -568,19 +413,7 @@ fn test_discover_with_comma_separated_user_dirs() {
             create_git_config("repo1", None),
             create_git_config("repo2", None),
         ],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     // Test comma-separated list with various whitespace patterns
@@ -607,19 +440,7 @@ fn test_discover_with_empty_entries_in_comma_list() {
 
     let sdk_config = SdkConfig {
         gits: vec![create_git_config("repo1", None)],
-        toolchains: None,
-        copy_files: None,
-        install: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     };
 
     // Test with empty entries and whitespace-only entries

@@ -746,25 +746,9 @@ mod tests {
                 name: "test-repo".to_string(),
                 url: "https://example.com/test-repo.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            toolchains: None,
-            copy_files: None,
-            install: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let doc_manager = DocManager::new(workspace_path.to_path_buf());

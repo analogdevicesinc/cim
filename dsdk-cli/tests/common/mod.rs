@@ -149,19 +149,7 @@ impl MockGitRepo {
 pub fn create_minimal_sdk_config() -> SdkConfig {
     SdkConfig {
         gits: vec![],
-        toolchains: None,
-        install: None,
-        copy_files: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     }
 }
 
@@ -173,25 +161,10 @@ pub fn create_basic_sdk_config(repo_url: &str) -> SdkConfig {
             name: "test-repo".to_string(),
             url: repo_url.to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
             build: Some(vec!["make".to_string()]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         }],
-        toolchains: None,
-        install: None,
-        copy_files: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     }
 }
 
@@ -203,46 +176,27 @@ pub fn create_complex_sdk_config() -> SdkConfig {
                 name: "base-lib".to_string(),
                 url: "https://github.com/example/base-lib.git".to_string(),
                 commit: "v1.0.0".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
                 build: Some(vec!["make base".to_string()]),
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
             GitConfig {
                 name: "middleware".to_string(),
                 url: "https://github.com/example/middleware.git".to_string(),
                 commit: "main".to_string(),
                 build_depends_on: Some(vec!["base-lib".to_string()]),
-                git_depends_on: None,
                 build: Some(vec!["make middleware".to_string()]),
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
             GitConfig {
                 name: "application".to_string(),
                 url: "https://github.com/example/application.git".to_string(),
                 commit: "develop".to_string(),
                 build_depends_on: Some(vec!["base-lib".to_string(), "middleware".to_string()]),
-                git_depends_on: None,
                 build: Some(vec!["make app".to_string()]),
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
         ],
-        toolchains: None,
-        install: None,
-        copy_files: None,
-        makefile_include: None,
-        build_folder: None,
-        envsetup: None,
-        test: None,
-        clean: None,
-        build: None,
-        flash: None,
-        variables: None,
-        phases: None,
-        direnv: None,
+        ..Default::default()
     }
 }
 

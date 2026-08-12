@@ -791,20 +791,8 @@ mod tests {
     #[test]
     fn test_generate_makefile_content_empty() {
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -823,28 +811,13 @@ mod tests {
             name: "test-repo".to_string(),
             url: "https://github.com/test/repo.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
             build: Some(vec!["make".to_string(), "make install".to_string()]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![git_config],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -861,11 +834,8 @@ mod tests {
             name: "base-repo".to_string(),
             url: "https://github.com/test/base.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
             build: Some(vec!["@echo Building base".to_string()]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         let git2 = config::GitConfig {
@@ -873,27 +843,13 @@ mod tests {
             url: "https://github.com/test/dep.git".to_string(),
             commit: "main".to_string(),
             build_depends_on: Some(vec!["base-repo".to_string()]),
-            git_depends_on: None,
             build: Some(vec!["# This is a comment".to_string(), "make".to_string()]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![git1, git2],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -912,11 +868,7 @@ mod tests {
             name: "simple-repo".to_string(),
             url: "https://github.com/test/simple.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         let emitted = add_makefile_target(&mut makefile, &git_config);
@@ -934,16 +886,13 @@ mod tests {
             name: "commented-repo".to_string(),
             url: "https://github.com/test/commented.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
             build: Some(vec![
                 "# Configure the build".to_string(),
                 "./configure".to_string(),
                 "#Another comment".to_string(),
                 "make".to_string(),
             ]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         add_makefile_target(&mut makefile, &git_config);
@@ -962,28 +911,13 @@ mod tests {
             name: "empty-build".to_string(),
             url: "https://github.com/test/empty.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
             build: Some(vec![]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![git_config],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -999,10 +933,8 @@ mod tests {
                 "dep2".to_string(),
                 "dep3".to_string(),
             ]),
-            git_depends_on: None,
             build: Some(vec!["echo hello".to_string()]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         let mut makefile = String::new();
@@ -1014,23 +946,12 @@ mod tests {
     fn test_envsetup_target_generation() {
         // Test with envsetup commands
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
             envsetup: Some(config::SdkTarget::Commands(vec![
                 "ln -sf qemu_v8.mk build/Makefile".to_string(),
                 "cd build && make -j3 toolchains".to_string(),
             ])),
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1049,12 +970,7 @@ mod tests {
     #[test]
     fn test_envsetup_target_with_comments_and_echo() {
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
             envsetup: Some(config::SdkTarget::Commands(vec![
                 "# Setup toolchain".to_string(),
                 "@echo Setting up environment".to_string(),
@@ -1062,13 +978,7 @@ mod tests {
                 "#Another comment".to_string(),
                 "export CROSS_COMPILE=aarch64-linux-gnu-".to_string(),
             ])),
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1089,20 +999,8 @@ mod tests {
     fn test_envsetup_target_empty_commands() {
         // Test with empty envsetup commands
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1115,20 +1013,8 @@ mod tests {
     fn test_envsetup_target_none() {
         // Test with no envsetup commands
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1163,23 +1049,12 @@ mod tests {
     fn test_test_target_generation() {
         // Test with test commands
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
             test: Some(config::SdkTarget::Commands(vec![
                 "cargo test --release".to_string(),
                 "python run_integration_tests.py".to_string(),
             ])),
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1201,13 +1076,7 @@ mod tests {
     #[test]
     fn test_test_target_with_comments_and_echo() {
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
             test: Some(config::SdkTarget::Commands(vec![
                 "# Run unit tests".to_string(),
                 "@echo Running test suite".to_string(),
@@ -1215,12 +1084,7 @@ mod tests {
                 "#Run integration tests".to_string(),
                 "pytest integration/".to_string(),
             ])),
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1241,20 +1105,8 @@ mod tests {
     fn test_test_target_empty_commands() {
         // Test with empty test commands
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1267,20 +1119,8 @@ mod tests {
     fn test_test_target_none() {
         // Test with no test commands
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1315,22 +1155,12 @@ mod tests {
     fn test_combined_envsetup_and_test_targets() {
         // Test with both envsetup and test commands
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
             envsetup: Some(config::SdkTarget::Commands(vec![
                 "make configure".to_string()
             ])),
             test: Some(config::SdkTarget::Commands(vec!["make test".to_string()])),
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1398,20 +1228,9 @@ mod tests {
         );
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1443,20 +1262,9 @@ mod tests {
         vars.insert("DERIVED".to_string(), "${{ BASE }}/extras".to_string());
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1477,23 +1285,12 @@ mod tests {
     fn test_makefile_include_with_workspace_reference() {
         // ${{ WORKSPACE }} in makefile_include paths must become $(WORKSPACE).
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
                 "include ${{ WORKSPACE }}/shared/common.mk".to_string(),
                 "include platform/board.mk".to_string(),
             ])),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1525,7 +1322,6 @@ mod tests {
         );
 
         let config = config::SdkConfig {
-            toolchains: None,
             install: Some(vec![config::InstallConfig {
                 name: "devcontainer".to_string(),
                 depends_on: None,
@@ -1535,17 +1331,8 @@ mod tests {
                 ]),
             }]),
             gits: vec![],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1590,22 +1377,12 @@ mod tests {
         vars.insert("PLATFORMS_ROOT".to_string(), "platforms".to_string());
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
                 "include build/extra.mk".to_string(),
             ])),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1625,18 +1402,14 @@ mod tests {
             name: "test-repo".to_string(),
             url: "https://github.com/test/repo.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
             build: Some(vec!["make".to_string()]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         let mut vars = std::collections::HashMap::new();
         vars.insert("MY_VAR".to_string(), "value".to_string());
 
         let config = config::SdkConfig {
-            toolchains: None,
             install: Some(vec![config::InstallConfig {
                 name: "my-tool".to_string(),
                 depends_on: None,
@@ -1644,19 +1417,11 @@ mod tests {
                 commands: Some(vec!["echo install".to_string()]),
             }]),
             gits: vec![git_config],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
                 "include extra.mk".to_string()
             ])),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, true, None);
@@ -1701,18 +1466,14 @@ mod tests {
             name: "test-repo".to_string(),
             url: "https://github.com/test/repo.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
             build: Some(vec!["make".to_string()]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         };
 
         let mut vars = std::collections::HashMap::new();
         vars.insert("MY_VAR".to_string(), "value".to_string());
 
         let config = config::SdkConfig {
-            toolchains: None,
             install: Some(vec![config::InstallConfig {
                 name: "my-tool".to_string(),
                 depends_on: None,
@@ -1720,19 +1481,11 @@ mod tests {
                 commands: Some(vec!["echo install".to_string()]),
             }]),
             gits: vec![git_config],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
                 "include extra.mk".to_string()
             ])),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -1767,11 +1520,7 @@ mod tests {
             name: "u-boot".to_string(),
             url: "https://example.com/u-boot.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         }];
         let found = discover_git_mk_files(tmp.path(), &gits, None, &[]);
         assert!(
@@ -1792,21 +1541,13 @@ mod tests {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
             config::GitConfig {
                 name: "linux".to_string(),
                 url: "https://example.com/linux.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
         ];
 
@@ -1827,31 +1568,19 @@ mod tests {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
             config::GitConfig {
                 name: "linux".to_string(),
                 url: "https://example.com/linux.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
             config::GitConfig {
                 name: "trusted-firmware-a".to_string(),
                 url: "https://example.com/tfa.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
         ];
 
@@ -1873,29 +1602,14 @@ mod tests {
         .expect("write u-boot.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
                 build: Some(vec!["$(MAKE) u-boot-build".to_string()]),
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -1912,29 +1626,14 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
                 build: Some(vec!["$(MAKE) -C u-boot".to_string()]),
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -1954,31 +1653,16 @@ mod tests {
         std::fs::write(build_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
                 "include shared/platform.mk".to_string(),
             ])),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2005,29 +1689,13 @@ mod tests {
         std::fs::write(build_dir.join("linux.mk"), "").expect("write linux.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "linux".to_string(),
                 url: "https://example.com/linux.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, true, Some(tmp.path()));
@@ -2058,29 +1726,14 @@ mod tests {
         );
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2112,29 +1765,14 @@ mod tests {
             .expect("write u-boot.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
             build_folder: Some("mk-files".to_string()),
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2162,29 +1800,14 @@ mod tests {
         std::fs::write(build_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
             build_folder: Some("other-dir".to_string()),
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2208,21 +1831,13 @@ mod tests {
                 name: "linux".to_string(),
                 url: "https://example.com/linux.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
             config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             },
         ];
 
@@ -2242,29 +1857,14 @@ mod tests {
         let abs_path = abs_dir.to_str().unwrap().to_string();
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
             build_folder: Some(abs_path.clone()),
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         // Use a *different* directory as the workspace root so we can confirm
@@ -2291,29 +1891,14 @@ mod tests {
         std::fs::write(fragments_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
             build_folder: Some("${{ WORKSPACE }}/fragments".to_string()),
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2370,46 +1955,27 @@ mod tests {
             .expect("write trusted-services.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![
                 config::GitConfig {
                     name: "qemu".to_string(),
                     url: "https://example.com/qemu.git".to_string(),
                     commit: "main".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
                 config::GitConfig {
                     name: "trusted-services".to_string(),
                     url: "https://example.com/ts.git".to_string(),
                     commit: "main".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
             ],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Structured(
                 config::MakefileIncludeConfig {
                     files: vec![],
                     exclude: vec!["qemu".to_string()],
                 },
             )),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2438,46 +2004,27 @@ mod tests {
             .expect("write trusted-services.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![
                 config::GitConfig {
                     name: "qemu".to_string(),
                     url: "https://example.com/qemu.git".to_string(),
                     commit: "main".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
                 config::GitConfig {
                     name: "trusted-services".to_string(),
                     url: "https://example.com/ts.git".to_string(),
                     commit: "main".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
             ],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Structured(
                 config::MakefileIncludeConfig {
                     files: vec![],
                     exclude: vec!["qemu".to_string(), "trusted-services".to_string()],
                 },
             )),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2505,46 +2052,27 @@ mod tests {
             .expect("write trusted-services.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![
                 config::GitConfig {
                     name: "qemu".to_string(),
                     url: "https://example.com/qemu.git".to_string(),
                     commit: "main".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
                 config::GitConfig {
                     name: "trusted-services".to_string(),
                     url: "https://example.com/ts.git".to_string(),
                     commit: "main".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
             ],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Structured(
                 config::MakefileIncludeConfig {
                     files: vec!["include extra.mk".to_string()],
                     exclude: vec!["qemu".to_string()],
                 },
             )),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2575,31 +2103,16 @@ mod tests {
         std::fs::write(build_dir.join("u-boot.mk"), "").expect("write u-boot.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
                 "include platform.mk".to_string()
             ])),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -2683,41 +2196,21 @@ mod tests {
     #[test]
     fn test_generate_makefile_with_auto_dir_vars() {
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![
                 config::GitConfig {
                     name: "u-boot".to_string(),
                     url: "https://example.com/u-boot.git".to_string(),
                     commit: "master".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
                 config::GitConfig {
                     name: "linux-stable".to_string(),
                     url: "https://example.com/linux.git".to_string(),
                     commit: "v6.1".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
             ],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -2747,29 +2240,14 @@ mod tests {
         );
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "master".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(user_vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -2792,29 +2270,14 @@ mod tests {
         );
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "master".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
             variables: Some(user_vars),
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -2834,29 +2297,13 @@ mod tests {
     #[test]
     fn test_generate_makefile_dir_var_uses_immediate_assignment() {
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "zephyrproject/zephyr".to_string(),
                 url: "https://example.com/zephyr.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, None);
@@ -2891,11 +2338,7 @@ mod tests {
             name: "u-boot".to_string(),
             url: "https://example.com/u-boot.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         }];
 
         let phases = config::default_phases();
@@ -2925,11 +2368,7 @@ mod tests {
             name: "linux".to_string(),
             url: "https://example.com/linux.git".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         }];
 
         let phases = config::default_phases();
@@ -2962,11 +2401,7 @@ mod tests {
             name: "zephyrproject/zephyr".to_string(),
             url: "https://github.com/zephyrproject-rtos/zephyr".to_string(),
             commit: "main".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         }];
 
         let phases = config::default_phases();
@@ -3001,29 +2436,14 @@ mod tests {
         .expect("write u-boot.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
                 build: Some(vec!["@echo Top-level build".to_string()]),
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -3051,29 +2471,13 @@ mod tests {
         .expect("write linux.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "linux".to_string(),
                 url: "https://example.com/linux.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -3099,29 +2503,13 @@ mod tests {
             .expect("write zephyr.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "zephyr".to_string(),
                 url: "https://example.com/zephyr.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -3158,41 +2546,21 @@ mod tests {
         .expect("write linux.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![
                 config::GitConfig {
                     name: "u-boot".to_string(),
                     url: "https://example.com/u-boot.git".to_string(),
                     commit: "main".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
                 config::GitConfig {
                     name: "linux".to_string(),
                     url: "https://example.com/linux.git".to_string(),
                     commit: "main".to_string(),
-                    build_depends_on: None,
-                    git_depends_on: None,
-                    build: None,
-                    documentation_dir: None,
-                    python_deps: None,
+                    ..Default::default()
                 },
             ],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -3221,34 +2589,19 @@ mod tests {
         .expect("write u-boot.mk");
 
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
             makefile_include: Some(config::MakefileInclude::Structured(
                 config::MakefileIncludeConfig {
                     files: vec![],
                     exclude: vec!["u-boot".to_string()],
                 },
             )),
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
-            phases: None,
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
@@ -3275,29 +2628,14 @@ mod tests {
 
         // Custom phases are *added* to the five standard ones
         let config = config::SdkConfig {
-            toolchains: None,
-            install: None,
             gits: vec![config::GitConfig {
                 name: "u-boot".to_string(),
                 url: "https://example.com/u-boot.git".to_string(),
                 commit: "main".to_string(),
-                build_depends_on: None,
-                git_depends_on: None,
-                build: None,
-                documentation_dir: None,
-                python_deps: None,
+                ..Default::default()
             }],
-            copy_files: None,
-            makefile_include: None,
-            build_folder: None,
-            envsetup: None,
-            test: None,
-            clean: None,
-            build: None,
-            flash: None,
-            variables: None,
             phases: Some(vec!["deploy".to_string()]),
-            direnv: None,
+            ..Default::default()
         };
 
         let makefile = generate_makefile_content(&config, false, Some(tmp.path()));

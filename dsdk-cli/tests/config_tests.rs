@@ -42,21 +42,15 @@ fn test_load_config_with_repositories() {
             name: "repo1".to_string(),
             url: "https://github.com/example/repo1.git".to_string(),
             commit: "v1.0.0".to_string(),
-            build_depends_on: None,
-            git_depends_on: None,
             build: Some(vec!["make".to_string()]),
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         },
         GitConfig {
             name: "repo2".to_string(),
             url: "https://github.com/example/repo2.git".to_string(),
             commit: "main".to_string(),
             build_depends_on: Some(vec!["repo1".to_string()]),
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         },
     ];
 

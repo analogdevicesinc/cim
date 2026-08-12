@@ -343,7 +343,7 @@ pub trait SdkConfigCore {
     fn direnv(&self) -> Option<&DirenvConfig>;
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct GitConfig {
     pub name: String,
     pub url: String,
@@ -707,7 +707,7 @@ fn default_python_profile() -> String {
     "docs".to_string()
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct SdkConfig {
     #[serde(default, deserialize_with = "deserialize_gits")]
     pub gits: Vec<GitConfig>,
@@ -2000,11 +2000,8 @@ mirror = "/only/mirror/set"
             name: name.to_string(),
             url: format!("https://example.com/{}.git", name),
             commit: "main".to_string(),
-            build_depends_on: None,
             git_depends_on: git_depends_on.map(|v| v.into_iter().map(String::from).collect()),
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         }
     }
 
@@ -2096,10 +2093,7 @@ mirror = "/only/mirror/set"
             url: "https://example.com/my-repo.git".to_string(),
             commit: "main".to_string(),
             build_depends_on: Some(vec!["sdk-envsetup".to_string()]),
-            git_depends_on: None,
-            build: None,
-            documentation_dir: None,
-            python_deps: None,
+            ..Default::default()
         }];
         let tiers = resolve_clone_order(&gits).unwrap();
         assert_eq!(tiers.len(), 1);
