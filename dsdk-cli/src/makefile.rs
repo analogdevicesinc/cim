@@ -9,13 +9,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use dsdk_cli::workspace::{load_config_with_extends, require_workspace_config};
+use crate::init_cmd::{filtered_sdk_config_for_makefile, parse_group_list};
+use dsdk_cli::workspace::{
+    load_config_with_extends, require_workspace_config, WorkspaceMarker, WORKSPACE_MARKER_FILE,
+};
 use dsdk_cli::{config, messages, vscode_tasks_manager};
 
 const WORKSPACE_VARIABLE: &str = "WORKSPACE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))";
 
 /// Generate a Makefile from the SDK configuration
-pub(crate) fn handle_makefile_command(no_dividers: bool) {
+pub(crate) fn handle_makefile_command(
+    no_dividers: bool,
+    include_group: Option<String>,
+    exclude_group: Option<String>,
+) {
     let (workspace_path, config_path) = match require_workspace_config() {
         Ok(paths) => paths,
         Err(e) => {
@@ -56,8 +63,43 @@ pub(crate) fn handle_makefile_command(no_dividers: bool) {
         effective_no_dividers = true;
     }
 
+    // Determine group selection: CLI flags take precedence over the group
+    // selection stored in the workspace marker by `cim init`/`cim update`.
+    let (effective_include_groups, effective_exclude_groups): (Option<String>, Option<String>) =
+        if include_group.is_some() || exclude_group.is_some() {
+            (include_group, exclude_group)
+        } else {
+            let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
+            if marker_path.exists() {
+                match std::fs::read_to_string(&marker_path) {
+                    Ok(content) => {
+                        let marker = noyalib::from_str::<WorkspaceMarker>(&content).ok();
+                        (
+                            marker.as_ref().and_then(|m| m.include_groups.clone()),
+                            marker.as_ref().and_then(|m| m.exclude_groups.clone()),
+                        )
+                    }
+                    Err(_) => (None, None),
+                }
+            } else {
+                (None, None)
+            }
+        };
+
+    let include_groups = effective_include_groups
+        .as_deref()
+        .map(parse_group_list)
+        .unwrap_or_default();
+    let exclude_groups = effective_exclude_groups
+        .as_deref()
+        .map(parse_group_list)
+        .unwrap_or_default();
+
+    let makefile_sdk_config =
+        filtered_sdk_config_for_makefile(&sdk_config, &None, &include_groups, &exclude_groups);
+
     let dividers = !effective_no_dividers;
-    let makefile = generate_makefile_content(&sdk_config, dividers, Some(&workspace_path));
+    let makefile = generate_makefile_content(&makefile_sdk_config, dividers, Some(&workspace_path));
 
     match std::fs::write(&output_path, makefile) {
         Ok(_) => messages::success(&format!("Makefile written to {}", output_path.display())),

@@ -223,6 +223,20 @@ pub enum Commands {
         /// Skip section dividers in the generated Makefile
         #[arg(long, help = "Do not add section dividers to the generated Makefile")]
         no_dividers: bool,
+        /// Only include repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Only include repositories in these comma-separated group(s)"
+        )]
+        include_group: Option<String>,
+        /// Exclude repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Exclude repositories in these comma-separated group(s)"
+        )]
+        exclude_group: Option<String>,
     },
     /// Add a new git repository to configuration
     Add {

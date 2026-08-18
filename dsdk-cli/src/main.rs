@@ -147,8 +147,12 @@ fn main() {
                 cert_validation.as_deref(),
             );
         }
-        Commands::Makefile { no_dividers } => {
-            handle_makefile_command(*no_dividers);
+        Commands::Makefile {
+            no_dividers,
+            include_group,
+            exclude_group,
+        } => {
+            handle_makefile_command(*no_dividers, include_group.clone(), exclude_group.clone());
         }
         Commands::Add { name, url, commit } => {
             handle_add_command(name, url, commit);

@@ -1425,95 +1425,83 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             // Step 3: Generate Makefile and run install-all (original --install behavior)
             // First generate the Makefile
             let makefile_path = workspace_path.join("Makefile");
-            match load_config_with_extends(&dest_config_path) {
-                Ok(sdk_config) => {
-                    // Check if there are install sections before trying to run make install-all
-                    let has_install_sections = sdk_config.install.is_some()
-                        && sdk_config
-                            .install
-                            .as_ref()
-                            .map(|i| !i.is_empty())
-                            .unwrap_or(false);
+            let makefile_sdk_config = filtered_sdk_config_for_makefile(
+                &sdk_config,
+                &match_regex,
+                &include_groups,
+                &exclude_groups,
+            );
 
-                    let dividers = !user_config
-                        .as_ref()
-                        .and_then(|uc| uc.no_dividers)
-                        .unwrap_or(false);
-                    let makefile_content =
-                        generate_makefile_content(&sdk_config, dividers, Some(&workspace_path));
-                    match std::fs::write(&makefile_path, makefile_content) {
-                        Ok(_) => {
-                            messages::verbose(&format!(
-                                "Generated Makefile at {}",
-                                makefile_path.display()
-                            ));
+            // Check if there are install sections before trying to run make install-all
+            let has_install_sections = makefile_sdk_config.install.is_some()
+                && makefile_sdk_config
+                    .install
+                    .as_ref()
+                    .map(|i| !i.is_empty())
+                    .unwrap_or(false);
 
-                            // Generate VS Code tasks.json
-                            if let Err(e) = vscode_tasks_manager::generate_tasks_json(
-                                &workspace_path,
-                                &makefile_path,
-                            ) {
-                                messages::verbose(&format!(
-                                    "Could not generate VS Code tasks.json: {}",
+            let dividers = !user_config
+                .as_ref()
+                .and_then(|uc| uc.no_dividers)
+                .unwrap_or(false);
+            let makefile_content =
+                generate_makefile_content(&makefile_sdk_config, dividers, Some(&workspace_path));
+            match std::fs::write(&makefile_path, makefile_content) {
+                Ok(_) => {
+                    messages::verbose(&format!(
+                        "Generated Makefile at {}",
+                        makefile_path.display()
+                    ));
+
+                    // Generate VS Code tasks.json
+                    if let Err(e) =
+                        vscode_tasks_manager::generate_tasks_json(&workspace_path, &makefile_path)
+                    {
+                        messages::verbose(&format!("Could not generate VS Code tasks.json: {}", e));
+                    }
+
+                    // Only run make install-all if there are install sections in sdk.yml
+                    if has_install_sections {
+                        messages::status("");
+                        messages::status("Running install-all to complete SDK setup...");
+
+                        let make_status = std::process::Command::new("make")
+                            .arg("install-all")
+                            .current_dir(&workspace_path)
+                            .status();
+
+                        match make_status {
+                            Ok(status) => {
+                                if status.success() {
+                                    messages::status("");
+                                    messages::success("All SDK components installed successfully");
+                                } else {
+                                    messages::status("");
+                                    messages::error("Warning: Some components failed to install");
+                                    messages::status(&format!(
+                                        "You can retry with: cd {} && make install-all",
+                                        workspace_path.display()
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                messages::error(&format!(
+                                    "Warning: Failed to run make install-all: {}",
                                     e
                                 ));
-                            }
-
-                            // Only run make install-all if there are install sections in sdk.yml
-                            if has_install_sections {
-                                messages::status("");
-                                messages::status("Running install-all to complete SDK setup...");
-
-                                let make_status = std::process::Command::new("make")
-                                    .arg("install-all")
-                                    .current_dir(&workspace_path)
-                                    .status();
-
-                                match make_status {
-                                    Ok(status) => {
-                                        if status.success() {
-                                            messages::status("");
-                                            messages::success(
-                                                "All SDK components installed successfully",
-                                            );
-                                        } else {
-                                            messages::status("");
-                                            messages::error(
-                                                "Warning: Some components failed to install",
-                                            );
-                                            messages::status(&format!(
-                                                "You can retry with: cd {} && make install-all",
-                                                workspace_path.display()
-                                            ));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        messages::error(&format!(
-                                            "Warning: Failed to run make install-all: {}",
-                                            e
-                                        ));
-                                        messages::status(&format!("Make sure 'make' is installed, or run manually: cd {} && make install-all", workspace_path.display()));
-                                    }
-                                }
-                            } else {
-                                messages::status("");
-                                messages::status(
-                                    "No install targets in sdk.yml, skipping install-all step",
-                                );
-                                messages::success("Workspace setup completed");
+                                messages::status(&format!("Make sure 'make' is installed, or run manually: cd {} && make install-all", workspace_path.display()));
                             }
                         }
-                        Err(e) => {
-                            messages::error(&format!("Warning: Failed to write Makefile: {}", e));
-                            messages::status("You can generate it later with 'cim makefile'");
-                        }
+                    } else {
+                        messages::status("");
+                        messages::status(
+                            "No install targets in sdk.yml, skipping install-all step",
+                        );
+                        messages::success("Workspace setup completed");
                     }
                 }
                 Err(e) => {
-                    messages::error(&format!(
-                        "Warning: Failed to load config for Makefile generation: {}",
-                        e
-                    ));
+                    messages::error(&format!("Warning: Failed to write Makefile: {}", e));
                     messages::status("You can generate it later with 'cim makefile'");
                 }
             }
@@ -1731,6 +1719,24 @@ pub(crate) fn create_filtered_sdk_config<T: config::SdkConfigCore>(
         envsetup: sdk_config.envsetup().clone(),
         test: sdk_config.test().clone(),
     }
+}
+
+/// Filter a full `SdkConfig`'s `gits` list by match pattern/group selection while
+/// keeping every other section (install, build, clean, flash, variables, direnv,
+/// ...) intact. Unlike `create_filtered_sdk_config`/`FilteredSdkConfig` (which only
+/// carries enough fields to drive git cloning), this is safe to pass into
+/// `generate_makefile_content` without silently dropping Makefile sections.
+pub(crate) fn filtered_sdk_config_for_makefile(
+    sdk_config: &config::SdkConfig,
+    pattern_regex: &Option<Regex>,
+    include_groups: &[String],
+    exclude_groups: &[String],
+) -> config::SdkConfig {
+    let mut filtered = sdk_config.clone();
+    let group_filtered_gits =
+        filter_git_configs_by_group(&sdk_config.gits, include_groups, exclude_groups);
+    filtered.gits = filter_git_configs(&group_filtered_gits, pattern_regex);
+    filtered
 }
 
 /// List available targets from either a local directory or git repository
