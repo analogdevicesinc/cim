@@ -10,9 +10,10 @@
 // limitations under the License.
 
 use crate::cli::InstallCommand;
+use crate::init_cmd::{filter_git_configs_by_group, parse_group_list};
 use dsdk_cli::workspace::{
     get_current_workspace, load_config_with_user_overrides, require_workspace_config,
-    resolve_mirror, OS_DEPS_FILE, PYTHON_DEPS_FILE,
+    resolve_mirror, WorkspaceMarker, OS_DEPS_FILE, PYTHON_DEPS_FILE, WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{config, messages, toolchain_manager};
 use std::io;
@@ -55,6 +56,8 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             symlink,
             profile,
             list_profiles,
+            include_group,
+            exclude_group,
         } => {
             let python_deps_files =
                 dsdk_cli::workspace::discover_dependency_files(&workspace_path, PYTHON_DEPS_FILE);
@@ -72,10 +75,45 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                 return;
             }
 
+            // Determine group selection: CLI flags take precedence over the
+            // group selection stored in the workspace marker by
+            // `cim init`/`cim update`, so per-repo Python deps aren't
+            // installed for repos that were excluded and never cloned.
+            let (effective_include, effective_exclude): (Option<String>, Option<String>) =
+                if include_group.is_some() || exclude_group.is_some() {
+                    (include_group.clone(), exclude_group.clone())
+                } else {
+                    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
+                    if marker_path.exists() {
+                        match std::fs::read_to_string(&marker_path) {
+                            Ok(content) => {
+                                let marker = noyalib::from_str::<WorkspaceMarker>(&content).ok();
+                                (
+                                    marker.as_ref().and_then(|m| m.include_groups.clone()),
+                                    marker.as_ref().and_then(|m| m.exclude_groups.clone()),
+                                )
+                            }
+                            Err(_) => (None, None),
+                        }
+                    } else {
+                        (None, None)
+                    }
+                };
+            let include_groups = effective_include
+                .as_deref()
+                .map(parse_group_list)
+                .unwrap_or_default();
+            let exclude_groups = effective_exclude
+                .as_deref()
+                .map(parse_group_list)
+                .unwrap_or_default();
+            let filtered_gits =
+                filter_git_configs_by_group(&sdk_config.gits, &include_groups, &exclude_groups);
+
             // Per-repo Python deps declared in sdk.yml gits: entries are installed
             // into isolated venvs at .cim/<git>/.venv, independent of the shared
             // workspace venv populated from python-dependencies.yml profiles.
-            for git in &sdk_config.gits {
+            for git in &filtered_gits {
                 if let Some(reqs) = &git.python_deps {
                     if let Err(e) =
                         install_git_python_deps(&workspace_path, &git.name, reqs, *force)
@@ -99,7 +137,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                 &resolve_mirror(None),
             ) {
                 Ok(true) => {}
-                Ok(false) if !sdk_config.gits.iter().any(|g| g.python_deps.is_some()) => {
+                Ok(false) if !filtered_gits.iter().any(|g| g.python_deps.is_some()) => {
                     // Nothing to do from either source: report the missing profiles file.
                     messages::error("python-dependencies.yml not found in workspace.");
                     messages::error("This file is copied automatically during 'cim init'.");

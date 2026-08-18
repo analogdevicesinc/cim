@@ -840,6 +840,9 @@ pub(crate) fn install_pip_packages_if_available(
     config_path: &Path,
     mirror_path: &Path,
     symlink: bool,
+    pattern_regex: &Option<Regex>,
+    include_groups: &[String],
+    exclude_groups: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Load the SDK config to validate the manifest parses.
     let sdk_config = match load_config_with_user_overrides(config_path, false) {
@@ -856,7 +859,13 @@ pub(crate) fn install_pip_packages_if_available(
     // Install per-repo Python deps declared in sdk.yml gits: entries into
     // isolated venvs at .cim/<git>/.venv. This is independent of
     // python-dependencies.yml, so it runs even when that file is absent.
-    for git in &sdk_config.gits {
+    // Only consider gits that survived the same match/group filtering used
+    // to decide which repos actually got cloned -- otherwise this reaches
+    // into checkouts that were deliberately excluded and don't exist.
+    let group_filtered_gits =
+        filter_git_configs_by_group(&sdk_config.gits, include_groups, exclude_groups);
+    let filtered_gits = filter_git_configs(&group_filtered_gits, pattern_regex);
+    for git in &filtered_gits {
         if let Some(reqs) = &git.python_deps {
             messages::status("");
             install_git_python_deps(workspace_path, &git.name, reqs, false)?;
@@ -1416,6 +1425,9 @@ pub(crate) fn handle_init_command(config: InitConfig) {
                 &dest_config_path,
                 &mirror_path,
                 config.symlink,
+                &match_regex,
+                &include_groups,
+                &exclude_groups,
             ) {
                 messages::error(&format!("Failed to install Python packages: {}", e));
                 messages::error("Workspace creation failed");

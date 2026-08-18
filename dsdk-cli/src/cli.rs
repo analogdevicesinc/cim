@@ -475,6 +475,20 @@ pub enum InstallCommand {
         /// List available dependency profiles
         #[arg(long, help = "List available dependency profiles")]
         list_profiles: bool,
+        /// Only install per-repo Python deps for repositories in the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Only install per-repo Python deps for repositories in these comma-separated group(s)"
+        )]
+        include_group: Option<String>,
+        /// Exclude per-repo Python deps for repositories in the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Exclude per-repo Python deps for repositories in these comma-separated group(s)"
+        )]
+        exclude_group: Option<String>,
     },
     /// Install and extract toolchains
     Toolchains {
