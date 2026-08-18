@@ -1786,11 +1786,37 @@ pub(crate) fn create_filtered_sdk_config<T: config::SdkConfigCore>(
     }
 }
 
+/// Drop `install-<name>` entries from a phase target's `depends_on` list
+/// when `<name>` is no longer a surviving install step. Unlike install-to-
+/// install pruning, phase targets (`sdk-envsetup`, `sdk-build`, ...) are
+/// never removed themselves -- only the dangling reference is stripped, so
+/// `make sdk-envsetup` never fails with "No rule to make target".
+fn strip_removed_install_refs_from_target(
+    target: &mut Option<config::SdkTarget>,
+    removed_install_refs: &std::collections::HashSet<String>,
+) {
+    if let Some(config::SdkTarget::CommandsWithDeps {
+        depends_on: Some(deps),
+        ..
+    }) = target
+    {
+        deps.retain(|d| !removed_install_refs.contains(d));
+    }
+}
+
 /// Filter a full `SdkConfig`'s `gits` list by match pattern/group selection while
 /// keeping every other section (install, build, clean, flash, variables, direnv,
 /// ...) intact. Unlike `create_filtered_sdk_config`/`FilteredSdkConfig` (which only
 /// carries enough fields to drive git cloning), this is safe to pass into
 /// `generate_makefile_content` without silently dropping Makefile sections.
+///
+/// Also prunes `install:` steps whose `depends_on_gits` names a git that
+/// didn't survive filtering (cascading through `depends_on` chains, see
+/// `filter_install_configs_by_gits`), and strips any now-dangling
+/// `install-<name>` reference left behind in `envsetup`/`build`/`test`/
+/// `clean`/`flash`'s `depends_on` or in a git's `build_depends_on` -- those
+/// targets are never removed themselves, so a dangling reference there
+/// would otherwise break `make` with "No rule to make target".
 pub(crate) fn filtered_sdk_config_for_makefile(
     sdk_config: &config::SdkConfig,
     pattern_regex: &Option<Regex>,
@@ -1804,9 +1830,39 @@ pub(crate) fn filtered_sdk_config_for_makefile(
 
     let git_names: std::collections::HashSet<&str> =
         filtered.gits.iter().map(|g| g.name.as_str()).collect();
+    let installs_before = sdk_config.install.clone().unwrap_or_default();
     filtered.install = filtered
         .install
         .map(|installs| filter_install_configs_by_gits(&installs, &git_names));
+
+    let surviving_install_refs: std::collections::HashSet<String> = filtered
+        .install
+        .as_ref()
+        .map(|installs| {
+            installs
+                .iter()
+                .map(|i| format!("install-{}", i.name))
+                .collect()
+        })
+        .unwrap_or_default();
+    let removed_install_refs: std::collections::HashSet<String> = installs_before
+        .iter()
+        .map(|i| format!("install-{}", i.name))
+        .filter(|r| !surviving_install_refs.contains(r))
+        .collect();
+
+    if !removed_install_refs.is_empty() {
+        strip_removed_install_refs_from_target(&mut filtered.envsetup, &removed_install_refs);
+        strip_removed_install_refs_from_target(&mut filtered.build, &removed_install_refs);
+        strip_removed_install_refs_from_target(&mut filtered.test, &removed_install_refs);
+        strip_removed_install_refs_from_target(&mut filtered.clean, &removed_install_refs);
+        strip_removed_install_refs_from_target(&mut filtered.flash, &removed_install_refs);
+        for git in &mut filtered.gits {
+            if let Some(deps) = &mut git.build_depends_on {
+                deps.retain(|d| !removed_install_refs.contains(d));
+            }
+        }
+    }
 
     filtered
 }
@@ -2560,6 +2616,102 @@ gits:
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "unrelated");
+    }
+
+    fn git_config(name: &str, group: Option<Vec<&str>>) -> config::GitConfig {
+        config::GitConfig {
+            name: name.to_string(),
+            url: format!("https://example.com/{}.git", name),
+            commit: "main".to_string(),
+            group: group.map(|v| v.into_iter().map(String::from).collect()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_filtered_sdk_config_for_makefile_strips_dangling_phase_depends_on() {
+        // envsetup depends on an install step tied to a git that gets
+        // excluded -- the install step is pruned, and the dangling
+        // "install-zephyr-python-deps" reference must be stripped from
+        // envsetup's own depends_on so `make sdk-envsetup` doesn't fail
+        // with "No rule to make target".
+        let mut sdk_config = config::SdkConfig {
+            gits: vec![
+                git_config("zephyr", Some(vec!["zephyr"])),
+                git_config("other-repo", None),
+            ],
+            install: Some(vec![
+                install_step("zephyr-python-deps", None, Some(vec!["zephyr"])),
+                install_step("standalone-tool", None, None),
+            ]),
+            ..Default::default()
+        };
+        sdk_config.envsetup = Some(config::SdkTarget::CommandsWithDeps {
+            commands: vec![],
+            depends_on: Some(vec![
+                "install-zephyr-python-deps".to_string(),
+                "install-standalone-tool".to_string(),
+                "other-repo".to_string(),
+            ]),
+        });
+
+        let filtered =
+            filtered_sdk_config_for_makefile(&sdk_config, &None, &[], &["zephyr".to_string()]);
+
+        let install_names: Vec<&str> = filtered
+            .install
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(install_names, vec!["standalone-tool"]);
+
+        let envsetup_deps = filtered.envsetup.unwrap().depends_on().unwrap().to_vec();
+        assert_eq!(
+            envsetup_deps,
+            vec![
+                "install-standalone-tool".to_string(),
+                "other-repo".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_filtered_sdk_config_for_makefile_strips_dangling_build_depends_on() {
+        let mut sdk_config = config::SdkConfig {
+            gits: vec![
+                git_config("zephyr", Some(vec!["zephyr"])),
+                git_config("other-repo", None),
+            ],
+            install: Some(vec![install_step(
+                "zephyr-python-deps",
+                None,
+                Some(vec!["zephyr"]),
+            )]),
+            ..Default::default()
+        };
+        sdk_config.gits[1].build_depends_on = Some(vec![
+            "install-zephyr-python-deps".to_string(),
+            "zephyr".to_string(),
+        ]);
+
+        let filtered =
+            filtered_sdk_config_for_makefile(&sdk_config, &None, &[], &["zephyr".to_string()]);
+
+        let other_repo = filtered
+            .gits
+            .iter()
+            .find(|g| g.name == "other-repo")
+            .unwrap();
+        assert_eq!(
+            other_repo.build_depends_on,
+            Some(vec!["zephyr".to_string()]),
+            "dangling install-zephyr-python-deps reference should be stripped, \
+             but the (now also gone) zephyr git name is left untouched -- \
+             build_depends_on validation runs pre-filter, this only guards \
+             the install-side dangling reference"
+        );
     }
 
     #[test]
