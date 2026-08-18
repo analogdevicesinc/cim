@@ -368,6 +368,11 @@ cim init -t my-sdk --exclude-group docs,optional
 `--exclude-group` can be combined; a repository must satisfy both to be
 included.
 
+If a git excluded by group/pattern filtering (or removed by an overlay's
+`gits: remove:`) is named in an `install:` step's `depends_on_gits`, that
+install step is dropped from the generated Makefile too — see
+`depends_on_gits` in the `install:` section below.
+
 #### add
 
 Add git repo to workspace config.
@@ -723,6 +728,18 @@ copy_files:
 # sentinel: is an optional file that is created after successful installation.
 #           If the sentinel file exists, the installation step will be skipped
 #           on subsequent runs.
+# depends_on: other install target names that must run first.
+# depends_on_gits: git name(s) (from the gits: section below) this step
+#           needs cloned. If any named git is missing from the final,
+#           effective gits list -- because it was excluded by
+#           --include-group/--exclude-group, or removed by an overlay's
+#           `gits: remove:` -- this install step is dropped from the
+#           generated Makefile's install-all target. Any other install step
+#           that depends_on a dropped step is dropped too (cascading).
+#           Omit this field for steps with no git linkage (e.g. downloading
+#           a standalone tool); such steps always run and are unaffected by
+#           group/overlay git filtering -- the only way to remove them is an
+#           overlay's `install: remove:`.
 ################################################################################
 install:
   - name: protoc
@@ -731,6 +748,13 @@ install:
       @cd opt/protoc && unzip -q -o ../../downloads/protoc-21.7-linux-x86_64.zip
       @ln -sf ../opt/protoc/bin/protoc bin/protoc
     sentinel: .sdk/protoc.installed
+
+  - name: zephyr-python-deps
+    depends_on_gits:
+      - zephyr
+    commands:
+      - . .venv/bin/activate && pip install -r zephyr/scripts/requirements-base.txt
+    sentinel: .cim/.zephyr-python-deps-installed
 
 
 ################################################################################
@@ -747,7 +771,9 @@ install:
 #             separately by git_depends_on.
 # git_depends_on: controls clone ordering. Repositories listed here will be
 #             cloned before this one. Useful for nested repos where a child
-#             path lives inside a parent repo's directory tree.
+#             path lives inside a parent repo's directory tree. (Unrelated to
+#             an install step's depends_on_gits, which links an install: step
+#             to the git(s) it needs -- see the install: section above.)
 # commit: can be a branch, tag, or specific commit hash.
 # python-deps: path(s) to requirements.txt files for this repository's Python
 #             dependencies, relative to the git's own checkout directory.

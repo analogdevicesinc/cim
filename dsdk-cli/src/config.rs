@@ -402,6 +402,16 @@ pub struct InstallConfig {
     /// Installation commands to execute
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub commands: Option<Vec<String>>,
+    /// Optional git name(s) this install step depends on. If any named git is
+    /// missing from the final effective `gits` list (after group/pattern
+    /// filtering and overlay resolution), this install step -- and any
+    /// install step whose `depends_on` chain leads to it -- is pruned from
+    /// the generated Makefile. Omit for steps with no git linkage (e.g.
+    /// downloading a standalone tool); such steps are unaffected by
+    /// group/overlay git exclusion and can only be removed via an overlay's
+    /// `install: remove:`.
+    #[serde(default)]
+    pub depends_on_gits: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1948,6 +1958,51 @@ build:
             msg.contains("unrecognized field") && msg.contains("typo_field"),
             "expected error mentioning 'unrecognized field' and 'typo_field', got: {msg}"
         );
+    }
+
+    #[test]
+    fn test_install_depends_on_gits() {
+        let yaml = r#"
+mirror: /tmp/mirror
+gits:
+  - name: zephyr
+    url: https://github.com/zephyrproject-rtos/zephyr.git
+    commit: main
+install:
+  - name: zephyr-python-deps
+    depends_on_gits:
+      - zephyr
+    commands:
+      - pip install -r requirements.txt
+"#;
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(yaml.as_bytes()).unwrap();
+
+        let config = load_config(&file_path).unwrap();
+        let install = config.install.as_ref().expect("install section missing");
+        assert_eq!(install[0].depends_on_gits, Some(vec!["zephyr".to_string()]));
+    }
+
+    #[test]
+    fn test_install_depends_on_gits_defaults_to_none() {
+        let yaml = r#"
+mirror: /tmp/mirror
+gits: []
+install:
+  - name: standalone-tool
+    commands:
+      - echo install
+"#;
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(yaml.as_bytes()).unwrap();
+
+        let config = load_config(&file_path).unwrap();
+        let install = config.install.as_ref().expect("install section missing");
+        assert_eq!(install[0].depends_on_gits, None);
     }
 
     #[test]

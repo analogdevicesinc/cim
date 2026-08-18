@@ -1714,6 +1714,59 @@ pub(crate) fn filter_git_configs_by_group(
     filtered
 }
 
+/// Prune install steps whose `depends_on_gits` references a git that isn't
+/// in `available_gits` (all-of semantics: any missing name prunes the
+/// step), then cascade that removal through `depends_on` chains: any
+/// surviving install step that depends on a pruned one is pruned too,
+/// repeated to a fixed point so multi-level chains (C -> B -> A) are fully
+/// resolved. Steps with `depends_on_gits: None` always survive the first
+/// pass. Used to keep `install-all` (and its per-target Makefile rules)
+/// consistent with whichever gits survived group/pattern filtering and
+/// overlay resolution, regardless of which mechanism removed them.
+pub(crate) fn filter_install_configs_by_gits(
+    installs: &[config::InstallConfig],
+    available_gits: &std::collections::HashSet<&str>,
+) -> Vec<config::InstallConfig> {
+    let mut survivors: Vec<config::InstallConfig> = installs
+        .iter()
+        .filter(|install| match &install.depends_on_gits {
+            Some(gits) => gits.iter().all(|g| available_gits.contains(g.as_str())),
+            None => true,
+        })
+        .cloned()
+        .collect();
+
+    loop {
+        let surviving_names: std::collections::HashSet<String> =
+            survivors.iter().map(|i| i.name.clone()).collect();
+        let before = survivors.len();
+        survivors.retain(|install| match &install.depends_on {
+            Some(deps) => deps.iter().all(|d| surviving_names.contains(d)),
+            None => true,
+        });
+        if survivors.len() == before {
+            break;
+        }
+    }
+
+    if survivors.len() != installs.len() {
+        let survivor_names: std::collections::HashSet<&str> =
+            survivors.iter().map(|i| i.name.as_str()).collect();
+        messages::status(&format!(
+            "Pruned {} install step(s) out of {} total (missing git dependency or cascade):",
+            installs.len() - survivors.len(),
+            installs.len()
+        ));
+        for install in installs {
+            if !survivor_names.contains(install.name.as_str()) {
+                messages::status(&format!("  - {}", install.name));
+            }
+        }
+    }
+
+    survivors
+}
+
 /// Create a filtered SDK config for operations
 pub(crate) fn create_filtered_sdk_config<T: config::SdkConfigCore>(
     sdk_config: &T,
@@ -1748,6 +1801,13 @@ pub(crate) fn filtered_sdk_config_for_makefile(
     let group_filtered_gits =
         filter_git_configs_by_group(&sdk_config.gits, include_groups, exclude_groups);
     filtered.gits = filter_git_configs(&group_filtered_gits, pattern_regex);
+
+    let git_names: std::collections::HashSet<&str> =
+        filtered.gits.iter().map(|g| g.name.as_str()).collect();
+    filtered.install = filtered
+        .install
+        .map(|installs| filter_install_configs_by_gits(&installs, &git_names));
+
     filtered
 }
 
@@ -2398,6 +2458,108 @@ gits:
         let empty_prefix = "";
         let workspace_name = format!("{}{}", empty_prefix, target);
         assert_eq!(workspace_name, target);
+    }
+
+    // ---------------------------------------------------------------
+    // filter_install_configs_by_gits tests
+    // ---------------------------------------------------------------
+
+    fn install_step(
+        name: &str,
+        depends_on: Option<Vec<&str>>,
+        depends_on_gits: Option<Vec<&str>>,
+    ) -> config::InstallConfig {
+        config::InstallConfig {
+            name: name.to_string(),
+            depends_on: depends_on.map(|v| v.into_iter().map(String::from).collect()),
+            sentinel: None,
+            commands: None,
+            depends_on_gits: depends_on_gits.map(|v| v.into_iter().map(String::from).collect()),
+        }
+    }
+
+    #[test]
+    fn test_filter_install_configs_by_gits_keeps_generic_step() {
+        let available: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let installs = vec![install_step("standalone-tool", None, None)];
+
+        let result = super::filter_install_configs_by_gits(&installs, &available);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "standalone-tool");
+    }
+
+    #[test]
+    fn test_filter_install_configs_by_gits_keeps_step_when_all_gits_present() {
+        let available: std::collections::HashSet<&str> = ["zephyr", "other-repo"].into();
+        let installs = vec![install_step(
+            "zephyr-python-deps",
+            None,
+            Some(vec!["zephyr"]),
+        )];
+
+        let result = super::filter_install_configs_by_gits(&installs, &available);
+
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_install_configs_by_gits_prunes_step_when_a_git_is_missing() {
+        let available: std::collections::HashSet<&str> = ["other-repo"].into();
+        let installs = vec![install_step(
+            "zephyr-python-deps",
+            None,
+            Some(vec!["zephyr"]),
+        )];
+
+        let result = super::filter_install_configs_by_gits(&installs, &available);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_filter_install_configs_by_gits_all_of_semantics() {
+        // Even though "other-repo" is present, "zephyr" is missing -- the step
+        // needs all of its named gits, so it's pruned.
+        let available: std::collections::HashSet<&str> = ["other-repo"].into();
+        let installs = vec![install_step(
+            "multi-repo-step",
+            None,
+            Some(vec!["zephyr", "other-repo"]),
+        )];
+
+        let result = super::filter_install_configs_by_gits(&installs, &available);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_filter_install_configs_by_gits_cascades_single_level() {
+        let available: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let installs = vec![
+            install_step("a", None, Some(vec!["missing-git"])),
+            install_step("b", Some(vec!["a"]), None),
+        ];
+
+        let result = super::filter_install_configs_by_gits(&installs, &available);
+
+        assert!(result.is_empty(), "expected both a and b to be pruned");
+    }
+
+    #[test]
+    fn test_filter_install_configs_by_gits_cascades_multiple_levels() {
+        let available: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let installs = vec![
+            install_step("a", None, Some(vec!["missing-git"])),
+            install_step("b", Some(vec!["a"]), None),
+            install_step("c", Some(vec!["b"]), None),
+            install_step("unrelated", None, None),
+        ];
+
+        let result = super::filter_install_configs_by_gits(&installs, &available);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "unrelated");
     }
 
     #[test]

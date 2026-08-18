@@ -1371,6 +1371,7 @@ mod tests {
                 commands: Some(vec![
                     "cd repo && DOCKER_DEFAULT_PLATFORM=${{ DOCKER_DEFAULT_PLATFORM }} ./run.sh --new".to_string(),
                 ]),
+                depends_on_gits: None,
             }]),
             gits: vec![],
             variables: Some(vars),
@@ -1457,6 +1458,7 @@ mod tests {
                 depends_on: None,
                 sentinel: Some("opt/.my-tool-installed".to_string()),
                 commands: Some(vec!["echo install".to_string()]),
+                depends_on_gits: None,
             }]),
             gits: vec![git_config],
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -1521,6 +1523,7 @@ mod tests {
                 depends_on: None,
                 sentinel: Some("opt/.my-tool-installed".to_string()),
                 commands: Some(vec!["echo install".to_string()]),
+                depends_on_gits: None,
             }]),
             gits: vec![git_config],
             makefile_include: Some(config::MakefileInclude::Legacy(vec![

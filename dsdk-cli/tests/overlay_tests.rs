@@ -59,11 +59,20 @@ fn new_toolchain(name: &str) -> ToolchainConfig {
 }
 
 fn new_install(name: &str, depends_on: Option<Vec<&str>>) -> InstallConfig {
+    new_install_with_gits(name, depends_on, None)
+}
+
+fn new_install_with_gits(
+    name: &str,
+    depends_on: Option<Vec<&str>>,
+    depends_on_gits: Option<Vec<&str>>,
+) -> InstallConfig {
     InstallConfig {
         name: name.to_string(),
         depends_on: depends_on.map(|v| v.into_iter().map(String::from).collect()),
         sentinel: None,
         commands: None,
+        depends_on_gits: depends_on_gits.map(|v| v.into_iter().map(String::from).collect()),
     }
 }
 
@@ -614,6 +623,33 @@ fn test_validate_dependencies_dangling_install_depends_on() {
 
     let err = validate_dependencies(&config).unwrap_err();
     assert!(err.contains("missing-install"));
+}
+
+#[test]
+fn test_validate_dependencies_allows_known_git_in_depends_on_gits() {
+    let mut config = create_minimal_sdk_config();
+    config.gits = vec![new_git("app", "https://example.com/app.git", "main")];
+    config.install = Some(vec![new_install_with_gits(
+        "app-python-deps",
+        None,
+        Some(vec!["app"]),
+    )]);
+
+    assert!(validate_dependencies(&config).is_ok());
+}
+
+#[test]
+fn test_validate_dependencies_dangling_depends_on_gits() {
+    let mut config = create_minimal_sdk_config();
+    config.install = Some(vec![new_install_with_gits(
+        "app-python-deps",
+        None,
+        Some(vec!["missing-git"]),
+    )]);
+
+    let err = validate_dependencies(&config).unwrap_err();
+    assert!(err.contains("app-python-deps"));
+    assert!(err.contains("missing-git"));
 }
 
 // ---------------------------------------------------------------------

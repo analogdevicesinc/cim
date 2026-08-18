@@ -640,16 +640,18 @@ pub fn apply_overlay(
 }
 
 /// Validate that every `build_depends_on`/`git_depends_on` (gits) and
-/// `depends_on` (install) reference resolves to an existing entry in the
-/// final, fully-merged configuration. Collects every dangling reference into
-/// a single error rather than failing on the first one, so a manifest author
-/// can fix them all in one pass.
+/// `depends_on`/`depends_on_gits` (install) reference resolves to an
+/// existing entry in the final, fully-merged configuration. Collects every
+/// dangling reference into a single error rather than failing on the first
+/// one, so a manifest author can fix them all in one pass.
 ///
 /// `build_depends_on` is emitted verbatim as a Makefile prerequisite (see
 /// `makefile::add_makefile_target`), so besides other git names it may also
 /// legitimately reference a phase target (`sdk-envsetup`, `sdk-build`, ...)
 /// or an install target (`install-<name>`); both are accepted here.
-/// `git_depends_on` (clone ordering) only makes sense against other gits.
+/// `git_depends_on` (clone ordering) only makes sense against other gits, as
+/// does `depends_on_gits` (install-step git linkage, used later to prune
+/// install steps whose gits were filtered out by group/pattern selection).
 pub fn validate_dependencies(config: &SdkConfig) -> Result<(), String> {
     let git_names: std::collections::HashSet<&str> =
         config.gits.iter().map(|g| g.name.as_str()).collect();
@@ -697,6 +699,16 @@ pub fn validate_dependencies(config: &SdkConfig) -> Result<(), String> {
                     if !install_names.contains(dep.as_str()) {
                         errors.push(format!(
                             "install '{}': depends_on references unknown install target '{}'",
+                            install.name, dep
+                        ));
+                    }
+                }
+            }
+            if let Some(deps) = &install.depends_on_gits {
+                for dep in deps {
+                    if !git_names.contains(dep.as_str()) {
+                        errors.push(format!(
+                            "install '{}': depends_on_gits references unknown git '{}'",
                             install.name, dep
                         ));
                     }
