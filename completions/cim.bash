@@ -21,10 +21,11 @@
 #   - update: --no-mirror, --mirror, --match, --include-group, --exclude-group,
 #             --all, --verbose (-v), --cert-validation
 #   - foreach: command, --match, --include-group, --exclude-group
-#   - makefile: --no-dividers, --no-includes
+#   - makefile: --no-dividers, --include-group, --exclude-group, --no-includes
 #   - add: --name (-n), --url (-u), --commit
 #   - install os-deps: --yes (-y), --no-sudo
-#   - install pip: --profile (-p), --force (-f), --symlink, --list-profiles
+#   - install pip: --profile (-p), --force (-f), --symlink, --list-profiles,
+#                  --include-group, --exclude-group
 #   - install toolchains: --force (-f), --symlink, --verbose (-v), --cert-validation
 #   - install tools: name, --list, --all, --force (-f)
 #   - docs create: --force (-f), --theme, --symlink, --verbose, --cert-validation
@@ -262,8 +263,12 @@ _cim_completions() {
                     COMPREPLY=( $(compgen -W "${repo_names}" -- "${cur}") )
                     return 0
                     ;;
+                --include-group|--exclude-group)
+                    _complete_groups
+                    return 0
+                    ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--no-dividers --no-includes --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--no-dividers --include-group --exclude-group --no-includes --help" -- "${cur}") )
                     return 0
                     ;;
             esac
@@ -301,11 +306,15 @@ _cim_completions() {
                         COMPREPLY=( $(compgen -W "minimal docs dev full" -- "${cur}") )
                         return 0
                         ;;
+                    --include-group|--exclude-group)
+                        _complete_groups
+                        return 0
+                        ;;
                     pip)
-                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --include-group --exclude-group --help" -- "${cur}") )
                         ;;
                     *)
-                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --include-group --exclude-group --help" -- "${cur}") )
                         ;;
                 esac
             elif [ "${COMP_WORDS[2]}" = "toolchains" ]; then

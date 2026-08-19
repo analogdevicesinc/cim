@@ -278,8 +278,17 @@ set by `build_folder` (default: `build/`) and added as `-include`
 directives automatically.
 
 ```bash
-cim makefile [--no-dividers]
+cim makefile [--no-dividers] [--include-group NAMES] [--exclude-group NAMES]
 ```
+
+- `--include-group NAMES` / `--exclude-group NAMES`: same group filtering
+  as `init` (see [Repository Groups](#repository-groups)). If neither is
+  passed, the group filter stored in the workspace by `cim init`/`cim
+  update` is reused, so the generated Makefile's git targets and
+  `install-all` step stay consistent with whichever repositories are
+  actually present in the workspace. `install:` steps whose
+  `depends_on_gits` names a git excluded this way are pruned from the
+  Makefile — see `depends_on_gits` in the `install:` section below.
 
 To suppress auto-discovered per-git `build/<name>.mk` fragments for
 specific repositories, add an `exclude` list to the `makefile_include`
@@ -356,8 +365,10 @@ gits:
 
 A repository with no `group:` set implicitly belongs to the `default`
 group. `--include-group`/`--exclude-group` (accepted by `init`, `update`,
-and `foreach`) take comma-separated group names and filter which
-repositories are cloned, updated, or targeted:
+`foreach`, `makefile`, and `install pip`) take comma-separated group
+names and filter which repositories are cloned, updated, targeted,
+included in the generated Makefile, or have their per-repo Python deps
+installed:
 
 ```bash
 cim init -t my-sdk --include-group docs
@@ -393,15 +404,22 @@ cim install os-deps [--yes] [--no-sudo] [--yes]
 
 ```bash
 cim install pip [--profile PROFILE] [--symlink] [--force]
+                [--include-group NAMES] [--exclude-group NAMES]
 # Example: cim install pip --profile dev,docs
 ```
 
 This installs from two sources:
 
 - **Per-git deps** declared via `python-deps:` on `gits:` entries in `sdk.yml`,
-  each installed into an isolated venv at `.cim/<git>/.venv`.
+  each installed into an isolated venv at `.cim/<git>/.venv`. `--include-group`/
+  `--exclude-group` filter which repositories' deps are installed here (see
+  [Repository Groups](#repository-groups)); if neither is passed, the group
+  filter stored in the workspace by `cim init`/`cim update` is reused, so this
+  never reaches into a checkout that was deliberately excluded and doesn't
+  exist.
 - **Shared workspace deps** from `python-dependencies.yml` profiles, installed
-  into `<workspace>/.venv` (selected with `--profile`).
+  into `<workspace>/.venv` (selected with `--profile`). Group filtering does
+  not apply here — these are workspace-wide, not per-repo.
 
 If [`uv`](https://docs.astral.sh/uv/) is on `PATH` it is used as a faster
 backend; otherwise cim falls back to `python3 -m venv` and `pip`. The resulting
