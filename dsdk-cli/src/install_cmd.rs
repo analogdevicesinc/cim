@@ -728,10 +728,11 @@ pub(crate) fn ensure_docs_dependencies(
 }
 
 /// Resolve a workspace path from an optional override, falling back to the
-/// current workspace, and verify a virtual environment exists in it.
+/// current workspace, and verify a virtual environment exists in it. Returns
+/// the resolved workspace path alongside its venv's python interpreter.
 fn resolve_venv_python(
     workspace_path_override: Option<&Path>,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
+) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
     let workspace_path = match workspace_path_override {
         Some(path) => path.to_path_buf(),
         None => match get_current_workspace() {
@@ -750,15 +751,24 @@ fn resolve_venv_python(
         );
     }
 
-    Ok(get_venv_python_path(&workspace_path))
+    let venv_python = get_venv_python_path(&workspace_path);
+    Ok((workspace_path, venv_python))
 }
 
 /// Run a pip install into the given venv with the supplied trailing arguments
 /// (package specifiers and/or `-r <file>` pairs). Prefers `uv` when available,
 /// otherwise invokes pip directly inside the venv with the trusted-host flags.
+///
+/// `cwd` is set as the subprocess's working directory. This matters because
+/// requirements files may contain local relative-path package specs and both
+/// `uv` and `pip` resolve such paths relative to the invoking process's cwd,
+/// not relative to the requirements file's own location. Without pinning `cwd`
+/// explicitly, resolution would depend on whatever directory the user happened
+/// to invoke `cim` from.
 fn run_pip_install(
     venv_python: &Path,
     install_args: &[String],
+    cwd: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let status = if uv_available() {
         messages::status(&format!(
@@ -770,6 +780,7 @@ fn run_pip_install(
             .args(["pip", "install", "--python"])
             .arg(venv_python)
             .args(install_args)
+            .current_dir(cwd)
             .status()
             .map_err(|e| {
                 format!(
@@ -792,6 +803,7 @@ fn run_pip_install(
             .arg("--trusted-host")
             .arg("files.pythonhosted.org")
             .args(install_args)
+            .current_dir(cwd)
             .status()
             .map_err(|e| {
                 format!(
@@ -822,13 +834,13 @@ pub(crate) fn install_pip_packages(
         return Ok(());
     }
 
-    let venv_python = resolve_venv_python(workspace_path_override)?;
+    let (workspace_path, venv_python) = resolve_venv_python(workspace_path_override)?;
     messages::verbose(&format!(
         "Using virtual environment python: {}",
         venv_python.display()
     ));
 
-    run_pip_install(&venv_python, packages)?;
+    run_pip_install(&venv_python, packages, &workspace_path)?;
 
     messages::success("Successfully installed Python packages in virtual environment");
     Ok(())
@@ -868,7 +880,7 @@ pub(crate) fn install_pip_requirements(
         return Ok(());
     }
 
-    let venv_python = resolve_venv_python(Some(workspace_path))?;
+    let (_, venv_python) = resolve_venv_python(Some(workspace_path))?;
     let install_args = build_requirements_args(requirements, workspace_path)?;
 
     messages::verbose(&format!(
@@ -876,7 +888,7 @@ pub(crate) fn install_pip_requirements(
         venv_python.display()
     ));
 
-    run_pip_install(&venv_python, &install_args)?;
+    run_pip_install(&venv_python, &install_args, workspace_path)?;
 
     messages::success("Successfully installed Python requirements in virtual environment");
     Ok(())
@@ -941,7 +953,7 @@ pub(crate) fn install_git_python_deps(
         git_name,
         venv_path.display()
     ));
-    run_pip_install(&venv_python, &install_args)?;
+    run_pip_install(&venv_python, &install_args, workspace_path)?;
 
     messages::success(&format!(
         "Successfully installed Python requirements for '{}'",
