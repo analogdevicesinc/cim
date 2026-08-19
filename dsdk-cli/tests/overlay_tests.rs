@@ -306,7 +306,7 @@ fn test_merge_install_own_remove_modify() {
         modify: vec![InstallPatch {
             name: "b".to_string(),
             depends_on: None,
-            sentinel: Some(".cim/.b-installed".to_string()),
+            sentinel: Some(true),
             commands: None,
         }],
     };
@@ -316,7 +316,8 @@ fn test_merge_install_own_remove_modify() {
         .unwrap();
     assert_eq!(merged.len(), 2);
     let b = merged.iter().find(|i| i.name == "b").unwrap();
-    assert_eq!(b.sentinel.as_deref(), Some(".cim/.b-installed"));
+    assert_eq!(b.sentinel, Some(true));
+    assert_eq!(b.sentinel_path().as_deref(), Some(".cim/b-installed"));
     let c = merged.iter().find(|i| i.name == "c").unwrap();
     assert_eq!(c.depends_on, Some(vec!["b".to_string()]));
 }

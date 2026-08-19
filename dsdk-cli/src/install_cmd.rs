@@ -194,7 +194,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             if *list {
                 messages::status("Available install targets:");
                 for install_cfg in install_configs {
-                    let sentinel_info = if let Some(ref sentinel) = install_cfg.sentinel {
+                    let sentinel_info = if let Some(sentinel) = install_cfg.sentinel_path() {
                         format!(" (sentinel: {})", sentinel)
                     } else {
                         String::new()
@@ -237,7 +237,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                         .iter()
                         .find(|cfg| cfg.name == *component_name)
                     {
-                        if let Some(ref sentinel) = install_cfg.sentinel {
+                        if let Some(sentinel) = install_cfg.sentinel_path() {
                             let sentinel_path = workspace_path.join(sentinel);
                             if sentinel_path.exists() {
                                 if let Err(e) = std::fs::remove_file(&sentinel_path) {

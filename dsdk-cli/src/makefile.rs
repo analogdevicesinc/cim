@@ -729,8 +729,9 @@ pub(crate) fn add_install_target(makefile: &mut String, install: &config::Instal
         makefile.push_str(&format!("install-{}: {}\n", install.name, dep_str));
     }
 
-    // If sentinel is specified, wrap commands in check
-    if let Some(sentinel) = &install.sentinel {
+    // If sentinel is enabled, wrap commands in check
+    if let Some(sentinel) = install.sentinel_path() {
+        let sentinel = &sentinel;
         makefile.push_str(&format!("\t@if [ ! -f {} ]; then \\\n", sentinel));
         makefile.push_str(&format!("\t  echo 'Installing {}...'; \\\n", install.name));
 
@@ -1367,7 +1368,7 @@ mod tests {
             install: Some(vec![config::InstallConfig {
                 name: "devcontainer".to_string(),
                 depends_on: None,
-                sentinel: Some("opt/.devcontainer-installed".to_string()),
+                sentinel: Some(true),
                 commands: Some(vec![
                     "cd repo && DOCKER_DEFAULT_PLATFORM=${{ DOCKER_DEFAULT_PLATFORM }} ./run.sh --new".to_string(),
                 ]),
@@ -1456,7 +1457,7 @@ mod tests {
             install: Some(vec![config::InstallConfig {
                 name: "my-tool".to_string(),
                 depends_on: None,
-                sentinel: Some("opt/.my-tool-installed".to_string()),
+                sentinel: Some(true),
                 commands: Some(vec!["echo install".to_string()]),
                 depends_on_gits: None,
             }]),
@@ -1521,7 +1522,7 @@ mod tests {
             install: Some(vec![config::InstallConfig {
                 name: "my-tool".to_string(),
                 depends_on: None,
-                sentinel: Some("opt/.my-tool-installed".to_string()),
+                sentinel: Some(true),
                 commands: Some(vec!["echo install".to_string()]),
                 depends_on_gits: None,
             }]),

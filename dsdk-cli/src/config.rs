@@ -42,6 +42,32 @@ where
     })
 }
 
+/// Custom deserializer for the `install:` `sentinel:` field. It accepts a
+/// YAML boolean (`true`/`false`) or, for backward compatibility with older
+/// sdk.yml files, an arbitrary string path -- any such string is treated as
+/// enabling the sentinel (its actual content is ignored; the sentinel file
+/// name is always derived from the install step's `name`), except for the
+/// literal string `"false"` (case-insensitive), which disables it just like
+/// the boolean `false`.
+pub(crate) fn deserialize_sentinel_flag<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SentinelValue {
+        Bool(bool),
+        Text(String),
+    }
+
+    Ok(
+        Option::<SentinelValue>::deserialize(deserializer)?.map(|value| match value {
+            SentinelValue::Bool(b) => b,
+            SentinelValue::Text(s) => !s.eq_ignore_ascii_case("false"),
+        }),
+    )
+}
+
 /// Custom deserializer for fields that can be either a sequence of strings or a single multiline string
 /// This allows YAML to use either list format or block scalar format with |
 pub(crate) fn deserialize_string_or_vec<'de, D>(
@@ -394,11 +420,15 @@ pub struct InstallConfig {
     /// Optional dependencies on other install targets
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
-    /// Optional sentinel file path for idempotency check.
-    /// If specified, installation only runs if this file doesn't exist
-    /// and creates it upon successful completion.
-    #[serde(default)]
-    pub sentinel: Option<String>,
+    /// Enables a sentinel file for idempotency: if set (truthy), installation
+    /// only runs if `.cim/<name>-installed` doesn't exist and creates it upon
+    /// successful completion. Accepts a YAML boolean, but for backward
+    /// compatibility with older sdk.yml files an arbitrary string is also
+    /// accepted and treated as `true` (its content is ignored -- the
+    /// sentinel path is always derived from `name`), except the literal
+    /// string `"false"`, which behaves like the boolean `false`.
+    #[serde(default, deserialize_with = "deserialize_sentinel_flag")]
+    pub sentinel: Option<bool>,
     /// Installation commands to execute
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub commands: Option<Vec<String>>,
@@ -412,6 +442,20 @@ pub struct InstallConfig {
     /// `install: remove:`.
     #[serde(default)]
     pub depends_on_gits: Option<Vec<String>>,
+}
+
+impl InstallConfig {
+    /// The sentinel file path for this install step, relative to the
+    /// workspace root, or `None` if sentinel tracking is disabled. Always
+    /// derived from `name` so callers never need to invent or collide on a
+    /// sentinel file name themselves.
+    pub fn sentinel_path(&self) -> Option<String> {
+        if self.sentinel == Some(true) {
+            Some(format!(".cim/{}-installed", self.name))
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1839,6 +1883,60 @@ gits:
         file.write_all(b"not: yaml: - at all").unwrap();
         let result = load_config(&file_path);
         assert!(result.is_err());
+    }
+
+    fn parse_install(yaml: &str) -> InstallConfig {
+        noyalib::from_str(yaml).expect("install entry should parse")
+    }
+
+    #[test]
+    fn test_sentinel_absent_is_disabled() {
+        let install = parse_install("name: foo\n");
+        assert_eq!(install.sentinel, None);
+        assert_eq!(install.sentinel_path(), None);
+    }
+
+    #[test]
+    fn test_sentinel_bool_true_derives_path_from_name() {
+        let install = parse_install("name: foo\nsentinel: true\n");
+        assert_eq!(install.sentinel, Some(true));
+        assert_eq!(
+            install.sentinel_path().as_deref(),
+            Some(".cim/foo-installed")
+        );
+    }
+
+    #[test]
+    fn test_sentinel_bool_false_is_disabled() {
+        let install = parse_install("name: foo\nsentinel: false\n");
+        assert_eq!(install.sentinel, Some(false));
+        assert_eq!(install.sentinel_path(), None);
+    }
+
+    #[test]
+    fn test_sentinel_legacy_string_is_treated_as_true() {
+        // Backward compatibility: an arbitrary legacy sentinel path string is
+        // treated as a truthy flag; its content is ignored in favor of a
+        // path derived from `name`.
+        let install = parse_install("name: foo\nsentinel: .cim/.foo-installed\n");
+        assert_eq!(install.sentinel, Some(true));
+        assert_eq!(
+            install.sentinel_path().as_deref(),
+            Some(".cim/foo-installed")
+        );
+    }
+
+    #[test]
+    fn test_sentinel_string_false_is_disabled() {
+        for value in ["false", "FALSE", "False"] {
+            let install = parse_install(&format!("name: foo\nsentinel: \"{value}\"\n"));
+            assert_eq!(
+                install.sentinel,
+                Some(false),
+                "value {value} should disable sentinel"
+            );
+            assert_eq!(install.sentinel_path(), None);
+        }
     }
 
     #[test]

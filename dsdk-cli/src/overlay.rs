@@ -102,8 +102,8 @@ pub struct InstallPatch {
     pub name: String,
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
-    #[serde(default)]
-    pub sentinel: Option<String>,
+    #[serde(default, deserialize_with = "crate::config::deserialize_sentinel_flag")]
+    pub sentinel: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub commands: Option<Vec<String>>,
 }
@@ -288,7 +288,7 @@ fn apply_install_patch(target: &mut InstallConfig, patch: &InstallPatch) {
         target.depends_on = patch.depends_on.clone();
     }
     if patch.sentinel.is_some() {
-        target.sentinel = patch.sentinel.clone();
+        target.sentinel = patch.sentinel;
     }
     if patch.commands.is_some() {
         target.commands = patch.commands.clone();

@@ -743,9 +743,14 @@ copy_files:
 # Triggered by the "install tools" command. Can be used to setup and install
 # arbitrary tools, files and binaries.
 #
-# sentinel: is an optional file that is created after successful installation.
-#           If the sentinel file exists, the installation step will be skipped
-#           on subsequent runs.
+# sentinel: is an optional boolean. If true, a sentinel file
+#           (.cim/<name>-installed) is created after successful installation;
+#           if that file exists, the step is skipped on subsequent runs. The
+#           path is always derived from the step's name -- it cannot be
+#           customized. Omit or set to false to disable sentinel tracking.
+#           For backward compatibility, an arbitrary string (the old way of
+#           specifying a custom sentinel path) is still accepted and treated
+#           as true, except for the literal string "false".
 # depends_on: other install target names that must run first.
 # depends_on_gits: git name(s) (from the gits: section below) this step
 #           needs cloned. If any named git is missing from the final,
@@ -765,14 +770,14 @@ install:
       @mkdir -p opt/protoc bin
       @cd opt/protoc && unzip -q -o ../../downloads/protoc-21.7-linux-x86_64.zip
       @ln -sf ../opt/protoc/bin/protoc bin/protoc
-    sentinel: .sdk/protoc.installed
+    sentinel: true
 
   - name: zephyr-python-deps
     depends_on_gits:
       - zephyr
     commands:
       - . .venv/bin/activate && pip install -r zephyr/scripts/requirements-base.txt
-    sentinel: .cim/.zephyr-python-deps-installed
+    sentinel: true
 
 
 ################################################################################
