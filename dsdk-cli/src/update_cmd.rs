@@ -839,7 +839,13 @@ pub(crate) fn handle_existing_workspace_repo(
     repo_path: &Path,
     mirror_path: Option<&Path>,
 ) -> bool {
-    let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+    // For PR refs, we need all refs (not just heads/tags)
+    let is_pr = git_operations::is_pull_request_ref(&git_cfg.commit);
+    let refs = if is_pr {
+        git_operations::ls_remote(&git_cfg.url, false, false).unwrap_or_default()
+    } else {
+        git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default()
+    };
     let (fetch_refspec, update_ref_name, sha) =
         git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
     let target = sha.unwrap_or_else(|| git_cfg.commit.clone());
@@ -952,20 +958,34 @@ pub(crate) fn handle_existing_workspace_repo(
                         }
                     }
                 } else {
-                    // For tags and specific commits, use the exact reference
-                    let checkout_result = git_operations::checkout(repo_path, &git_cfg.commit);
+                    // For tags, specific commits, and PR refs, use the exact reference
+                    // For PR refs (pull/N/head), we need to checkout the resolved SHA
+                    // since the ref isn't stored locally after fetch
+                    let checkout_target = if git_operations::is_pull_request_ref(&git_cfg.commit) {
+                        target.clone()
+                    } else {
+                        git_cfg.commit.clone()
+                    };
+                    let checkout_result = git_operations::checkout(repo_path, &checkout_target);
                     match checkout_result {
                         Ok(result) if result.is_success() => {
-                            messages::success(&format!(
-                                "{} (pinned to {})",
-                                git_cfg.name, git_cfg.commit
-                            ));
+                            if git_operations::is_pull_request_ref(&git_cfg.commit) {
+                                messages::success(&format!(
+                                    "{} (PR {} at {})",
+                                    git_cfg.name, git_cfg.commit, &checkout_target[..8.min(checkout_target.len())]
+                                ));
+                            } else {
+                                messages::success(&format!(
+                                    "{} (pinned to {})",
+                                    git_cfg.name, git_cfg.commit
+                                ));
+                            }
                             true
                         }
                         _ => {
                             messages::error(&format!(
                                 "{} (failed to checkout {})",
-                                git_cfg.name, git_cfg.commit
+                                git_cfg.name, checkout_target
                             ));
                             false
                         }
@@ -1032,7 +1052,13 @@ pub(crate) fn clone_repo_to_workspace(
             }
 
             spinner.set_action(&git_cfg.name, "resolving refs…");
-            let refs = git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default();
+            // For PR refs, we need all refs (not just heads/tags)
+            let is_pr = git_operations::is_pull_request_ref(&git_cfg.commit);
+            let refs = if is_pr {
+                git_operations::ls_remote(&git_cfg.url, false, false).unwrap_or_default()
+            } else {
+                git_operations::ls_remote(&git_cfg.url, true, true).unwrap_or_default()
+            };
             let (fetch_refspec, update_ref_name, sha) =
                 git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
             let target_sha = sha.unwrap_or_else(|| git_cfg.commit.clone());
@@ -1123,6 +1149,57 @@ pub(crate) fn clone_repo_to_workspace(
 
 /// Checkout the specified commit for a repository
 pub(crate) fn checkout_commit(git_cfg: &config::GitConfig, repo_path: &Path) -> bool {
+    // Handle PR refs specially - they need to fetch and checkout by SHA since the ref isn't local
+    if git_operations::is_pull_request_ref(&git_cfg.commit) {
+        // Get the SHA from ls_remote
+        let refs = git_operations::ls_remote(&git_cfg.url, false, false).unwrap_or_default();
+        let full_ref = git_operations::normalize_pr_ref(&git_cfg.commit);
+        let sha = refs
+            .iter()
+            .find(|(_, r)| r == &full_ref)
+            .map(|(s, _)| s.clone());
+
+        let checkout_target = sha.clone().unwrap_or_else(|| git_cfg.commit.clone());
+
+        // Fetch the PR ref from origin - the cloned repo may not have this commit
+        let fetch_ok = git_operations::fetch_ref(repo_path, "origin", &full_ref, Some(1))
+            .is_ok_and(|r| r.is_success());
+        
+        if !fetch_ok {
+            messages::error(&format!(
+                "{} (failed to fetch PR {})",
+                git_cfg.name, git_cfg.commit
+            ));
+            return false;
+        }
+
+        // Use FETCH_HEAD if we couldn't resolve SHA, otherwise use SHA
+        let target = if sha.is_some() {
+            checkout_target
+        } else {
+            "FETCH_HEAD".to_string()
+        };
+
+        let output = git_operations::checkout(repo_path, &target);
+
+        return match output {
+            Ok(result) if result.is_success() => {
+                messages::success(&format!(
+                    "{} (cloned PR {} at {})",
+                    git_cfg.name, git_cfg.commit, &target[..8.min(target.len())]
+                ));
+                true
+            }
+            _ => {
+                messages::error(&format!(
+                    "{} (cloned, but failed to checkout PR {})",
+                    git_cfg.name, git_cfg.commit
+                ));
+                false
+            }
+        };
+    }
+
     // Check if the commit is a branch reference
     if is_branch_reference(repo_path, &git_cfg.commit) {
         // For branches, get the latest commit and checkout that
