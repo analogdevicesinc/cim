@@ -321,6 +321,37 @@ impl VenvManager {
     fn create_venv_direct(&self, force: bool) -> Result<(), Box<dyn std::error::Error>> {
         let venv_path = self.workspace_path.join(".venv");
 
+        // Check whether an existing `.venv` is actually a symlink (e.g. left over from an
+        // earlier `--symlink` install pointing into the shared mirror). `Path::exists()`
+        // follows symlinks, so it alone can't tell a real local venv apart from a stale
+        // symlink into someone else's cache — check the link itself first.
+        if let Ok(metadata) = std::fs::symlink_metadata(&venv_path) {
+            if metadata.file_type().is_symlink() {
+                if force {
+                    messages::info(&format!(
+                        "Virtual environment symlink exists at {}, removing due to --force",
+                        venv_path.display()
+                    ));
+                    if let Err(e) = std::fs::remove_file(&venv_path) {
+                        return Err(format!("Failed to remove existing symlink: {}", e).into());
+                    }
+                } else {
+                    let target = std::fs::read_link(&venv_path)
+                        .map(|t| t.display().to_string())
+                        .unwrap_or_else(|_| "<unknown>".to_string());
+                    return Err(format!(
+                        "{} is a symlink to {} (likely from an earlier `--symlink` install), not a real virtual environment. \
+                         Use --force to replace it with a local venv, or --symlink to keep using the shared one.",
+                        venv_path.display(),
+                        target
+                    )
+                    .into());
+                }
+
+                return run_python_venv_creation(&self.workspace_path);
+            }
+        }
+
         // Check if venv already exists
         if venv_path.exists() {
             if force {
@@ -1557,6 +1588,59 @@ mod tests {
         let venv_path = workspace_path.join(".venv");
         fs::create_dir_all(&venv_path).expect("Failed to create venv dir");
         assert!(!venv_exists(&workspace_path));
+    }
+
+    #[test]
+    fn test_create_venv_direct_stale_symlink_without_force_errors() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let (_mirror_temp_dir, mirror_path) = create_test_workspace();
+
+        // Simulate a `.venv` left over from an earlier `--symlink` install: a real venv
+        // dir in the mirror, symlinked into the workspace.
+        let mirror_venv_path = mirror_path.join(".venv");
+        fs::create_dir_all(&mirror_venv_path).expect("Failed to create mirror venv dir");
+        let workspace_venv_path = workspace_path.join(".venv");
+        std::os::unix::fs::symlink(&mirror_venv_path, &workspace_venv_path)
+            .expect("Failed to create symlink fixture");
+
+        let manager = VenvManager::new(workspace_path.clone(), mirror_path.clone());
+        let result = manager.create_venv_direct(false);
+
+        assert!(result.is_err());
+        let err_message = result.unwrap_err().to_string();
+        assert!(
+            err_message.contains("symlink"),
+            "expected error to mention the symlink, got: {}",
+            err_message
+        );
+
+        // The stale symlink must be left untouched, not silently trusted.
+        let metadata =
+            fs::symlink_metadata(&workspace_venv_path).expect("workspace .venv should exist");
+        assert!(metadata.file_type().is_symlink());
+    }
+
+    #[test]
+    fn test_create_venv_direct_stale_symlink_with_force_replaces() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let (_mirror_temp_dir, mirror_path) = create_test_workspace();
+
+        let mirror_venv_path = mirror_path.join(".venv");
+        fs::create_dir_all(&mirror_venv_path).expect("Failed to create mirror venv dir");
+        let workspace_venv_path = workspace_path.join(".venv");
+        std::os::unix::fs::symlink(&mirror_venv_path, &workspace_venv_path)
+            .expect("Failed to create symlink fixture");
+
+        let manager = VenvManager::new(workspace_path.clone(), mirror_path.clone());
+        let result = manager.create_venv_direct(true);
+
+        assert!(result.is_ok(), "expected success, got: {:?}", result);
+
+        // The symlink must be gone, replaced by a real local venv.
+        let metadata =
+            fs::symlink_metadata(&workspace_venv_path).expect("workspace .venv should exist");
+        assert!(!metadata.file_type().is_symlink());
+        assert!(venv_exists(&workspace_path));
     }
 
     #[test]
