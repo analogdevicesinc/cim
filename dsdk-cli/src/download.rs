@@ -63,7 +63,7 @@ pub fn copy_yaml_files_from_local(
     for (filename, source_path) in files_to_copy {
         // Skip if source doesn't exist
         if !source_path.exists() {
-            messages::info(&format!(
+            messages::verbose(&format!(
                 "{} not found, skipping copy",
                 source_path.display()
             ));
