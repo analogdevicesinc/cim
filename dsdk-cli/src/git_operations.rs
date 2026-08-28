@@ -16,8 +16,11 @@
 
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct GitResult {
@@ -32,8 +35,27 @@ impl GitResult {
     }
 }
 
+// Abort an HTTP(S) transfer if it drops below this average speed for this
+// long, instead of letting a stalled connection block the caller forever.
+const GIT_LOW_SPEED_LIMIT_ARG: &str = "http.lowSpeedLimit=1000";
+const GIT_LOW_SPEED_TIME_ARG: &str = "http.lowSpeedTime=30";
+
+// Backstop for hangs the low-speed check above can't see (non-HTTP
+// transports, a stall before any bytes flow, credential-helper weirdness).
+// A single git subprocess can never wedge the mirror-sync thread pool past
+// this, no matter what.
+const GIT_COMMAND_HARD_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// Execute git command with consistent error handling
 pub fn git_command(args: &[&str], cwd: Option<&Path>) -> Result<GitResult> {
+    git_command_with_timeout(args, cwd, GIT_COMMAND_HARD_TIMEOUT)
+}
+
+fn git_command_with_timeout(
+    args: &[&str],
+    cwd: Option<&Path>,
+    hard_timeout: Duration,
+) -> Result<GitResult> {
     // Print verbose output showing the full command
     if crate::messages::is_verbose() {
         let cmd_str = format!("git {}", args.join(" "));
@@ -45,6 +67,7 @@ pub fn git_command(args: &[&str], cwd: Option<&Path>) -> Result<GitResult> {
     }
 
     let mut cmd = Command::new("git");
+    cmd.args(["-c", GIT_LOW_SPEED_LIMIT_ARG, "-c", GIT_LOW_SPEED_TIME_ARG]);
     cmd.args(args);
 
     // Disable interactive authentication prompts (fixes Windows /dev/tty issue)
@@ -56,14 +79,63 @@ pub fn git_command(args: &[&str], cwd: Option<&Path>) -> Result<GitResult> {
         cmd.current_dir(dir);
     }
 
-    let output = cmd
-        .output()
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
         .map_err(|e| anyhow!("Failed to execute git {}: {}", args.join(" "), e))?;
 
+    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
+    let stdout_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        buf
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|e| anyhow!("Failed waiting for git {}: {}", args.join(" "), e))?
+        {
+            break status;
+        }
+        if start.elapsed() > hard_timeout {
+            // Kill and reap the direct child, but don't wait on the reader
+            // threads: a grandchild the command spawned (e.g. a remote
+            // helper) may have inherited the pipe write end and could keep
+            // it open long after the direct child is gone. We're discarding
+            // this command's output anyway, so let those threads finish on
+            // their own time.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!(
+                "git {} timed out after {}s and was killed",
+                args.join(" "),
+                hard_timeout.as_secs()
+            ));
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+
+    let stdout = stdout_handle
+        .join()
+        .map_err(|_| anyhow!("git {} stdout reader thread panicked", args.join(" ")))?;
+    let stderr = stderr_handle
+        .join()
+        .map_err(|_| anyhow!("git {} stderr reader thread panicked", args.join(" ")))?;
+
     Ok(GitResult {
-        success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        success: status.success(),
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
     })
 }
 
@@ -740,6 +812,28 @@ mod tests {
         let result = git_command(&["invalid-command"], None).unwrap();
         assert!(!result.is_success());
         assert!(!result.stderr.is_empty());
+    }
+
+    #[test]
+    fn test_git_command_hard_timeout_kills_hung_process() {
+        // git's `ext::` remote helper transport runs an arbitrary command as
+        // the "transport" -- `sleep 5` blocks for 5s with zero network I/O,
+        // giving a deterministic hang to test the kill path against.
+        let start = Instant::now();
+        let result = git_command_with_timeout(
+            &[
+                "-c",
+                "protocol.ext.allow=always",
+                "ls-remote",
+                "ext::sleep 5",
+            ],
+            None,
+            Duration::from_millis(300),
+        );
+
+        assert!(start.elapsed() < Duration::from_secs(2));
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("timed out"));
     }
 
     #[test]
