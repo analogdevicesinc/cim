@@ -58,6 +58,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             list_profiles,
             include_group,
             exclude_group,
+            cert_validation,
         } => {
             let python_deps_files =
                 dsdk_cli::workspace::discover_dependency_files(&workspace_path, PYTHON_DEPS_FILE);
@@ -115,9 +116,13 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             // workspace venv populated from python-dependencies.yml profiles.
             for git in &filtered_gits {
                 if let Some(reqs) = &git.python_deps {
-                    if let Err(e) =
-                        install_git_python_deps(&workspace_path, &git.name, reqs, *force)
-                    {
+                    if let Err(e) = install_git_python_deps(
+                        &workspace_path,
+                        &git.name,
+                        reqs,
+                        *force,
+                        cert_validation.as_deref(),
+                    ) {
                         messages::error(&format!(
                             "Failed to install Python deps for '{}': {}",
                             git.name, e
@@ -135,6 +140,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                 *symlink,
                 profile.as_deref(),
                 &resolve_mirror(None),
+                cert_validation.as_deref(),
             ) {
                 Ok(true) => {}
                 Ok(false) if !filtered_gits.iter().any(|g| g.python_deps.is_some()) => {
@@ -823,7 +829,7 @@ pub(crate) fn ensure_docs_dependencies(
         "Installing documentation dependencies from {}",
         profile_source
     ));
-    install_pip_packages(&packages, None)?;
+    install_pip_packages(&packages, None, None)?;
     Ok(())
 }
 
@@ -865,20 +871,48 @@ fn resolve_venv_python(
 /// not relative to the requirements file's own location. Without pinning `cwd`
 /// explicitly, resolution would depend on whatever directory the user happened
 /// to invoke `cim` from.
+///
+/// `cert_validation` mirrors the `--cert-validation`/`cert_validation` config
+/// option already used for toolchain downloads (see
+/// `config::get_cert_validation_mode`): "strict" (default) changes nothing
+/// here; "relaxed"/"auto" additionally allow `uv` to skip TLS verification for
+/// the standard PyPI hostnames via `--allow-insecure-host`, matching the trust
+/// boundary the stdlib-`pip` fallback below already applies unconditionally
+/// via `--trusted-host`. Previously `uv` installs had no such override at all,
+/// unlike toolchain downloads.
 fn run_pip_install(
     venv_python: &Path,
     install_args: &[String],
     cwd: &Path,
+    cert_validation: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let (mode, show_warning) = config::get_cert_validation_mode(cert_validation);
+    if show_warning {
+        messages::info(&format!(
+            "cert_validation = \"{}\" (from ~/.config/cim/config.toml) relaxes TLS verification for Python package installs.",
+            mode
+        ));
+    }
+
+    // Standard PyPI hostnames. The stdlib-pip fallback always trusts these;
+    // `uv` is additionally given the same allowance in "relaxed"/"auto" mode.
+    const PYPI_HOSTS: [&str; 3] = ["pypi.org", "pypi.python.org", "files.pythonhosted.org"];
+
     let status = if uv_available() {
+        let mut command = std::process::Command::new("uv");
+        command.args(["pip", "install", "--system-certs", "--python"]);
+        command.arg(venv_python);
+        if mode == "relaxed" || mode == "auto" {
+            for host in PYPI_HOSTS {
+                command.arg("--allow-insecure-host").arg(host);
+            }
+        }
         messages::status(&format!(
-            "Running: uv pip install --python {} {}",
+            "Running: uv pip install --system-certs --python {} {}",
             venv_python.display(),
             install_args.join(" ")
         ));
-        std::process::Command::new("uv")
-            .args(["pip", "install", "--python"])
-            .arg(venv_python)
+        command
             .args(install_args)
             .current_dir(cwd)
             .status()
@@ -897,11 +931,11 @@ fn run_pip_install(
         std::process::Command::new(venv_python)
             .args(["-m", "pip", "install"])
             .arg("--trusted-host")
-            .arg("pypi.org")
+            .arg(PYPI_HOSTS[0])
             .arg("--trusted-host")
-            .arg("pypi.python.org")
+            .arg(PYPI_HOSTS[1])
             .arg("--trusted-host")
-            .arg("files.pythonhosted.org")
+            .arg(PYPI_HOSTS[2])
             .args(install_args)
             .current_dir(cwd)
             .status()
@@ -928,6 +962,7 @@ fn run_pip_install(
 pub(crate) fn install_pip_packages(
     packages: &[String],
     workspace_path_override: Option<&Path>,
+    cert_validation: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if packages.is_empty() {
         messages::info("No Python packages to install");
@@ -940,7 +975,7 @@ pub(crate) fn install_pip_packages(
         venv_python.display()
     ));
 
-    run_pip_install(&venv_python, packages, &workspace_path)?;
+    run_pip_install(&venv_python, packages, &workspace_path, cert_validation)?;
 
     messages::success("Successfully installed Python packages in virtual environment");
     Ok(())
@@ -975,6 +1010,7 @@ fn build_requirements_args(
 pub(crate) fn install_pip_requirements(
     requirements: &[String],
     workspace_path: &Path,
+    cert_validation: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if requirements.is_empty() {
         return Ok(());
@@ -988,7 +1024,7 @@ pub(crate) fn install_pip_requirements(
         venv_python.display()
     ));
 
-    run_pip_install(&venv_python, &install_args, workspace_path)?;
+    run_pip_install(&venv_python, &install_args, workspace_path, cert_validation)?;
 
     messages::success("Successfully installed Python requirements in virtual environment");
     Ok(())
@@ -1007,6 +1043,7 @@ pub(crate) fn install_git_python_deps(
     git_name: &str,
     requirements: &[String],
     force: bool,
+    cert_validation: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if requirements.is_empty() {
         return Ok(());
@@ -1053,7 +1090,7 @@ pub(crate) fn install_git_python_deps(
         git_name,
         venv_path.display()
     ));
-    run_pip_install(&venv_python, &install_args, workspace_path)?;
+    run_pip_install(&venv_python, &install_args, workspace_path, cert_validation)?;
 
     messages::success(&format!(
         "Successfully installed Python requirements for '{}'",
@@ -1112,6 +1149,7 @@ pub(crate) fn install_python_packages_from_file(
     profile_override: Option<&str>,
     workspace_path: &Path,
     mirror_path: &Path,
+    cert_validation: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Load Python dependencies configuration first
     let python_deps = match config::load_python_dependencies(python_deps_path) {
@@ -1221,7 +1259,7 @@ pub(crate) fn install_python_packages_from_file(
             packages.len(),
             profile_names.len()
         ));
-        install_pip_packages(&packages, Some(workspace_path))?;
+        install_pip_packages(&packages, Some(workspace_path), cert_validation)?;
     }
 
     if !requirements.is_empty() {
@@ -1230,7 +1268,7 @@ pub(crate) fn install_python_packages_from_file(
             requirements.len(),
             profile_names.len()
         ));
-        install_pip_requirements(&requirements, workspace_path)?;
+        install_pip_requirements(&requirements, workspace_path, cert_validation)?;
     }
 
     Ok(())
@@ -1295,6 +1333,7 @@ pub(crate) fn install_pip_from_workspace(
     symlink: bool,
     profile_override: Option<&str>,
     mirror_path: &Path,
+    cert_validation: Option<&str>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let files = dsdk_cli::workspace::discover_dependency_files(workspace_path, PYTHON_DEPS_FILE);
     if files.is_empty() {
@@ -1313,6 +1352,7 @@ pub(crate) fn install_pip_from_workspace(
             profile_override,
             workspace_path,
             mirror_path,
+            cert_validation,
         )?;
     }
     Ok(true)

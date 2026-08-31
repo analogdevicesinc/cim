@@ -868,7 +868,7 @@ pub(crate) fn install_pip_packages_if_available(
     for git in &filtered_gits {
         if let Some(reqs) = &git.python_deps {
             messages::status("");
-            install_git_python_deps(workspace_path, &git.name, reqs, false)?;
+            install_git_python_deps(workspace_path, &git.name, reqs, false, None)?;
         }
     }
 
@@ -882,6 +882,7 @@ pub(crate) fn install_pip_packages_if_available(
         symlink,
         None, // profile = None (use each file's own default)
         mirror_path,
+        None, // cert_validation = None (not exposed via `cim init` yet)
     ) {
         Ok(true) => {
             messages::success("Python packages installation completed");

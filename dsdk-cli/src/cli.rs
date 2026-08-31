@@ -489,6 +489,13 @@ pub enum InstallCommand {
             help = "Exclude per-repo Python deps for repositories in these comma-separated group(s)"
         )]
         exclude_group: Option<String>,
+        /// Certificate validation mode for package downloads (strict, relaxed, auto)
+        #[arg(
+            long,
+            value_name = "MODE",
+            help = "Certificate validation: strict (default), relaxed (insecure), auto"
+        )]
+        cert_validation: Option<String>,
     },
     /// Install and extract toolchains
     Toolchains {
