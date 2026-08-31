@@ -732,6 +732,14 @@ flash:
 # sha256: optional checksum for integrity verification. If the checksum does not
 #         match, the file will be re-downloaded (threshold of 3 attempts before
 #         an error is reporterd)
+# headers: list of "Name: value" strings, curl -H style, for URL downloads
+#          that need a custom request header (e.g. an auth token). Values
+#          may reference a host env var via $VAR/${VAR}; if that var is
+#          still unset after expansion, cim fails fast with an error naming
+#          it, before making any request.
+# basic_auth: "user:password" string, curl -u style, for URL downloads that
+#          need HTTP Basic auth. Same $VAR expansion and fail-fast behavior
+#          as headers.
 ################################################################################
 copy_files:
   - source: extra.mk
@@ -742,6 +750,17 @@ copy_files:
     cache: true
     symlink: true
     sha256: 65d1191f755c92d6b7792b1d054cbd3aa6762bb2b0788dedbcaa929497927c98
+
+  - source: https://my-remote-server.com/protected/foobar.tgz
+    dest: downloads/protected-foobar.tgz
+    headers:
+      - "Authorization: Bearer $MY_API_TOKEN"
+    cache: true
+
+  - source: https://my-remote-server.com/generic/foobar.zip
+    dest: downloads/generic-foobar.zip
+    basic_auth: "token:$MY_API_TOKEN"
+    cache: true
 
 
 ################################################################################

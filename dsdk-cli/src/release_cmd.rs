@@ -538,6 +538,12 @@ pub(crate) fn ensure_file_in_mirror(
     if is_url(&copy_file.source) {
         // For URLs, use generate_cache_path to determine where it will be downloaded
         let cache_path = generate_cache_path(&copy_file.source, mirror_path);
+        let headers = copy_file
+            .resolved_headers()
+            .map_err(|e| format!("copy_files entry '{}': {}", copy_file.dest, e))?;
+        let basic_auth = copy_file
+            .resolved_basic_auth()
+            .map_err(|e| format!("copy_files entry '{}': {}", copy_file.dest, e))?;
 
         download_file_with_cache(DownloadConfig {
             url: &copy_file.source,
@@ -546,6 +552,8 @@ pub(crate) fn ensure_file_in_mirror(
             use_cache: copy_file.cache.unwrap_or(false),
             expected_sha256: None, // Don't verify during hash computation
             post_data: copy_file.post_data.as_deref(),
+            headers: &headers,
+            basic_auth: basic_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
             multi_progress: None,
             use_symlink: false, // No symlink for hash computation
         })?;
@@ -1346,6 +1354,19 @@ pub(crate) fn handle_sync_files_hash_command(
             if expected_sha256.is_some() {
                 messages::status("  SHA256 verification: enabled");
             }
+            match copy_file.resolved_headers() {
+                Ok(h) if !h.is_empty() => {
+                    let names: Vec<&str> = h.iter().map(|(n, _)| n.as_str()).collect();
+                    messages::status(&format!("  Header(s): {}", names.join(", ")));
+                }
+                Ok(_) => {}
+                Err(e) => messages::status(&format!("  Header(s): would fail -- {}", e)),
+            }
+            match copy_file.resolved_basic_auth() {
+                Ok(Some(_)) => messages::status("  Basic auth: enabled (credentials redacted)"),
+                Ok(None) => {}
+                Err(e) => messages::status(&format!("  Basic auth: would fail -- {}", e)),
+            }
             synced_count += 1;
             continue;
         }
@@ -1361,6 +1382,23 @@ pub(crate) fn handle_sync_files_hash_command(
         }
 
         // Download the file
+        let headers = match copy_file.resolved_headers() {
+            Ok(h) => h,
+            Err(e) => {
+                messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
+                failed_count += 1;
+                continue;
+            }
+        };
+        let basic_auth = match copy_file.resolved_basic_auth() {
+            Ok(a) => a,
+            Err(e) => {
+                messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
+                failed_count += 1;
+                continue;
+            }
+        };
+
         match download_file_with_cache(DownloadConfig {
             url: &copy_file.source,
             dest_path: &dest_path,
@@ -1368,6 +1406,8 @@ pub(crate) fn handle_sync_files_hash_command(
             use_cache,
             expected_sha256: expected_sha256.as_deref(),
             post_data: copy_file.post_data.as_deref(),
+            headers: &headers,
+            basic_auth: basic_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
             multi_progress: None,
             use_symlink,
         }) {
@@ -1879,6 +1919,8 @@ gits:
             symlink: None,
             sha256: None,
             post_data: None,
+            headers: None,
+            basic_auth: None,
         };
 
         let result = ensure_file_in_mirror(&copy_file, temp_dir.path(), mirror_dir.path());
@@ -1907,6 +1949,8 @@ gits:
             symlink: None,
             sha256: None,
             post_data: None,
+            headers: None,
+            basic_auth: None,
         };
 
         let result = ensure_file_in_mirror(&copy_file, temp_dir.path(), mirror_dir.path());

@@ -566,6 +566,60 @@ pub struct CopyFileConfig {
     /// Optional: create symlink instead of copying when cache is true
     #[serde(default)]
     pub symlink: Option<bool>,
+    /// Optional: custom HTTP header(s), curl `-H` style ("Name: value").
+    /// Values may reference a host env var via `$VAR`/`${VAR}`. Use
+    /// `resolved_headers()` to expand + validate before use -- never send
+    /// `headers` directly, they may still contain an unexpanded `$VAR`.
+    #[serde(default)]
+    pub headers: Option<Vec<String>>,
+    /// Optional: HTTP Basic auth, curl `-u` style ("user:password"). Same
+    /// expansion contract as `headers`, via `resolved_basic_auth()`.
+    #[serde(default)]
+    pub basic_auth: Option<String>,
+}
+
+impl CopyFileConfig {
+    /// Expand env vars in each `headers:` entry and split "Name: value"
+    /// into a `(name, value)` tuple. Returns `Err` naming the specific
+    /// unresolved `$VAR`/`${VAR}` if the referenced env var is not set, or
+    /// naming a malformed entry missing the `:` separator. Never touches
+    /// the network.
+    pub fn resolved_headers(&self) -> Result<Vec<(String, String)>, String> {
+        let mut out = Vec::new();
+        for raw in self.headers.iter().flatten() {
+            let expanded = workspace::expand_env_vars(raw);
+            if let Some(var) = workspace::find_unresolved_env_var_name(&expanded) {
+                return Err(format!(
+                    "header '{}' references environment variable '{}' which is not set",
+                    raw, var
+                ));
+            }
+            let (name, value) = expanded
+                .split_once(':')
+                .ok_or_else(|| format!("header '{}' is not in 'Name: value' format", raw))?;
+            out.push((name.trim().to_string(), value.trim().to_string()));
+        }
+        Ok(out)
+    }
+
+    /// Same expansion/fail-fast contract as `resolved_headers`, for
+    /// `basic_auth: "user:password"`.
+    pub fn resolved_basic_auth(&self) -> Result<Option<(String, String)>, String> {
+        let Some(raw) = &self.basic_auth else {
+            return Ok(None);
+        };
+        let expanded = workspace::expand_env_vars(raw);
+        if let Some(var) = workspace::find_unresolved_env_var_name(&expanded) {
+            return Err(format!(
+                "basic_auth references environment variable '{}' which is not set",
+                var
+            ));
+        }
+        let (user, pass) = expanded
+            .split_once(':')
+            .ok_or_else(|| "basic_auth value must be in 'user:password' format".to_string())?;
+        Ok(Some((user.to_string(), pass.to_string())))
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -2437,5 +2491,91 @@ default_source = "https://example.com/manifests"
 
         let config = UserConfig::load_from(&config_path).unwrap().unwrap();
         assert!(config.alternate_sources.is_none());
+    }
+
+    fn copy_file_config(
+        headers: Option<Vec<String>>,
+        basic_auth: Option<String>,
+    ) -> CopyFileConfig {
+        CopyFileConfig {
+            source: "https://example.com/file.tgz".to_string(),
+            dest: "downloads/file.tgz".to_string(),
+            cache: None,
+            sha256: None,
+            post_data: None,
+            symlink: None,
+            headers,
+            basic_auth,
+        }
+    }
+
+    #[test]
+    fn test_resolved_headers_none() {
+        let cf = copy_file_config(None, None);
+        assert_eq!(cf.resolved_headers().unwrap(), vec![]);
+    }
+
+    #[test]
+    fn test_resolved_headers_expands_env_var() {
+        std::env::set_var("TEST_CS_TOKEN", "abc123");
+        let cf = copy_file_config(
+            Some(vec!["Authorization: Bearer $TEST_CS_TOKEN".to_string()]),
+            None,
+        );
+        assert_eq!(
+            cf.resolved_headers().unwrap(),
+            vec![("Authorization".to_string(), "Bearer abc123".to_string())]
+        );
+        std::env::remove_var("TEST_CS_TOKEN");
+    }
+
+    #[test]
+    fn test_resolved_headers_missing_env_var() {
+        std::env::remove_var("TEST_CS_TOKEN_MISSING");
+        let cf = copy_file_config(
+            Some(vec![
+                "Authorization: Bearer $TEST_CS_TOKEN_MISSING".to_string()
+            ]),
+            None,
+        );
+        let err = cf.resolved_headers().unwrap_err();
+        assert!(err.contains("TEST_CS_TOKEN_MISSING"));
+    }
+
+    #[test]
+    fn test_resolved_headers_malformed_entry() {
+        let cf = copy_file_config(Some(vec!["not-a-header".to_string()]), None);
+        assert!(cf.resolved_headers().is_err());
+    }
+
+    #[test]
+    fn test_resolved_basic_auth_none() {
+        let cf = copy_file_config(None, None);
+        assert_eq!(cf.resolved_basic_auth().unwrap(), None);
+    }
+
+    #[test]
+    fn test_resolved_basic_auth_expands_env_var() {
+        std::env::set_var("TEST_CS_TOKEN2", "xyz789");
+        let cf = copy_file_config(None, Some("token:$TEST_CS_TOKEN2".to_string()));
+        assert_eq!(
+            cf.resolved_basic_auth().unwrap(),
+            Some(("token".to_string(), "xyz789".to_string()))
+        );
+        std::env::remove_var("TEST_CS_TOKEN2");
+    }
+
+    #[test]
+    fn test_resolved_basic_auth_missing_env_var() {
+        std::env::remove_var("TEST_CS_TOKEN2_MISSING");
+        let cf = copy_file_config(None, Some("token:$TEST_CS_TOKEN2_MISSING".to_string()));
+        let err = cf.resolved_basic_auth().unwrap_err();
+        assert!(err.contains("TEST_CS_TOKEN2_MISSING"));
+    }
+
+    #[test]
+    fn test_resolved_basic_auth_malformed_value() {
+        let cf = copy_file_config(None, Some("no-colon-here".to_string()));
+        assert!(cf.resolved_basic_auth().is_err());
     }
 }

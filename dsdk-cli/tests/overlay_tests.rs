@@ -84,6 +84,8 @@ fn new_copy_file(dest: &str) -> CopyFileConfig {
         sha256: None,
         post_data: None,
         symlink: None,
+        headers: None,
+        basic_auth: None,
     }
 }
 
@@ -342,6 +344,8 @@ fn test_merge_copy_files_own_remove_modify() {
             sha256: None,
             post_data: None,
             symlink: None,
+            headers: None,
+            basic_auth: None,
         }],
     };
 

@@ -124,6 +124,10 @@ pub struct CopyFilePatch {
     pub post_data: Option<String>,
     #[serde(default)]
     pub symlink: Option<bool>,
+    #[serde(default)]
+    pub headers: Option<Vec<String>>,
+    #[serde(default)]
+    pub basic_auth: Option<String>,
 }
 
 /// remove/modify diff for the `gits:` section of sdk.yml's `overlay:` key.
@@ -310,6 +314,12 @@ fn apply_copy_file_patch(target: &mut CopyFileConfig, patch: &CopyFilePatch) {
     }
     if patch.symlink.is_some() {
         target.symlink = patch.symlink;
+    }
+    if patch.headers.is_some() {
+        target.headers = patch.headers.clone();
+    }
+    if patch.basic_auth.is_some() {
+        target.basic_auth = patch.basic_auth.clone();
     }
 }
 

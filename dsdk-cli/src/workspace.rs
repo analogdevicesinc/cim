@@ -737,6 +737,66 @@ pub fn has_unresolved_env_var_refs(s: &str) -> bool {
     false
 }
 
+/// Return the name of the first unresolved `$VAR`/`${VAR}` host env var
+/// reference in `s` (skipping `${{ … }}` manifest-variable references),
+/// or `None` if there isn't one.
+///
+/// This is a sibling of [`has_unresolved_env_var_refs`] for callers that
+/// need to name the specific missing variable in an error message (e.g.
+/// `copy_files:` `headers`/`basic_auth`). It is kept separate rather than
+/// having `has_unresolved_env_var_refs` delegate to it: that function
+/// treats any bare `$` as unresolved even when nothing alphanumeric
+/// follows it, a case this function can't name and would otherwise miss.
+///
+/// # Examples
+///
+/// ```
+/// use dsdk_cli::workspace::find_unresolved_env_var_name;
+///
+/// assert_eq!(find_unresolved_env_var_name("https://example.com"), None);
+/// assert_eq!(find_unresolved_env_var_name("${{ WORKSPACE }}/bin"), None);
+/// assert_eq!(
+///     find_unresolved_env_var_name("$UNSET_HOST_VAR/path"),
+///     Some("UNSET_HOST_VAR".to_string())
+/// );
+/// assert_eq!(
+///     find_unresolved_env_var_name("${UNSET_VAR}/path"),
+///     Some("UNSET_VAR".to_string())
+/// );
+/// ```
+pub fn find_unresolved_env_var_name(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            // Skip a `${{ … }}` manifest-variable reference entirely.
+            if bytes.get(i + 1) == Some(&b'{') && bytes.get(i + 2) == Some(&b'{') {
+                if let Some(rel) = s[i + 3..].find("}}") {
+                    i = i + 3 + rel + 2;
+                    continue;
+                }
+            }
+            // `${VAR}` form.
+            if bytes.get(i + 1) == Some(&b'{') {
+                if let Some(rel) = s[i + 2..].find('}') {
+                    return Some(s[i + 2..i + 2 + rel].to_string());
+                }
+            }
+            // `$VAR` form.
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                end += 1;
+            }
+            if end > start {
+                return Some(s[start..end].to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Resolve manifest variable values by expanding host env vars within them.
 ///
 /// Each value in the raw map is passed through [`expand_env_vars`]. If a value
@@ -1687,6 +1747,46 @@ mod tests {
     fn test_has_unresolved_env_var_refs_mixed() {
         // A mix: the ${{ }} part is fine, but the bare $UNSET is a real warning.
         assert!(has_unresolved_env_var_refs("${{ WORKSPACE }}/$UNSET"));
+    }
+
+    #[test]
+    fn test_find_unresolved_env_var_name_no_dollar() {
+        assert_eq!(
+            find_unresolved_env_var_name("https://example.com/sdk"),
+            None
+        );
+        assert_eq!(find_unresolved_env_var_name(""), None);
+        assert_eq!(find_unresolved_env_var_name("plain-value"), None);
+    }
+
+    #[test]
+    fn test_find_unresolved_env_var_name_manifest_pattern_only() {
+        assert_eq!(find_unresolved_env_var_name("${{ WORKSPACE }}/bin"), None);
+        assert_eq!(find_unresolved_env_var_name("${{ A }}/${{ B }}"), None);
+    }
+
+    #[test]
+    fn test_find_unresolved_env_var_name_dollar_var() {
+        assert_eq!(
+            find_unresolved_env_var_name("$UNSET_HOST_VAR/path"),
+            Some("UNSET_HOST_VAR".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_unresolved_env_var_name_braced_var() {
+        assert_eq!(
+            find_unresolved_env_var_name("${UNSET_VAR}/path"),
+            Some("UNSET_VAR".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_unresolved_env_var_name_mixed() {
+        assert_eq!(
+            find_unresolved_env_var_name("${{ WORKSPACE }}/$UNSET"),
+            Some("UNSET".to_string())
+        );
     }
 
     #[test]

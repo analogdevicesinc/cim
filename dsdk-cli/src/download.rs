@@ -369,6 +369,8 @@ pub fn download_file_to_destination(
     url: &str,
     dest_path: &Path,
     post_data: Option<&str>,
+    headers: &[(String, String)],
+    basic_auth: Option<(&str, &str)>,
     multi_progress: Option<&MultiProgress>,
     display_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -393,15 +395,21 @@ pub fn download_file_to_destination(
     let mut last_error = None;
 
     for (i, client) in clients.iter().enumerate() {
-        let result = if let Some(data) = post_data {
+        let mut builder = if let Some(data) = post_data {
             client
                 .post(url)
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body(data.to_string())
-                .send()
         } else {
-            client.get(url).send()
+            client.get(url)
         };
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        if let Some((user, pass)) = basic_auth {
+            builder = builder.basic_auth(user, Some(pass));
+        }
+        let result = builder.send();
 
         match result {
             Ok(response) if response.status().is_success() => {
@@ -471,6 +479,8 @@ pub fn download_file_with_retry(
     url: &str,
     dest_path: &Path,
     post_data: Option<&str>,
+    headers: &[(String, String)],
+    basic_auth: Option<(&str, &str)>,
     multi_progress: Option<&MultiProgress>,
     display_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -479,8 +489,15 @@ pub fn download_file_with_retry(
 
     for attempt in 1..=MAX_RETRIES {
         // Try HTTP client first
-        match download_file_to_destination(url, dest_path, post_data, multi_progress, display_name)
-        {
+        match download_file_to_destination(
+            url,
+            dest_path,
+            post_data,
+            headers,
+            basic_auth,
+            multi_progress,
+            display_name,
+        ) {
             Ok(()) => {
                 if attempt > 1 {
                     messages::verbose(&format!("✓ Download succeeded on attempt {}", attempt));
@@ -496,14 +513,17 @@ pub fn download_file_with_retry(
         // If HTTP failed, try wget as fallback
         // Use wget's default User-Agent (not browser-like) to avoid bot protection
         messages::verbose("Trying wget as fallback...");
-        if let Ok(output) = Command::new("wget")
-            .arg("--no-check-certificate")
-            .arg("--timeout=300")
-            .arg("-O")
-            .arg(dest_path)
-            .arg(url)
-            .output()
-        {
+        let mut wget_cmd = Command::new("wget");
+        wget_cmd.arg("--no-check-certificate").arg("--timeout=300");
+        for (name, value) in headers {
+            wget_cmd.arg(format!("--header={}: {}", name, value));
+        }
+        if let Some((user, pass)) = basic_auth {
+            wget_cmd
+                .arg(format!("--http-user={}", user))
+                .arg(format!("--http-password={}", pass));
+        }
+        if let Ok(output) = wget_cmd.arg("-O").arg(dest_path).arg(url).output() {
             if output.status.success() {
                 messages::verbose("✓ Download successful using wget");
                 return Ok(());
@@ -517,16 +537,19 @@ pub fn download_file_with_retry(
 
         // If wget failed, try curl with its default User-Agent
         messages::verbose("Trying curl as fallback...");
-        if let Ok(output) = Command::new("curl")
+        let mut curl_cmd = Command::new("curl");
+        curl_cmd
             .arg("--insecure")
             .arg("--max-time")
             .arg("300")
-            .arg("-L") // follow redirects
-            .arg("-o")
-            .arg(dest_path)
-            .arg(url)
-            .output()
-        {
+            .arg("-L"); // follow redirects
+        for (name, value) in headers {
+            curl_cmd.arg("-H").arg(format!("{}: {}", name, value));
+        }
+        if let Some((user, pass)) = basic_auth {
+            curl_cmd.arg("-u").arg(format!("{}:{}", user, pass));
+        }
+        if let Ok(output) = curl_cmd.arg("-o").arg(dest_path).arg(url).output() {
             if output.status.success() {
                 messages::verbose("✓ Download successful using curl");
                 return Ok(());
@@ -698,6 +721,12 @@ pub struct DownloadConfig<'a> {
     pub use_cache: bool,
     pub expected_sha256: Option<&'a str>,
     pub post_data: Option<&'a str>,
+    /// Already-resolved (env-var-expanded) headers -- see
+    /// `CopyFileConfig::resolved_headers`.
+    pub headers: &'a [(String, String)],
+    /// Already-resolved (env-var-expanded) HTTP Basic auth credentials --
+    /// see `CopyFileConfig::resolved_basic_auth`.
+    pub basic_auth: Option<(&'a str, &'a str)>,
     pub multi_progress: Option<&'a MultiProgress>,
     pub use_symlink: bool,
 }
@@ -727,6 +756,8 @@ pub fn download_file_with_cache(config: DownloadConfig) -> Result<(), Box<dyn st
         use_cache,
         expected_sha256,
         post_data,
+        headers,
+        basic_auth,
         multi_progress,
         use_symlink,
     } = config;
@@ -771,6 +802,8 @@ pub fn download_file_with_cache(config: DownloadConfig) -> Result<(), Box<dyn st
                             url,
                             &cache_path,
                             post_data,
+                            headers,
+                            basic_auth,
                             multi_progress,
                             &filename,
                         )?;
@@ -836,7 +869,15 @@ pub fn download_file_with_cache(config: DownloadConfig) -> Result<(), Box<dyn st
             }
 
             // Download to cache with retry
-            download_file_with_retry(url, &cache_path, post_data, multi_progress, &filename)?;
+            download_file_with_retry(
+                url,
+                &cache_path,
+                post_data,
+                headers,
+                basic_auth,
+                multi_progress,
+                &filename,
+            )?;
 
             // Create destination directory if needed
             if let Some(parent) = dest_path.parent() {
@@ -881,7 +922,15 @@ pub fn download_file_with_cache(config: DownloadConfig) -> Result<(), Box<dyn st
         // Direct download (no caching) with retry
         let filename = extract_filename_from_url(url);
         messages::verbose(&format!("Downloading: {}", filename));
-        download_file_with_retry(url, dest_path, post_data, multi_progress, &filename)?;
+        download_file_with_retry(
+            url,
+            dest_path,
+            post_data,
+            headers,
+            basic_auth,
+            multi_progress,
+            &filename,
+        )?;
     }
 
     // Verify SHA256 checksum if provided (final verification on destination)
@@ -920,13 +969,28 @@ pub fn process_copy_files(
 
     // Process URL downloads in parallel if there are multiple
     if !url_files.is_empty() {
+        // Resolve headers/basic_auth for every entry up front, before any
+        // progress bar or network call, so a missing env var aborts the
+        // whole batch immediately rather than failing mid-flight after
+        // other downloads have already started.
+        let mut resolved = Vec::with_capacity(url_files.len());
+        for copy_file in &url_files {
+            let headers = copy_file
+                .resolved_headers()
+                .map_err(|e| format!("copy_files entry '{}': {}", copy_file.dest, e))?;
+            let basic_auth = copy_file
+                .resolved_basic_auth()
+                .map_err(|e| format!("copy_files entry '{}': {}", copy_file.dest, e))?;
+            resolved.push((*copy_file, headers, basic_auth));
+        }
+
         let multi_progress = MultiProgress::new();
         let pool = ThreadPool::new(4); // Max 4 concurrent downloads
         let (tx, rx): (Sender<(String, Result<(), String>)>, _) = channel();
 
         messages::status("Downloading and checking file integrity...");
 
-        for copy_file in &url_files {
+        for (copy_file, headers, basic_auth) in resolved {
             let url = copy_file.source.clone();
             let dest = expand_env_vars(&copy_file.dest);
             let dest_path = workspace_path.join(&dest);
@@ -939,8 +1003,16 @@ pub fn process_copy_files(
             let mp = multi_progress.clone();
 
             messages::verbose(&format!("Processing URL: {} -> {}", url, dest));
+            if !headers.is_empty() {
+                let names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+                messages::verbose(&format!("  Custom header(s): {}", names.join(", ")));
+            }
+            if basic_auth.is_some() {
+                messages::verbose("  Using HTTP Basic auth (credentials redacted)");
+            }
 
             pool.execute(move || {
+                let basic_auth_ref = basic_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
                 let result = download_file_with_cache(DownloadConfig {
                     url: &url,
                     dest_path: &dest_path,
@@ -948,6 +1020,8 @@ pub fn process_copy_files(
                     use_cache,
                     expected_sha256: expected_sha256.as_deref(),
                     post_data: post_data.as_deref(),
+                    headers: &headers,
+                    basic_auth: basic_auth_ref,
                     multi_progress: Some(&mp),
                     use_symlink,
                 })
@@ -1176,5 +1250,28 @@ mod tests {
 
         // Test single character
         assert_eq!(truncate_filename("a", 16), "a");
+    }
+
+    #[test]
+    fn test_download_file_to_destination_rejects_bad_header_value() {
+        // A header value with an embedded newline is invalid and must be
+        // rejected by reqwest's own validation, surfacing as an Err rather
+        // than a panic -- no real network access needed, since the bad
+        // header is rejected before any connection is attempted.
+        let dir = tempfile::tempdir().unwrap();
+        let dest_path = dir.path().join("out.bin");
+        let headers = vec![("X-Bad".to_string(), "value\nwith\nnewlines".to_string())];
+
+        let result = download_file_to_destination(
+            "http://127.0.0.1:0",
+            &dest_path,
+            None,
+            &headers,
+            None,
+            None,
+            "test",
+        );
+
+        assert!(result.is_err());
     }
 }
