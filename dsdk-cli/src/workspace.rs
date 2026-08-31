@@ -796,6 +796,36 @@ pub fn git_name_to_dir_var(name: &str) -> String {
     format!("{}_DIR", sanitized)
 }
 
+/// Check whether `venv_dir` holds a fully-created, usable Python virtual
+/// environment: the directory exists *and* its interpreter binary
+/// (`bin/python3` / `Scripts\python.exe`) is present.
+///
+/// This is the single source of truth for "does a venv exist" across cim.
+/// A bare `Path::exists()` on the venv directory alone is not sufficient: a
+/// venv can be half-built (e.g. an interrupted `ensurepip`/`uv venv --seed`
+/// step) or have a dangling interpreter symlink (e.g. after a system Python
+/// upgrade/removal, since venvs are created without `--copies`) while its
+/// directory still exists on disk. Checks that only look at the directory
+/// silently treat such a broken venv as "already installed".
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// use dsdk_cli::workspace::venv_dir_is_functional;
+///
+/// // A nonexistent directory is never a functional venv.
+/// assert!(!venv_dir_is_functional(Path::new("/nonexistent/.venv")));
+/// ```
+pub fn venv_dir_is_functional(venv_dir: &Path) -> bool {
+    let python_exe = if cfg!(windows) {
+        venv_dir.join("Scripts").join("python.exe")
+    } else {
+        venv_dir.join("bin").join("python3")
+    };
+    venv_dir.exists() && python_exe.exists()
+}
+
 /// Per-git Python virtual environment path: `<workspace>/.cim/<git-name>/.venv`.
 ///
 /// Each git entry that declares `python-deps` gets its own isolated venv so

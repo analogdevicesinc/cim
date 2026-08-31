@@ -45,13 +45,7 @@ impl DocManager {
 
     /// Check if virtual environment exists in workspace
     fn venv_exists(&self) -> bool {
-        let venv_path = self.workspace_path.join(".venv");
-        let python_exe = if cfg!(windows) {
-            venv_path.join("Scripts").join("python.exe")
-        } else {
-            venv_path.join("bin").join("python3")
-        };
-        venv_path.exists() && python_exe.exists()
+        crate::workspace::venv_dir_is_functional(&self.workspace_path.join(".venv"))
     }
 
     /// Get the command and environment for executing Python tools with virtual environment support

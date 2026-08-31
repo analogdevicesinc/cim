@@ -352,10 +352,22 @@ impl VenvManager {
             }
         }
 
-        // Check if venv already exists
+        // Check if venv already exists. A directory that exists but lacks a
+        // working interpreter (e.g. an interrupted creation, or a dangling
+        // symlinked interpreter after a system Python upgrade/removal) is
+        // treated the same as --force: it's useless as-is, so replace it
+        // instead of silently reporting success and leaving it broken.
         if venv_path.exists() {
-            if force {
-                messages::info("Virtual environment exists, removing due to --force");
+            let functional = venv_exists(&self.workspace_path);
+            if force || !functional {
+                if force {
+                    messages::info("Virtual environment exists, removing due to --force");
+                } else {
+                    messages::info(&format!(
+                        "Virtual environment at {} exists but its interpreter is missing/broken, recreating",
+                        venv_path.display()
+                    ));
+                }
                 if let Err(e) = std::fs::remove_dir_all(&venv_path) {
                     return Err(
                         format!("Failed to remove existing virtual environment: {}", e).into(),
@@ -378,14 +390,25 @@ impl VenvManager {
         let workspace_venv_path = self.workspace_path.join(".venv");
         let mirror_venv_path = self.mirror_path.join(".venv");
 
-        // Check if workspace symlink already exists
+        // Check if workspace symlink already exists. A symlink whose resolved
+        // target is missing/broken (e.g. the mirror venv was wiped out from under
+        // it) is treated the same as --force: reusing it would only propagate the
+        // breakage, so recreate instead of silently reporting success.
         if let Ok(metadata) = std::fs::symlink_metadata(&workspace_venv_path) {
             if metadata.file_type().is_symlink() {
-                if force {
-                    messages::status(&format!(
-                        "Symlink {} exists, removing due to --force",
-                        workspace_venv_path.display()
-                    ));
+                let functional = venv_exists(&self.workspace_path);
+                if force || !functional {
+                    if force {
+                        messages::status(&format!(
+                            "Symlink {} exists, removing due to --force",
+                            workspace_venv_path.display()
+                        ));
+                    } else {
+                        messages::status(&format!(
+                            "Symlink {} points at a missing/broken virtual environment, recreating",
+                            workspace_venv_path.display()
+                        ));
+                    }
                     if let Err(e) = std::fs::remove_file(&workspace_venv_path) {
                         return Err(format!("Failed to remove existing symlink: {}", e).into());
                     }
@@ -416,13 +439,22 @@ impl VenvManager {
             }
         }
 
-        // Check if mirror venv already exists
+        // Check if mirror venv already exists and is functional; a broken mirror
+        // venv (missing/dangling interpreter) is recreated regardless of --force.
         if mirror_venv_path.exists() {
-            if force {
-                messages::info(&format!(
-                    "Mirror virtual environment {} exists, removing due to --force",
-                    mirror_venv_path.display()
-                ));
+            let functional = venv_exists(&self.mirror_path);
+            if force || !functional {
+                if force {
+                    messages::info(&format!(
+                        "Mirror virtual environment {} exists, removing due to --force",
+                        mirror_venv_path.display()
+                    ));
+                } else {
+                    messages::info(&format!(
+                        "Mirror virtual environment at {} is missing its interpreter (broken/incomplete), recreating",
+                        mirror_venv_path.display()
+                    ));
+                }
                 if let Err(e) = std::fs::remove_dir_all(&mirror_venv_path) {
                     return Err(format!(
                         "Failed to remove existing mirror virtual environment: {}",
@@ -539,8 +571,7 @@ pub(crate) fn get_venv_python_path(workspace_path: &Path) -> PathBuf {
 
 /// Check if a virtual environment exists in the workspace.
 pub(crate) fn venv_exists(workspace_path: &Path) -> bool {
-    let venv_path = workspace_path.join(".venv");
-    venv_path.exists() && get_venv_python_path(workspace_path).exists()
+    dsdk_cli::workspace::venv_dir_is_functional(&workspace_path.join(".venv"))
 }
 
 /// Get the platform-specific Python interpreter command.
