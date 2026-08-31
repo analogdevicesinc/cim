@@ -272,7 +272,7 @@ cim update [--match REGEX] [--include-group NAMES] [--exclude-group NAMES]
 
 Generate Makefile from sdk.yml (run from workspace). Emits standard
 `sdk-*` targets (`sdk-build`, `sdk-test`, `sdk-clean`, `sdk-flash`,
-`sdk-envsetup`) and a target per git repository. Per-git build
+`sdk-envsetup`, `sdk-help`) and a target per git repository. Per-git build
 fragment files (`<name>.mk`) are auto-discovered from the directory
 set by `build_folder` (default: `build/`) and added as `-include`
 directives automatically.
@@ -312,9 +312,14 @@ no exclusions.
 
 #### Custom Phases
 
-By default, `cim` generates the five standard `sdk-*` targets: `sdk-envsetup`,
-`sdk-build`, `sdk-test`, `sdk-clean`, and `sdk-flash`.  You can extend this list
-with custom phases by adding a `phases:` key to `sdk.yml`:
+By default, `cim` generates six standard `sdk-*` targets: `sdk-envsetup`,
+`sdk-build`, `sdk-test`, `sdk-clean`, `sdk-flash`, and `sdk-help`. Unlike the
+others, `sdk-help` is always generated even without any configuration: it
+prints the available `sdk-<phase>`/`install-<name>` targets by default. Add a
+custom `help:` target (same form as `build:`/`clean:`/etc.) to override that
+default body, or a `<repo>-help` target in a `build/<name>.mk` fragment to add
+it as a dependency alongside the default listing. You can extend the phase
+list further with custom phases by adding a `phases:` key to `sdk.yml`:
 
 ```yaml
 phases:
@@ -324,7 +329,7 @@ phases:
 ```
 
 This generates `sdk-deploy`, `sdk-lint`, and `sdk-docs` targets in addition to the
-standard five. Custom phases are implemented via per-repository `.mk` fragments
+standard six. Custom phases are implemented via per-repository `.mk` fragments
 in your `build_folder` (default: `build/`). For example, add `build/myrepo.mk`
 with targets like:
 
@@ -664,7 +669,7 @@ toolchains:
 # dedicated "build.git" or similar. This is mostly meant to initiate and
 # redirect build commands to the different build systems used in the workspace.
 #
-# Each section (envsetup, build, test, clean, flash) supports two formats:
+# Each section (envsetup, build, test, clean, flash, help) supports two formats:
 #
 # Object format with optional depends_on:
 #   build:
@@ -678,8 +683,8 @@ toolchains:
 #     - $(MAKE) -C build all $(MAKEFLAGS)
 #
 # depends_on accepts sdk-* target names (sdk-envsetup, sdk-build, sdk-test,
-# sdk-clean, sdk-flash) or git repository target names. This is a Makefile
-# build-time dependency only — it does not affect git clone ordering.
+# sdk-clean, sdk-flash, sdk-help) or git repository target names. This is a
+# Makefile build-time dependency only — it does not affect git clone ordering.
 # Clone ordering is controlled by git_depends_on in the gits section.
 #
 # Note that there is no requirement on using continue to "make" and tradtional

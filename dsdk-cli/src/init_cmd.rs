@@ -1585,6 +1585,10 @@ impl config::SdkConfigCore for FilteredSdkConfig {
         &None
     }
 
+    fn help(&self) -> &Option<config::SdkTarget> {
+        &None
+    }
+
     fn variables(&self) -> &Option<std::collections::HashMap<String, String>> {
         &None
     }
@@ -1819,9 +1823,9 @@ fn strip_removed_install_refs_from_target(
 /// didn't survive filtering (cascading through `depends_on` chains, see
 /// `filter_install_configs_by_gits`), and strips any now-dangling
 /// `install-<name>` reference left behind in `envsetup`/`build`/`test`/
-/// `clean`/`flash`'s `depends_on` or in a git's `build_depends_on` -- those
-/// targets are never removed themselves, so a dangling reference there
-/// would otherwise break `make` with "No rule to make target".
+/// `clean`/`flash`/`help`'s `depends_on` or in a git's `build_depends_on` --
+/// those targets are never removed themselves, so a dangling reference
+/// there would otherwise break `make` with "No rule to make target".
 pub(crate) fn filtered_sdk_config_for_makefile(
     sdk_config: &config::SdkConfig,
     pattern_regex: &Option<Regex>,
@@ -1862,6 +1866,7 @@ pub(crate) fn filtered_sdk_config_for_makefile(
         strip_removed_install_refs_from_target(&mut filtered.test, &removed_install_refs);
         strip_removed_install_refs_from_target(&mut filtered.clean, &removed_install_refs);
         strip_removed_install_refs_from_target(&mut filtered.flash, &removed_install_refs);
+        strip_removed_install_refs_from_target(&mut filtered.help, &removed_install_refs);
         for git in &mut filtered.gits {
             if let Some(deps) = &mut git.build_depends_on {
                 deps.retain(|d| !removed_install_refs.contains(d));

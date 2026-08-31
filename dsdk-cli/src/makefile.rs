@@ -429,7 +429,9 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
     for phase in &phases {
         let deps = phase_deps.get(phase).map(|v| v.as_slice()).unwrap_or(&[]);
         let has_sdk_target = sdk_config.phase_target(phase).is_some();
-        if has_sdk_target || !deps.is_empty() {
+        // sdk-help is always generated (self-documenting entry point), even
+        // without any sdk.yml configuration or overlay fragments for it.
+        if phase == "help" || has_sdk_target || !deps.is_empty() {
             phony_targets.push(format!("sdk-{}", phase));
         }
     }
@@ -456,6 +458,16 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
     for phase in &phases {
         let deps = phase_deps.get(phase).map(|v| v.as_slice()).unwrap_or(&[]);
         let target = sdk_config.phase_target(phase);
+        if phase == "help" {
+            add_help_target(
+                &mut makefile,
+                target,
+                deps,
+                &phases,
+                sdk_config.install().as_ref(),
+            );
+            continue;
+        }
         let fallback = match phase.as_str() {
             "build" => Some("No build commands defined in sdk.yml"),
             "clean" => Some("No clean commands defined in sdk.yml"),
@@ -575,6 +587,37 @@ pub(crate) fn add_makefile_target(makefile: &mut String, git: &config::GitConfig
     true
 }
 
+/// Render an `SdkTarget`'s `commands()` as Makefile recipe lines, applying
+/// the same `${{ VAR }}` rendering and comment/`@echo` handling used for
+/// per-git and phase targets. Shared by [`add_phase_target`] and
+/// [`add_help_target`].
+fn render_phase_commands(makefile: &mut String, target: &config::SdkTarget) {
+    for command in target.commands() {
+        let rendered = render_command_for_makefile(command);
+        let trimmed = rendered.trim();
+
+        // Skip comment lines (starting with #)
+        if trimmed.starts_with('#') {
+            // Write as a Makefile comment (with tab like other commands)
+            makefile.push_str(&format!(
+                "\t#{}\n",
+                trimmed.strip_prefix('#').unwrap().trim_start()
+            ));
+            continue;
+        }
+
+        // Handle echo commands with @ prefix (like build commands)
+        if trimmed.starts_with('@') {
+            // Just pass through the @ command as-is, it's already properly formatted
+            makefile.push_str(&format!("\t{}\n", trimmed));
+            continue;
+        }
+
+        // Add regular command
+        makefile.push_str(&format!("\t{}\n", rendered));
+    }
+}
+
 /// Add a generic sdk-<phase> target to the Makefile.
 ///
 /// `phase` is the phase name (e.g. "build", "clean", "test").
@@ -605,33 +648,58 @@ pub(crate) fn add_phase_target(
     }
 
     if let Some(target) = phase_target {
-        for command in target.commands() {
-            let rendered = render_command_for_makefile(command);
-            let trimmed = rendered.trim();
-
-            // Skip comment lines (starting with #)
-            if trimmed.starts_with('#') {
-                // Write as a Makefile comment (with tab like other commands)
-                makefile.push_str(&format!(
-                    "\t#{}\n",
-                    trimmed.strip_prefix('#').unwrap().trim_start()
-                ));
-                continue;
-            }
-
-            // Handle echo commands with @ prefix (like build commands)
-            if trimmed.starts_with('@') {
-                // Just pass through the @ command as-is, it's already properly formatted
-                makefile.push_str(&format!("\t{}\n", trimmed));
-                continue;
-            }
-
-            // Add regular command
-            makefile.push_str(&format!("\t{}\n", rendered));
-        }
+        render_phase_commands(makefile, target);
     } else if let Some(msg) = fallback_message {
         if extra_deps.is_empty() {
             makefile.push_str(&format!("\t@echo \"{}\"\n", msg));
+        }
+    }
+
+    makefile.push('\n');
+}
+
+/// Add the `sdk-help` target.
+///
+/// Unlike the other standard phases, `sdk-help` is always generated as a
+/// self-documenting entry point, even without any sdk.yml configuration or
+/// overlay fragments for it: when sdk.yml defines no `help:` commands, this
+/// emits a default body listing every generated `sdk-<phase>` target and, if
+/// present, the `install-all`/`install-<name>` targets.
+pub(crate) fn add_help_target(
+    makefile: &mut String,
+    phase_target: Option<&config::SdkTarget>,
+    extra_deps: &[String],
+    phases: &[String],
+    install_configs: Option<&Vec<config::InstallConfig>>,
+) {
+    let mut all_deps = Vec::new();
+    if let Some(target) = phase_target {
+        if let Some(deps) = target.depends_on() {
+            all_deps.extend(deps.iter().cloned());
+        }
+    }
+    all_deps.extend(extra_deps.iter().cloned());
+
+    if all_deps.is_empty() {
+        makefile.push_str("sdk-help:\n");
+    } else {
+        makefile.push_str(&format!("sdk-help: {}\n", all_deps.join(" ")));
+    }
+
+    if let Some(target) = phase_target {
+        render_phase_commands(makefile, target);
+    } else {
+        makefile.push_str("\t@echo \"Available targets:\"\n");
+        for phase in phases {
+            makefile.push_str(&format!("\t@echo \"  make sdk-{}\"\n", phase));
+        }
+        if let Some(installs) = install_configs {
+            if !installs.is_empty() {
+                makefile.push_str("\t@echo \"  make install-all\"\n");
+                for install in installs {
+                    makefile.push_str(&format!("\t@echo \"  make install-{}\"\n", install.name));
+                }
+            }
         }
     }
 
@@ -2717,6 +2785,91 @@ mod tests {
         assert!(
             makefile.contains("sdk-deploy: u-boot-deploy"),
             "Expected sdk-deploy to depend on u-boot-deploy, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_help_target_default_body_lists_phases_and_installs() {
+        let config = config::SdkConfig {
+            gits: vec![],
+            install: Some(vec![config::InstallConfig {
+                name: "ninja".to_string(),
+                depends_on: None,
+                sentinel: None,
+                commands: Some(vec!["echo installing ninja".to_string()]),
+                depends_on_gits: None,
+            }]),
+            ..Default::default()
+        };
+
+        let makefile = generate_makefile_content(&config, false, None);
+
+        // sdk-help is always generated, and always in .PHONY, even with no
+        // sdk.yml help: target and no overlay fragments.
+        assert!(
+            makefile.contains(".PHONY: all sdk-help"),
+            "Expected sdk-help in .PHONY even without configuration, got:\n{}",
+            makefile
+        );
+        assert!(makefile.contains("sdk-help:\n"));
+        assert!(makefile.contains("\t@echo \"Available targets:\""));
+        for phase in config::default_phases() {
+            assert!(
+                makefile.contains(&format!("\t@echo \"  make sdk-{}\"", phase)),
+                "Expected sdk-help to list sdk-{}, got:\n{}",
+                phase,
+                makefile
+            );
+        }
+        assert!(makefile.contains("\t@echo \"  make install-all\""));
+        assert!(makefile.contains("\t@echo \"  make install-ninja\""));
+    }
+
+    #[test]
+    fn test_help_target_custom_commands_override_default_body() {
+        let config = config::SdkConfig {
+            gits: vec![],
+            help: Some(config::SdkTarget::Commands(vec![
+                "@echo Custom help text".to_string()
+            ])),
+            ..Default::default()
+        };
+
+        let makefile = generate_makefile_content(&config, false, None);
+
+        assert!(makefile.contains("sdk-help:\n"));
+        assert!(makefile.contains("\t@echo Custom help text"));
+        // The default listing must not also be emitted alongside custom commands.
+        assert!(!makefile.contains("Available targets:"));
+    }
+
+    #[test]
+    fn test_help_target_discovers_overlay_fragment() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(
+            build_dir.join("u-boot.mk"),
+            "u-boot-help:\n\t@echo u-boot specific help\n",
+        )
+        .expect("write u-boot.mk");
+
+        let config = config::SdkConfig {
+            gits: vec![config::GitConfig {
+                name: "u-boot".to_string(),
+                url: "https://example.com/u-boot.git".to_string(),
+                commit: "main".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let makefile = generate_makefile_content(&config, false, Some(tmp.path()));
+
+        assert!(
+            makefile.contains("sdk-help: u-boot-help"),
+            "Expected sdk-help to depend on the discovered u-boot-help fragment, got:\n{}",
             makefile
         );
     }

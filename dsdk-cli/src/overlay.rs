@@ -594,7 +594,7 @@ fn merge_makefile_include(
 /// concatenation (a name/dest collision with a base entry is a hard error;
 /// use the `overlay:` key's `modify:` to change a base entry instead).
 /// `makefile_include:` is merged additively (see `merge_makefile_include`).
-/// The remaining scalar sections (build/test/clean/flash/envsetup/
+/// The remaining scalar sections (build/test/clean/flash/help/envsetup/
 /// build_folder/direnv/phases) in `derived` override the corresponding
 /// value inherited from `base` when present.
 pub fn apply_overlay(
@@ -632,6 +632,7 @@ pub fn apply_overlay(
         clean: derived.clean.or(base.clean),
         build: derived.build.or(base.build),
         flash: derived.flash.or(base.flash),
+        help: derived.help.or(base.help),
         variables,
         phases: derived.phases.or(base.phases),
         direnv: derived.direnv.or(base.direnv),

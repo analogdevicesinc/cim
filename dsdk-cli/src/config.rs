@@ -337,6 +337,7 @@ pub fn default_phases() -> Vec<String> {
         "clean".to_string(),
         "test".to_string(),
         "flash".to_string(),
+        "help".to_string(),
     ]
 }
 
@@ -356,9 +357,10 @@ pub trait SdkConfigCore {
     /// Ordered list of phase names.  Controls which `sdk-<phase>` targets are
     /// generated and which `<repo>-<phase>` overlay targets are discovered.
     ///
-    /// The five standard phases (`envsetup`, `build`, `clean`, `test`, `flash`)
-    /// are always included.  The `phases:` key in `sdk.yml` is used to add
-    /// *extra* custom phases (e.g. `deploy`, `lint`) on top of the standard set.
+    /// The six standard phases (`envsetup`, `build`, `clean`, `test`, `flash`,
+    /// `help`) are always included.  The `phases:` key in `sdk.yml` is used to
+    /// add *extra* custom phases (e.g. `deploy`, `lint`) on top of the
+    /// standard set.
     fn phases(&self) -> Vec<String>;
     /// Look up the top-level SDK target for a given phase name.
     /// Returns `None` when the phase is not defined in `sdk.yml`.
@@ -368,6 +370,7 @@ pub trait SdkConfigCore {
     fn clean(&self) -> &Option<SdkTarget>;
     fn build(&self) -> &Option<SdkTarget>;
     fn flash(&self) -> &Option<SdkTarget>;
+    fn help(&self) -> &Option<SdkTarget>;
     fn variables(&self) -> &Option<HashMap<String, String>>;
     fn direnv(&self) -> Option<&DirenvConfig>;
 }
@@ -886,6 +889,12 @@ pub struct SdkConfig {
     pub build: Option<SdkTarget>,
     #[serde(default, deserialize_with = "deserialize_sdk_target")]
     pub flash: Option<SdkTarget>,
+    /// Commands for `sdk-help`. Unlike the other standard phases, `sdk-help`
+    /// is always generated: when this is absent, `cim makefile` emits a
+    /// default body that lists the available `sdk-<phase>`/`install-<name>`
+    /// targets.
+    #[serde(default, deserialize_with = "deserialize_sdk_target")]
+    pub help: Option<SdkTarget>,
     /// Optional manifest-level variables. Values may reference host env vars
     /// using `$VAR` syntax, which are resolved at cim invocation time.
     /// In YAML commands, use `${{ VAR }}` to reference these variables.
@@ -938,6 +947,7 @@ impl SdkConfigCore for SdkConfig {
             "clean" => self.clean.as_ref(),
             "build" => self.build.as_ref(),
             "flash" => self.flash.as_ref(),
+            "help" => self.help.as_ref(),
             _ => None,
         }
     }
@@ -960,6 +970,10 @@ impl SdkConfigCore for SdkConfig {
 
     fn flash(&self) -> &Option<SdkTarget> {
         &self.flash
+    }
+
+    fn help(&self) -> &Option<SdkTarget> {
+        &self.help
     }
 
     fn variables(&self) -> &Option<HashMap<String, String>> {
