@@ -589,7 +589,16 @@ pub(crate) fn handle_update_command(
     // Idempotently set up direnv if configured and .envrc is not yet present.
     if let Some(direnv_cfg) = sdk_config.direnv() {
         if direnv_cfg.used && !workspace_path.join(".envrc").exists() {
-            if let Err(e) = setup_direnv(&workspace_path, direnv_cfg, false) {
+            // `WorkspaceMarker` doesn't persist whether `cim init`/`cim install pip`
+            // used `--symlink`, so probe the venv's actual on-disk state instead of
+            // assuming direct mode: a real `--symlink` workspace's venv path is a
+            // symlink into the mirror, and `setup_direnv` needs to know that to
+            // write the symlink-aware `.envrc` form.
+            let venv_path = workspace_path.join(direnv_cfg.venv_path_or_default());
+            let symlink_mode = fs::symlink_metadata(&venv_path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            if let Err(e) = setup_direnv(&workspace_path, direnv_cfg, symlink_mode) {
                 messages::info(&format!("Note: direnv setup encountered an issue: {}", e));
             }
         }
