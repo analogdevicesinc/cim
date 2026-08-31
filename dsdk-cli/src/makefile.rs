@@ -765,6 +765,14 @@ pub(crate) fn add_install_target(makefile: &mut String, install: &config::Instal
 
                             if needs_semicolon {
                                 makefile.push_str(&format!("\t    {}; \\\n", rendered));
+                            } else if trimmed.ends_with('\\') {
+                                // Line already carries its own shell
+                                // continuation backslash (e.g. a multi-line
+                                // curl call) -- don't append a second one or
+                                // the shell will see a literal escaped space
+                                // instead of a continuation and mangle the
+                                // command.
+                                makefile.push_str(&format!("\t    {}\n", rendered));
                             } else {
                                 makefile.push_str(&format!("\t    {} \\\n", rendered));
                             }
