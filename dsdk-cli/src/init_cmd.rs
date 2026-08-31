@@ -44,16 +44,6 @@ pub(crate) fn handle_docs_command(docs_command: &DocsCommand) {
         }
     };
 
-    // Ensure documentation dependencies are available before any docs operations
-    if let Err(e) = ensure_docs_dependencies(&workspace_path) {
-        messages::error(&format!(
-            "Error setting up documentation dependencies: {}",
-            e
-        ));
-        messages::error("You can try manually running: cim install pip");
-        return;
-    }
-
     // For docs commands, we only need core config (git repos, mirror) - not os-dependencies
     let sdk_config = match load_config_with_extends(&config_path) {
         Ok(config) => config,
@@ -63,10 +53,23 @@ pub(crate) fn handle_docs_command(docs_command: &DocsCommand) {
         }
     };
 
+    // Ensure documentation dependencies are available before any docs operations
+    if let Err(e) = ensure_docs_dependencies(&workspace_path, sdk_config.direnv()) {
+        messages::error(&format!(
+            "Error setting up documentation dependencies: {}",
+            e
+        ));
+        messages::error("You can try manually running: cim install pip");
+        return;
+    }
+
     // Load user config (optional - will gracefully handle missing config)
     let user_config = config::UserConfig::load().ok().flatten();
 
-    let doc_manager = doc_manager::DocManager::new(workspace_path);
+    let mut doc_manager = doc_manager::DocManager::new(workspace_path);
+    if let Some(direnv_cfg) = sdk_config.direnv() {
+        doc_manager = doc_manager.with_venv_dir_name(direnv_cfg.venv_path_or_default().to_string());
+    }
 
     match docs_command {
         DocsCommand::Create {
@@ -882,6 +885,7 @@ pub(crate) fn install_pip_packages_if_available(
         symlink,
         None, // profile = None (use each file's own default)
         mirror_path,
+        sdk_config.direnv(),
         None, // cert_validation = None (not exposed via `cim init` yet)
     ) {
         Ok(true) => {

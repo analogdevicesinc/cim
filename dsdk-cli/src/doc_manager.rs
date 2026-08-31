@@ -31,6 +31,10 @@ pub struct DocSource {
 pub struct DocManager {
     pub workspace_path: PathBuf,
     pub docs_output_path: PathBuf,
+    /// Workspace-side venv directory name, defaults to ".venv" but can be
+    /// overridden via `with_venv_dir_name()` to honor a manifest's
+    /// `direnv.venv_path` (see `config::DirenvConfig`).
+    venv_dir_name: String,
 }
 
 impl DocManager {
@@ -40,21 +44,33 @@ impl DocManager {
         Self {
             workspace_path,
             docs_output_path,
+            venv_dir_name: ".venv".to_string(),
         }
+    }
+
+    /// Override the venv directory name.
+    pub fn with_venv_dir_name(mut self, venv_dir_name: impl Into<String>) -> Self {
+        self.venv_dir_name = venv_dir_name.into();
+        self
+    }
+
+    fn venv_dir(&self) -> PathBuf {
+        self.workspace_path.join(&self.venv_dir_name)
     }
 
     /// Check if virtual environment exists in workspace
     fn venv_exists(&self) -> bool {
-        crate::workspace::venv_dir_is_functional(&self.workspace_path.join(".venv"))
+        crate::workspace::venv_dir_is_functional(&self.venv_dir())
     }
 
     /// Get the command and environment for executing Python tools with virtual environment support
     fn get_python_command(&self, tool: &str) -> (String, Vec<(String, String)>) {
         if self.venv_exists() {
+            let venv_dir = self.venv_dir();
             let venv_bin = if cfg!(windows) {
-                self.workspace_path.join(".venv").join("Scripts")
+                venv_dir.join("Scripts")
             } else {
-                self.workspace_path.join(".venv").join("bin")
+                venv_dir.join("bin")
             };
             let mut path = std::env::var("PATH").unwrap_or_default();
 
@@ -66,10 +82,7 @@ impl DocManager {
                 ("PATH".to_string(), path),
                 (
                     "VIRTUAL_ENV".to_string(),
-                    self.workspace_path
-                        .join(".venv")
-                        .to_string_lossy()
-                        .to_string(),
+                    venv_dir.to_string_lossy().to_string(),
                 ),
             ];
 

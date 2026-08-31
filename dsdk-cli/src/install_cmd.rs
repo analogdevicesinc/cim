@@ -11,6 +11,7 @@
 
 use crate::cli::InstallCommand;
 use crate::init_cmd::{filter_git_configs_by_group, parse_group_list};
+use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::workspace::{
     get_current_workspace, load_config_with_user_overrides, require_workspace_config,
     resolve_mirror, WorkspaceMarker, OS_DEPS_FILE, PYTHON_DEPS_FILE, WORKSPACE_MARKER_FILE,
@@ -140,6 +141,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                 *symlink,
                 profile.as_deref(),
                 &resolve_mirror(None),
+                sdk_config.direnv(),
                 cert_validation.as_deref(),
             ) {
                 Ok(true) => {}
@@ -299,6 +301,12 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
 pub(crate) struct VenvManager {
     workspace_path: PathBuf,
     mirror_path: PathBuf,
+    /// Workspace-side venv directory name. Defaults to ".venv" but can be
+    /// overridden via `with_venv_dir_name()` to honor a manifest's
+    /// `direnv.venv_path` (see `config::DirenvConfig`). The mirror-side cache
+    /// directory name is always ".venv" -- it's an internal implementation
+    /// detail, not user-facing.
+    venv_dir_name: String,
 }
 
 impl VenvManager {
@@ -307,7 +315,22 @@ impl VenvManager {
         VenvManager {
             workspace_path,
             mirror_path,
+            venv_dir_name: ".venv".to_string(),
         }
+    }
+
+    /// Override the workspace-side venv directory name.
+    pub fn with_venv_dir_name(mut self, venv_dir_name: impl Into<String>) -> Self {
+        self.venv_dir_name = venv_dir_name.into();
+        self
+    }
+
+    fn workspace_venv_dir(&self) -> PathBuf {
+        self.workspace_path.join(&self.venv_dir_name)
+    }
+
+    fn mirror_venv_dir(&self) -> PathBuf {
+        self.mirror_path.join(".venv")
     }
 
     /// Create virtual environment with symlink support
@@ -325,9 +348,9 @@ impl VenvManager {
 
     /// Create virtual environment directly in workspace
     fn create_venv_direct(&self, force: bool) -> Result<(), Box<dyn std::error::Error>> {
-        let venv_path = self.workspace_path.join(".venv");
+        let venv_path = self.workspace_venv_dir();
 
-        // Check whether an existing `.venv` is actually a symlink (e.g. left over from an
+        // Check whether an existing venv dir is actually a symlink (e.g. left over from an
         // earlier `--symlink` install pointing into the shared mirror). `Path::exists()`
         // follows symlinks, so it alone can't tell a real local venv apart from a stale
         // symlink into someone else's cache — check the link itself first.
@@ -354,7 +377,7 @@ impl VenvManager {
                     .into());
                 }
 
-                return run_python_venv_creation(&self.workspace_path);
+                return run_python_venv_creation(&venv_path);
             }
         }
 
@@ -364,7 +387,7 @@ impl VenvManager {
         // treated the same as --force: it's useless as-is, so replace it
         // instead of silently reporting success and leaving it broken.
         if venv_path.exists() {
-            let functional = venv_exists(&self.workspace_path);
+            let functional = venv_exists(&venv_path);
             if force || !functional {
                 if force {
                     messages::info("Virtual environment exists, removing due to --force");
@@ -388,13 +411,13 @@ impl VenvManager {
             }
         }
 
-        run_python_venv_creation(&self.workspace_path)
+        run_python_venv_creation(&venv_path)
     }
 
     /// Create virtual environment in mirror and symlink to workspace
     fn create_venv_with_symlink(&self, force: bool) -> Result<(), Box<dyn std::error::Error>> {
-        let workspace_venv_path = self.workspace_path.join(".venv");
-        let mirror_venv_path = self.mirror_path.join(".venv");
+        let workspace_venv_path = self.workspace_venv_dir();
+        let mirror_venv_path = self.mirror_venv_dir();
 
         // Check if workspace symlink already exists. A symlink whose resolved
         // target is missing/broken (e.g. the mirror venv was wiped out from under
@@ -402,7 +425,7 @@ impl VenvManager {
         // breakage, so recreate instead of silently reporting success.
         if let Ok(metadata) = std::fs::symlink_metadata(&workspace_venv_path) {
             if metadata.file_type().is_symlink() {
-                let functional = venv_exists(&self.workspace_path);
+                let functional = venv_exists(&workspace_venv_path);
                 if force || !functional {
                     if force {
                         messages::status(&format!(
@@ -448,7 +471,7 @@ impl VenvManager {
         // Check if mirror venv already exists and is functional; a broken mirror
         // venv (missing/dangling interpreter) is recreated regardless of --force.
         if mirror_venv_path.exists() {
-            let functional = venv_exists(&self.mirror_path);
+            let functional = venv_exists(&mirror_venv_path);
             if force || !functional {
                 if force {
                     messages::info(&format!(
@@ -483,7 +506,7 @@ impl VenvManager {
                 std::fs::create_dir_all(parent)?;
             }
 
-            run_python_venv_creation(&self.mirror_path)?;
+            run_python_venv_creation(&mirror_venv_path)?;
         }
 
         // Create symlink from workspace to mirror
@@ -545,9 +568,12 @@ impl VenvManager {
     }
 }
 
-/// Get the platform-specific path to the venv's bin/Scripts directory.
-pub(crate) fn get_venv_bin_dir(workspace_path: &Path) -> PathBuf {
-    workspace_path.join(".venv").join({
+/// Get the platform-specific path to a venv's bin/Scripts directory.
+///
+/// `venv_dir` is the venv directory itself (e.g. `<workspace>/.venv`,
+/// `<workspace>/.cim/<git>/.venv`), not a base directory to append `.venv` to.
+pub(crate) fn get_venv_bin_dir(venv_dir: &Path) -> PathBuf {
+    venv_dir.join({
         #[cfg(windows)]
         {
             "Scripts"
@@ -560,9 +586,10 @@ pub(crate) fn get_venv_bin_dir(workspace_path: &Path) -> PathBuf {
     })
 }
 
-/// Get the platform-specific Python executable path inside the venv.
-pub(crate) fn get_venv_python_path(workspace_path: &Path) -> PathBuf {
-    get_venv_bin_dir(workspace_path).join({
+/// Get the platform-specific Python executable path inside a venv (see
+/// [`get_venv_bin_dir`] for what `venv_dir` means).
+pub(crate) fn get_venv_python_path(venv_dir: &Path) -> PathBuf {
+    get_venv_bin_dir(venv_dir).join({
         #[cfg(windows)]
         {
             "python.exe"
@@ -575,9 +602,24 @@ pub(crate) fn get_venv_python_path(workspace_path: &Path) -> PathBuf {
     })
 }
 
-/// Check if a virtual environment exists in the workspace.
-pub(crate) fn venv_exists(workspace_path: &Path) -> bool {
-    dsdk_cli::workspace::venv_dir_is_functional(&workspace_path.join(".venv"))
+/// Check if `venv_dir` holds a functional virtual environment.
+pub(crate) fn venv_exists(venv_dir: &Path) -> bool {
+    dsdk_cli::workspace::venv_dir_is_functional(venv_dir)
+}
+
+/// Resolve the workspace's default venv directory, honoring a manifest's
+/// `direnv.venv_path` if set (defaults to `.venv`). Only applies to the
+/// single workspace-wide venv used for docs/`python-dependencies.yml`
+/// profiles -- per-git venvs (`workspace::git_venv_path`) always use a
+/// literal `.venv` regardless of this setting.
+pub(crate) fn resolve_venv_dir(
+    workspace_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
+) -> PathBuf {
+    let venv_dir_name = direnv_cfg
+        .map(|c| c.venv_path_or_default())
+        .unwrap_or(".venv");
+    workspace_path.join(venv_dir_name)
 }
 
 /// Get the platform-specific Python interpreter command.
@@ -626,10 +668,9 @@ fn uv_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Create a Python venv at the given path
-fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let venv_path = workspace_path.join(".venv");
-
+/// Create a Python venv at the given directory (the venv directory itself,
+/// not a base directory -- see [`get_venv_bin_dir`]).
+fn run_python_venv_creation(venv_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     messages::status(&format!(
         "Creating Python virtual environment at {}...",
         venv_path.display()
@@ -653,7 +694,7 @@ fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::er
         if let Some(python) = resolve_system_python() {
             command.arg("--python").arg(python);
         }
-        let output = command.arg(&venv_path).output()?;
+        let output = command.arg(venv_path).output()?;
 
         if !output.status.success() {
             return Err(format!(
@@ -682,7 +723,7 @@ fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::er
     }
 
     // Determine the python executable inside the newly-created venv
-    let venv_python = get_venv_python_path(workspace_path);
+    let venv_python = get_venv_python_path(venv_path);
 
     // Bootstrap pip inside the venv
     let ensurepip_output = std::process::Command::new(&venv_python)
@@ -712,19 +753,19 @@ fn run_python_venv_creation(workspace_path: &Path) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-/// Create a Python virtual environment in the workspace
+/// Create a Python virtual environment at the given venv directory.
 pub(crate) fn create_virtual_environment(
-    workspace_path: &Path,
+    venv_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if venv_exists(workspace_path) {
+    if venv_exists(venv_path) {
         messages::info(&format!(
             "Virtual environment already exists at {}",
-            workspace_path.display()
+            venv_path.display()
         ));
         return Ok(());
     }
 
-    run_python_venv_creation(workspace_path)
+    run_python_venv_creation(venv_path)
 }
 
 /// Detect if we're running in a container environment
@@ -749,6 +790,7 @@ pub(crate) fn is_sphinx_available() -> bool {
 /// Ensure documentation dependencies are available in virtual environment
 pub(crate) fn ensure_docs_dependencies(
     workspace_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // In container environments, check if sphinx is globally available
     if is_container_environment() {
@@ -760,14 +802,16 @@ pub(crate) fn ensure_docs_dependencies(
         }
     }
 
+    let venv_dir = resolve_venv_dir(workspace_path, direnv_cfg);
+
     // Check if virtual environment exists and has sphinx-build
-    if venv_exists(workspace_path) {
+    if venv_exists(&venv_dir) {
         let sphinx_build_name = if cfg!(windows) {
             "sphinx-build.exe"
         } else {
             "sphinx-build"
         };
-        let sphinx_build_path = get_venv_bin_dir(workspace_path).join(sphinx_build_name);
+        let sphinx_build_path = get_venv_bin_dir(&venv_dir).join(sphinx_build_name);
         if sphinx_build_path.exists() {
             // Virtual environment exists and has sphinx, we're good
             return Ok(());
@@ -777,7 +821,7 @@ pub(crate) fn ensure_docs_dependencies(
     messages::status("Documentation dependencies not found. Setting up virtual environment...");
 
     // Create virtual environment if it doesn't exist
-    create_virtual_environment(workspace_path)?;
+    create_virtual_environment(&venv_dir)?;
 
     // Install required packages
     let python_deps_path = workspace_path.join(PYTHON_DEPS_FILE);
@@ -829,7 +873,7 @@ pub(crate) fn ensure_docs_dependencies(
         "Installing documentation dependencies from {}",
         profile_source
     ));
-    install_pip_packages(&packages, None, None)?;
+    install_pip_packages(&packages, None, direnv_cfg, None)?;
     Ok(())
 }
 
@@ -838,6 +882,7 @@ pub(crate) fn ensure_docs_dependencies(
 /// the resolved workspace path alongside its venv's python interpreter.
 fn resolve_venv_python(
     workspace_path_override: Option<&Path>,
+    direnv_cfg: Option<&config::DirenvConfig>,
 ) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
     let workspace_path = match workspace_path_override {
         Some(path) => path.to_path_buf(),
@@ -851,13 +896,14 @@ fn resolve_venv_python(
         },
     };
 
-    if !venv_exists(&workspace_path) {
+    let venv_dir = resolve_venv_dir(&workspace_path, direnv_cfg);
+    if !venv_exists(&venv_dir) {
         return Err(
             "Could not finish setting up Python packages: virtual environment not found".into(),
         );
     }
 
-    let venv_python = get_venv_python_path(&workspace_path);
+    let venv_python = get_venv_python_path(&venv_dir);
     Ok((workspace_path, venv_python))
 }
 
@@ -962,6 +1008,7 @@ fn run_pip_install(
 pub(crate) fn install_pip_packages(
     packages: &[String],
     workspace_path_override: Option<&Path>,
+    direnv_cfg: Option<&config::DirenvConfig>,
     cert_validation: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if packages.is_empty() {
@@ -969,7 +1016,7 @@ pub(crate) fn install_pip_packages(
         return Ok(());
     }
 
-    let (workspace_path, venv_python) = resolve_venv_python(workspace_path_override)?;
+    let (workspace_path, venv_python) = resolve_venv_python(workspace_path_override, direnv_cfg)?;
     messages::verbose(&format!(
         "Using virtual environment python: {}",
         venv_python.display()
@@ -1010,13 +1057,14 @@ fn build_requirements_args(
 pub(crate) fn install_pip_requirements(
     requirements: &[String],
     workspace_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
     cert_validation: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if requirements.is_empty() {
         return Ok(());
     }
 
-    let (_, venv_python) = resolve_venv_python(Some(workspace_path))?;
+    let (_, venv_python) = resolve_venv_python(Some(workspace_path), direnv_cfg)?;
     let install_args = build_requirements_args(requirements, workspace_path)?;
 
     messages::verbose(&format!(
@@ -1054,8 +1102,6 @@ pub(crate) fn install_git_python_deps(
     let git_checkout = workspace_path.join(git_name);
     let install_args = build_requirements_args(requirements, &git_checkout)?;
 
-    // The venv primitives take a base directory and append `.venv`, so the
-    // base for this git's venv is the parent of git_venv_path(..).
     let venv_path = dsdk_cli::workspace::git_venv_path(workspace_path, git_name);
     let venv_base = venv_path
         .parent()
@@ -1080,11 +1126,11 @@ pub(crate) fn install_git_python_deps(
 
     std::fs::create_dir_all(&venv_base)?;
 
-    if !venv_exists(&venv_base) {
-        run_python_venv_creation(&venv_base)?;
+    if !venv_exists(&venv_path) {
+        run_python_venv_creation(&venv_path)?;
     }
 
-    let venv_python = get_venv_python_path(&venv_base);
+    let venv_python = get_venv_python_path(&venv_path);
     messages::status(&format!(
         "Installing Python requirements for '{}' into {}",
         git_name,
@@ -1142,6 +1188,7 @@ pub(crate) fn list_available_profiles(python_deps_path: &Path) {
 }
 
 /// Install Python packages from python-dependencies.yml file
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn install_python_packages_from_file(
     python_deps_path: &Path,
     force: bool,
@@ -1149,6 +1196,7 @@ pub(crate) fn install_python_packages_from_file(
     profile_override: Option<&str>,
     workspace_path: &Path,
     mirror_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
     cert_validation: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Load Python dependencies configuration first
@@ -1190,8 +1238,13 @@ pub(crate) fn install_python_packages_from_file(
         .into());
     }
 
-    // Create VenvManager for virtual environment operations
-    let venv_manager = VenvManager::new(workspace_path.to_path_buf(), mirror_path.to_path_buf());
+    // Create VenvManager for virtual environment operations, honoring a
+    // custom `direnv.venv_path` if the manifest sets one.
+    let mut venv_manager =
+        VenvManager::new(workspace_path.to_path_buf(), mirror_path.to_path_buf());
+    if let Some(cfg) = direnv_cfg {
+        venv_manager = venv_manager.with_venv_dir_name(cfg.venv_path_or_default().to_string());
+    }
 
     // Create virtual environment (direct or symlink mode)
     if let Err(e) = venv_manager.create_venv(force, symlink) {
@@ -1259,7 +1312,7 @@ pub(crate) fn install_python_packages_from_file(
             packages.len(),
             profile_names.len()
         ));
-        install_pip_packages(&packages, Some(workspace_path), cert_validation)?;
+        install_pip_packages(&packages, Some(workspace_path), direnv_cfg, cert_validation)?;
     }
 
     if !requirements.is_empty() {
@@ -1268,7 +1321,7 @@ pub(crate) fn install_python_packages_from_file(
             requirements.len(),
             profile_names.len()
         ));
-        install_pip_requirements(&requirements, workspace_path, cert_validation)?;
+        install_pip_requirements(&requirements, workspace_path, direnv_cfg, cert_validation)?;
     }
 
     Ok(())
@@ -1333,6 +1386,7 @@ pub(crate) fn install_pip_from_workspace(
     symlink: bool,
     profile_override: Option<&str>,
     mirror_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
     cert_validation: Option<&str>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let files = dsdk_cli::workspace::discover_dependency_files(workspace_path, PYTHON_DEPS_FILE);
@@ -1352,6 +1406,7 @@ pub(crate) fn install_pip_from_workspace(
             profile_override,
             workspace_path,
             mirror_path,
+            direnv_cfg,
             cert_validation,
         )?;
     }
@@ -1640,25 +1695,26 @@ mod tests {
     #[test]
     fn test_venv_exists_true() {
         let (_temp_dir, workspace_path) = create_test_workspace();
-        let bin_dir = get_venv_bin_dir(&workspace_path);
+        let venv_dir = workspace_path.join(".venv");
+        let bin_dir = get_venv_bin_dir(&venv_dir);
         fs::create_dir_all(&bin_dir).expect("Failed to create venv structure");
 
         // Create python3 executable (empty file is fine for test)
-        let python_exe = get_venv_python_path(&workspace_path);
+        let python_exe = get_venv_python_path(&venv_dir);
         fs::write(&python_exe, "").expect("Failed to create python file");
 
-        assert!(venv_exists(&workspace_path));
+        assert!(venv_exists(&venv_dir));
     }
 
     #[test]
     fn test_venv_exists_false() {
         let (_temp_dir, workspace_path) = create_test_workspace();
-        assert!(!venv_exists(&workspace_path));
+        let venv_dir = workspace_path.join(".venv");
+        assert!(!venv_exists(&venv_dir));
 
         // Create .venv dir but no python3 executable
-        let venv_path = workspace_path.join(".venv");
-        fs::create_dir_all(&venv_path).expect("Failed to create venv dir");
-        assert!(!venv_exists(&workspace_path));
+        fs::create_dir_all(&venv_dir).expect("Failed to create venv dir");
+        assert!(!venv_exists(&venv_dir));
     }
 
     #[test]
@@ -1711,7 +1767,7 @@ mod tests {
         let metadata =
             fs::symlink_metadata(&workspace_venv_path).expect("workspace .venv should exist");
         assert!(!metadata.file_type().is_symlink());
-        assert!(venv_exists(&workspace_path));
+        assert!(venv_exists(&workspace_venv_path));
     }
 
     #[test]
@@ -1761,21 +1817,21 @@ mod tests {
     #[test]
     fn test_venv_path_helpers() {
         let (_temp_dir, workspace_path) = create_test_workspace();
+        let venv_dir = workspace_path.join(".venv");
 
         // Test venv detection with non-existent venv
-        assert!(!venv_exists(&workspace_path));
+        assert!(!venv_exists(&venv_dir));
 
         // Test venv detection with partial venv structure
-        let venv_dir = workspace_path.join(".venv");
         fs::create_dir_all(&venv_dir).expect("Failed to create .venv");
-        assert!(!venv_exists(&workspace_path)); // Still false, no python3
+        assert!(!venv_exists(&venv_dir)); // Still false, no python3
 
         // Test venv detection with complete structure
-        let bin_dir = get_venv_bin_dir(&workspace_path);
+        let bin_dir = get_venv_bin_dir(&venv_dir);
         fs::create_dir_all(&bin_dir).expect("Failed to create bin dir");
-        let python_exe = get_venv_python_path(&workspace_path);
+        let python_exe = get_venv_python_path(&venv_dir);
         fs::write(&python_exe, "").expect("Failed to create python");
-        assert!(venv_exists(&workspace_path)); // Now true
+        assert!(venv_exists(&venv_dir)); // Now true
     }
 
     #[test]
