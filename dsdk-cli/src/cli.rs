@@ -604,6 +604,28 @@ pub enum UtilsCommand {
         #[arg(short, long, help = "Overwrite existing files")]
         force: bool,
     },
+    /// Detect and clean up stale workspace state (broken venvs, stale symlinks)
+    Repair {
+        /// Component to repair (currently only 'pip')
+        #[arg(
+            short = 't',
+            long = "target",
+            value_name = "TARGET",
+            default_value = "pip",
+            help = "Component to repair (currently only 'pip')"
+        )]
+        target: String,
+        /// Skip confirmation prompts
+        #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
+        yes: bool,
+        /// Force wipe and recreate the shared mirror venv even if it looks healthy
+        #[arg(
+            short = 'f',
+            long = "force",
+            help = "Force wipe and recreate the shared mirror venv even if it looks healthy"
+        )]
+        force: bool,
+    },
     /// Update cim to the latest release from GitHub
     Update,
 }
@@ -709,5 +731,50 @@ mod tests {
         let invalid_args = vec!["cim", "init", "--list-targets"];
         let cli_result = Cli::try_parse_from(invalid_args);
         assert!(cli_result.is_err()); // Should fail because --list-targets is removed from init
+    }
+
+    #[test]
+    fn test_utils_repair_cli_parsing() {
+        // Default target is pip and no confirmation skipping
+        let cli = Cli::try_parse_from(["cim", "utils", "repair"])
+            .expect("bare 'cim utils repair' should parse");
+        match &cli.command {
+            Some(Commands::Utils {
+                utils_command: UtilsCommand::Repair { target, yes, force },
+            }) => {
+                assert_eq!(target, "pip");
+                assert!(!yes);
+                assert!(!force);
+            }
+            _ => panic!("Expected Utils/Repair command"),
+        }
+
+        // Explicit target and --yes flag
+        let cli = Cli::try_parse_from(["cim", "utils", "repair", "-t", "pip", "-y"])
+            .expect("'cim utils repair -t pip -y' should parse");
+        match &cli.command {
+            Some(Commands::Utils {
+                utils_command: UtilsCommand::Repair { target, yes, force },
+            }) => {
+                assert_eq!(target, "pip");
+                assert!(yes);
+                assert!(!force);
+            }
+            _ => panic!("Expected Utils/Repair command"),
+        }
+
+        // --force variant
+        let cli = Cli::try_parse_from(["cim", "utils", "repair", "-t", "pip", "--force"])
+            .expect("'cim utils repair -t pip --force' should parse");
+        match &cli.command {
+            Some(Commands::Utils {
+                utils_command: UtilsCommand::Repair { target, yes, force },
+            }) => {
+                assert_eq!(target, "pip");
+                assert!(!yes);
+                assert!(force);
+            }
+            _ => panic!("Expected Utils/Repair command"),
+        }
     }
 }

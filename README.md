@@ -511,6 +511,19 @@ cim utils sync-copy-files [--dry-run] [--verbose] [--force]
 cim utils update
 ```
 
+**repair** - Detect and clean up stale workspace state (broken virtual
+environments, stale `.venv` symlinks from an earlier `--symlink` install,
+broken cached mirror venvs). Recreates a fresh venv in the workspace's
+original mode and reinstalls its Python packages in one step.
+
+```bash
+cim utils repair                # targets pip by default
+cim utils repair -t pip         # explicit target
+cim utils repair -t pip -y      # skip confirmation prompts
+cim utils repair -t pip -f      # also wipe the mirror venv even when it
+                                # looks healthy ("wipe the cache and retry")
+```
+
 ### Configuration File
 
 `cim config -c` will create it for you. Here are a few example settings you can customize, for a complete list, generate the file and check the comments.

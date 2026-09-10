@@ -80,6 +80,7 @@ The completion script provides intelligent completion for:
 - `cim docker` - Docker configuration with create subcommand
 - `cim release` - Create release tags with include/exclude filters and dry-run mode
 - `cim config` - Manage user configuration with list, get, create, edit, and validate options
+- `cim utils` - Utility commands (hash-copy-files, hash-toolchains, sync-copy-files, repair, update)
 
 ### Options and Arguments:
 - **Target completion** for `--target` options using `cim list-targets`
@@ -165,6 +166,18 @@ cim config --<TAB>
 # Complete config keys
 cim config --get <TAB>
 # Shows: default_source cert_validation
+
+# Complete utils subcommands
+cim utils <TAB>
+# Shows: hash-copy-files hash-toolchains sync-copy-files repair update help
+
+# Complete repair options
+cim utils repair --<TAB>
+# Shows: --target --yes --force --help
+
+# Complete repair targets
+cim utils repair --target <TAB>
+# Shows: pip
 ```
 
 ## Testing

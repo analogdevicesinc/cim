@@ -39,6 +39,7 @@
 #   - utils hash-copy-files: --dry-run, --verbose (-v), --add-missing
 #   - utils hash-toolchains: --dry-run, --verbose (-v), --add-missing
 #   - utils sync-copy-files: --dry-run, --verbose (-v), --force (-f)
+#   - utils repair: --target (-t), --yes (-y), --force (-f)
 #   - utils update: (no options)
 
 _cim_completions() {
@@ -480,7 +481,7 @@ _cim_completions() {
         utils)
             if [ $COMP_CWORD -eq 2 ]; then
                 # Utils subcommands
-                COMPREPLY=( $(compgen -W "hash-copy-files hash-toolchains sync-copy-files update --help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "hash-copy-files hash-toolchains sync-copy-files repair update --help" -- "${cur}") )
                 return 0
             elif [ $COMP_CWORD -gt 2 ]; then
                 # Handle utils subcommand completion
@@ -505,6 +506,19 @@ _cim_completions() {
                         case "${prev}" in
                             *)
                                 COMPREPLY=( $(compgen -W "--dry-run --verbose -v --force -f --help" -- "${cur}") )
+                                return 0
+                                ;;
+                        esac
+                        ;;
+                    repair)
+                        case "${prev}" in
+                            -t|--target)
+                                # Only pip is supported for now
+                                COMPREPLY=( $(compgen -W "pip" -- "${cur}") )
+                                return 0
+                                ;;
+                            *)
+                                COMPREPLY=( $(compgen -W "--target -t --yes -y --force -f --help" -- "${cur}") )
                                 return 0
                                 ;;
                         esac
