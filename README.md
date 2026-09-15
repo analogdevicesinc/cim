@@ -430,6 +430,17 @@ If [`uv`](https://docs.astral.sh/uv/) is on `PATH` it is used as a faster
 backend; otherwise cim falls back to `python3 -m venv` and `pip`. The resulting
 environments are standard venvs either way.
 
+When using the `uv` backend, cim always passes `--refresh` to `uv pip
+install`, telling uv to ignore its cached package metadata and re-verify
+against the package index rather than trusting the cache. This works around a
+`uv` caching quirk: uv tracks "is this package already satisfied" by the
+underlying interpreter's identity rather than by the specific venv directory,
+so two venvs seeded from the same system Python — the common case for cim's
+mirror + `--symlink` setup — can make uv report a package as already
+installed in a venv it was never actually installed into. `--refresh` avoids
+that at the cost of a bit of extra network/index-lookup time on every
+`cim install pip`.
+
 **toolchains** - Download and extract toolchains from sdk.yml
 
 ```bash
