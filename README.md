@@ -487,6 +487,52 @@ installed in a venv it was never actually installed into. `--refresh` avoids
 that at the cost of a bit of extra network/index-lookup time on every
 `cim install pip`.
 
+With `--symlink`, the workspace venv actually lives in the shared mirror
+(`<mirror>/.venv`) and is symlinked into every workspace that uses it. If that
+shared venv breaks (e.g. its interpreter path became stale after a system
+Python upgrade), don't `--force` it from one workspace — that only reinstalls
+that workspace's own packages and silently drops whatever any other
+workspace sharing the mirror needed. Use `--repair` instead:
+
+```bash
+cim install pip --repair
+```
+
+`--repair` only ever targets the shared mirror venv (`<mirror>/.venv`), not
+per-git venvs, and always operates against whichever mirror the current
+workspace resolves to. It proceeds in up to three steps, stopping as soon as
+one succeeds:
+
+1. **Health check.** The venv is considered healthy if its directory and
+   interpreter file (`bin/python3`, or `Scripts\python.exe` on Windows) exist
+   *and* that interpreter actually runs (`python3 -c "import sys"` exits
+   successfully). If so, `--repair` reports it as already healthy and exits
+   without changing anything:
+
+   ```text
+   ✓ Shared virtual environment at /home/user/tmp/mirror/.venv is already healthy.
+   ```
+
+2. **Non-destructive in-place repair.** If the health check fails, cim
+   assumes the most common cause: the venv's interpreter is a symlink into
+   whatever Python installation created it, and that installation was later
+   upgraded, moved, or removed, leaving a dangling symlink even though
+   `pyvenv.cfg` and `site-packages` are otherwise intact. cim re-resolves the
+   current system Python, repoints the venv's interpreter symlink at it,
+   rewrites the `home = ` line in `pyvenv.cfg` to match, and re-runs
+   `python -m ensurepip --upgrade` to restore `pip` itself. No third-party
+   package already installed in the venv is touched. If the venv passes the
+   health check afterward, `--repair` reports success and stops here.
+3. **Full rebuild (last resort).** If in-place repair doesn't fix it, cim
+   deletes the shared venv and recreates it from scratch, reinstalling only
+   the invoking workspace's own `python-dependencies.yml` profile(s). Any
+   other workspace sharing the same mirror keeps working off the old
+   (now-gone) venv path until it also runs its own `cim install pip`.
+
+`--repair` can't be combined with
+`--force`/`--profile`/`--symlink`/`--list-profiles`/`--include-group`/
+`--exclude-group`.
+
 **toolchains** - Download and extract toolchains from sdk.yml
 
 ```bash

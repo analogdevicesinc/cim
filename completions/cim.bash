@@ -25,7 +25,7 @@
 #   - add: --name (-n), --url (-u), --commit
 #   - install os-deps: --yes (-y), --no-sudo
 #   - install pip: --profile (-p), --force (-f), --symlink, --list-profiles,
-#                  --include-group, --exclude-group
+#                  --include-group, --exclude-group, --repair
 #   - install toolchains: --force (-f), --symlink, --verbose (-v), --cert-validation
 #   - install tools: name, --list, --all, --force (-f)
 #   - docs create: --force (-f), --theme, --symlink, --verbose, --cert-validation
@@ -311,10 +311,10 @@ _cim_completions() {
                         return 0
                         ;;
                     pip)
-                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --include-group --exclude-group --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --include-group --exclude-group --repair --help" -- "${cur}") )
                         ;;
                     *)
-                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --include-group --exclude-group --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --include-group --exclude-group --repair --help" -- "${cur}") )
                         ;;
                 esac
             elif [ "${COMP_WORDS[2]}" = "toolchains" ]; then
