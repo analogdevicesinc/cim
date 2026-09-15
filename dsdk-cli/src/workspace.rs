@@ -886,6 +886,53 @@ pub fn venv_dir_is_functional(venv_dir: &Path) -> bool {
     venv_dir.exists() && python_exe.exists()
 }
 
+/// Actually execute `venv_dir`'s python interpreter to confirm it runs,
+/// rather than just checking that the interpreter file exists.
+///
+/// [`venv_dir_is_functional`] is deliberately cheap (used on every hot-path
+/// reuse decision) and only checks for the interpreter file's presence,
+/// which misses some real breakage: a dangling interpreter symlink, a
+/// `pyvenv.cfg` pointing at a python that's since been upgraded/removed, or
+/// a corrupted install that still has the right files on disk but can't
+/// actually start. This deeper check is only meant for the `cim install pip
+/// --repair` path, where the extra cost of spawning the interpreter is
+/// acceptable.
+pub fn venv_is_deeply_functional(venv_dir: &Path) -> bool {
+    if !venv_dir_is_functional(venv_dir) {
+        return false;
+    }
+    let python_exe = if cfg!(windows) {
+        venv_dir.join("Scripts").join("python.exe")
+    } else {
+        venv_dir.join("bin").join("python3")
+    };
+    std::process::Command::new(&python_exe)
+        .args(["-c", "import sys"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// If `venv_dir`'s `pyvenv.cfg` declares a `home = ` python installation that
+/// no longer exists on disk (the common "system python got
+/// upgraded/removed/moved" breakage), return that stale path. Returns `None`
+/// if the venv is fine, has no `pyvenv.cfg`, or the file can't be parsed --
+/// callers should fall back to [`venv_is_deeply_functional`] either way.
+pub fn pyvenv_cfg_stale_home(venv_dir: &Path) -> Option<PathBuf> {
+    let contents = fs::read_to_string(venv_dir.join("pyvenv.cfg")).ok()?;
+    for line in contents.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "home" {
+            continue;
+        }
+        let home = PathBuf::from(value.trim());
+        return if home.exists() { None } else { Some(home) };
+    }
+    None
+}
+
 /// Per-git Python virtual environment path: `<workspace>/.cim/<git-name>/.venv`.
 ///
 /// Each git entry that declares `python-deps` gets its own isolated venv so
@@ -2187,5 +2234,56 @@ mod tests {
         let sources = get_all_sources_from_config(None);
         // Should return the hardcoded fallback path
         assert_eq!(sources.len(), 1);
+    }
+
+    #[test]
+    fn test_venv_is_deeply_functional_missing_dir() {
+        assert!(!venv_is_deeply_functional(Path::new("/nonexistent/.venv")));
+    }
+
+    #[test]
+    fn test_venv_is_deeply_functional_missing_interpreter() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let venv_dir = workspace_path.join(".venv");
+        fs::create_dir_all(venv_dir.join("bin")).unwrap();
+        // Directory exists but the interpreter file itself is absent.
+        assert!(!venv_is_deeply_functional(&venv_dir));
+    }
+
+    #[test]
+    fn test_pyvenv_cfg_stale_home_no_file() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let venv_dir = workspace_path.join(".venv");
+        fs::create_dir_all(&venv_dir).unwrap();
+        assert_eq!(pyvenv_cfg_stale_home(&venv_dir), None);
+    }
+
+    #[test]
+    fn test_pyvenv_cfg_stale_home_missing_target() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let venv_dir = workspace_path.join(".venv");
+        fs::create_dir_all(&venv_dir).unwrap();
+        fs::write(
+            venv_dir.join("pyvenv.cfg"),
+            "home = /nonexistent/python/install\nversion = 3.11.0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            pyvenv_cfg_stale_home(&venv_dir),
+            Some(PathBuf::from("/nonexistent/python/install"))
+        );
+    }
+
+    #[test]
+    fn test_pyvenv_cfg_stale_home_existing_target() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let venv_dir = workspace_path.join(".venv");
+        fs::create_dir_all(&venv_dir).unwrap();
+        fs::write(
+            venv_dir.join("pyvenv.cfg"),
+            format!("home = {}\nversion = 3.11.0\n", workspace_path.display()),
+        )
+        .unwrap();
+        assert_eq!(pyvenv_cfg_stale_home(&venv_dir), None);
     }
 }
