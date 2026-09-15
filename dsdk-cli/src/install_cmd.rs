@@ -694,6 +694,220 @@ fn uv_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Which tool cim uses to create venvs and install packages into them.
+///
+/// This is the single place that decides uv-vs-pip: both venv creation and
+/// package installation go through it, so the two can no longer drift out of
+/// sync the way two independent `uv_available()` checks could.
+enum PythonBackend {
+    Uv { python: Option<PathBuf> },
+    Pip,
+}
+
+impl PythonBackend {
+    /// Detect which backend to use. Never fails: falls back to `Pip`.
+    fn resolve() -> Self {
+        if uv_available() {
+            PythonBackend::Uv {
+                python: resolve_system_python(),
+            }
+        } else {
+            PythonBackend::Pip
+        }
+    }
+
+    /// Create a venv at `venv_path` (the venv directory itself, not a base
+    /// directory -- see [`get_venv_bin_dir`]).
+    fn create_venv(&self, venv_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        match self {
+            // `uv venv` creates a standard venv. By default uv does not
+            // install pip into it (it expects callers to use `uv pip
+            // install`), but the generated Makefiles activate the venv and
+            // invoke plain `pip install`, so pip must be physically present.
+            // `--seed` installs pip/setuptools/wheel, matching the ensurepip
+            // step the stdlib fallback below performs.
+            //
+            // Pin the interpreter to the same `python3` the stdlib fallback
+            // would use. Without `--python`, uv applies its own discovery and
+            // may prefer a uv-managed CPython download over the system
+            // interpreter, producing a venv on a different Python version
+            // than the fallback path — defeating the "identical with or
+            // without uv" guarantee.
+            PythonBackend::Uv { python } => {
+                let mut command = std::process::Command::new("uv");
+                command.arg("venv").arg("--seed");
+                if let Some(python) = python {
+                    command.arg("--python").arg(python);
+                }
+                let output = command.arg(venv_path).output()?;
+
+                if !output.status.success() {
+                    return Err(format!(
+                        "Failed to create virtual environment with uv:\n{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )
+                    .into());
+                }
+                Ok(())
+            }
+            PythonBackend::Pip => {
+                let output = std::process::Command::new(python_command())
+                    .args(["-m", "venv"])
+                    .arg(venv_path)
+                    .output()?;
+
+                if !output.status.success() {
+                    return Err(format!(
+                        "Failed to create virtual environment:\n{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )
+                    .into());
+                }
+
+                // Bootstrap pip inside the venv.
+                let venv_python = get_venv_python_path(venv_path);
+                let ensurepip_output = std::process::Command::new(&venv_python)
+                    .args(["-m", "ensurepip"])
+                    .output()?;
+
+                if !ensurepip_output.status.success() {
+                    return Err(format!(
+                        "Failed ensure pip in virtual environment:\n{}",
+                        String::from_utf8_lossy(&ensurepip_output.stderr)
+                    )
+                    .into());
+                }
+                let upgrade_pip_output = std::process::Command::new(&venv_python)
+                    .args(["-m", "pip", "install", "pip", "--upgrade"])
+                    .output()?;
+
+                if !upgrade_pip_output.status.success() {
+                    return Err(format!(
+                        "Failed to upgrade pip in virtual environment:\n{}",
+                        String::from_utf8_lossy(&upgrade_pip_output.stderr)
+                    )
+                    .into());
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Standard PyPI hostnames. The stdlib-pip fallback always trusts these;
+    /// `uv` is additionally given the same allowance in "relaxed"/"auto" mode.
+    const PYPI_HOSTS: [&'static str; 3] = ["pypi.org", "pypi.python.org", "files.pythonhosted.org"];
+
+    /// Install `install_args` (package specifiers and/or `-r <file>` pairs)
+    /// into `venv_python`'s venv. `mode` mirrors
+    /// `config::get_cert_validation_mode`'s output: "strict" (default)
+    /// changes nothing; "relaxed"/"auto" additionally allow `uv` to skip TLS
+    /// verification for the standard PyPI hostnames via
+    /// `--allow-insecure-host`, matching the trust boundary the stdlib-pip
+    /// fallback already applies unconditionally via `--trusted-host`.
+    fn pip_install(
+        &self,
+        venv_python: &Path,
+        install_args: &[String],
+        cwd: &Path,
+        mode: &str,
+    ) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+        // Don't pass `--python <path>` to `uv pip install`: uv resolves it by
+        // the interpreter's real (symlink-followed) identity, so two venvs
+        // seeded from the same underlying system python (e.g. one in the
+        // mirror, one local) can make uv confuse them. Setting `VIRTUAL_ENV`
+        // to this venv's root -- the same signal `source .venv/bin/activate`
+        // sends -- is the unambiguous way to pin uv (and pip) at this exact
+        // venv instead.
+        //
+        // That alone isn't sufficient, though: uv also caches "is this
+        // package already satisfied" keyed by the underlying interpreter's
+        // identity rather than by the specific venv directory. Two venvs
+        // seeded from the same system python (very common with cim's
+        // mirror+local venvs) can make uv report a package as already
+        // installed ("Checked N packages", no actual change) when it's only
+        // present in the *other* venv, silently leaving this one without it
+        // despite a reported success. `--refresh` forces uv to re-verify
+        // against the real target instead of trusting that stale cache.
+        // Confirmed necessary and sufficient by reproducing the bug end to
+        // end: without --refresh a package installed into a --symlink mirror
+        // venv was reported as already satisfied (and never actually
+        // installed) after `--force` recreated a local venv from the same
+        // system python; with --refresh it installed correctly.
+        let venv_dir = venv_python
+            .parent() // bin/ or Scripts/
+            .and_then(Path::parent); // the venv root itself
+        match self {
+            PythonBackend::Uv { .. } => {
+                let mut command = std::process::Command::new("uv");
+                command.args(["pip", "install", "--system-certs", "--refresh"]);
+                match venv_dir {
+                    Some(venv_dir) => {
+                        command.env("VIRTUAL_ENV", venv_dir);
+                    }
+                    // Should never happen (venv_python always has bin/../ as
+                    // parent), but fall back to --python rather than letting
+                    // uv guess with no target at all.
+                    None => {
+                        command.arg("--python").arg(venv_python);
+                    }
+                }
+                if mode == "relaxed" || mode == "auto" {
+                    for host in Self::PYPI_HOSTS {
+                        command.arg("--allow-insecure-host").arg(host);
+                    }
+                }
+                messages::status(&format!(
+                    "Running: VIRTUAL_ENV={} uv pip install --system-certs --refresh {}",
+                    venv_dir
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default(),
+                    install_args.join(" ")
+                ));
+                command
+                    .args(install_args)
+                    .current_dir(cwd)
+                    .status()
+                    .map_err(|e| -> Box<dyn std::error::Error> {
+                        format!(
+                            "Could not finish setting up Python packages: failed to execute uv: {}",
+                            e
+                        )
+                        .into()
+                    })
+            }
+            PythonBackend::Pip => {
+                messages::status(&format!(
+                    "Running: {} -m pip install {}",
+                    venv_python.display(),
+                    install_args.join(" ")
+                ));
+                let mut command = std::process::Command::new(venv_python);
+                if let Some(venv_dir) = venv_dir {
+                    command.env("VIRTUAL_ENV", venv_dir);
+                }
+                command
+                    .args(["-m", "pip", "install"])
+                    .arg("--trusted-host")
+                    .arg(Self::PYPI_HOSTS[0])
+                    .arg("--trusted-host")
+                    .arg(Self::PYPI_HOSTS[1])
+                    .arg("--trusted-host")
+                    .arg(Self::PYPI_HOSTS[2])
+                    .args(install_args)
+                    .current_dir(cwd)
+                    .status()
+                    .map_err(|e| -> Box<dyn std::error::Error> {
+                        format!(
+                            "Could not finish setting up Python packages: failed to execute pip: {}",
+                            e
+                        )
+                        .into()
+                    })
+            }
+        }
+    }
+}
+
 /// Create a Python venv at the given directory (the venv directory itself,
 /// not a base directory -- see [`get_venv_bin_dir`]).
 fn run_python_venv_creation(venv_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -702,78 +916,7 @@ fn run_python_venv_creation(venv_path: &Path) -> Result<(), Box<dyn std::error::
         venv_path.display()
     ));
 
-    // Prefer uv when available: `uv venv` creates a standard venv. By default
-    // uv does not install pip into it (it expects callers to use `uv pip
-    // install`), but the generated Makefiles activate the venv and invoke
-    // plain `pip install`, so pip must be physically present. `--seed`
-    // installs pip/setuptools/wheel, matching the ensurepip step the stdlib
-    // fallback below performs.
-    //
-    // Pin the interpreter to the same `python3` the stdlib fallback would use.
-    // Without `--python`, uv applies its own discovery and may prefer a
-    // uv-managed CPython download over the system interpreter, producing a venv
-    // on a different Python version than the fallback path — defeating the
-    // "identical with or without uv" guarantee.
-    if uv_available() {
-        let mut command = std::process::Command::new("uv");
-        command.arg("venv").arg("--seed");
-        if let Some(python) = resolve_system_python() {
-            command.arg("--python").arg(python);
-        }
-        let output = command.arg(venv_path).output()?;
-
-        if !output.status.success() {
-            return Err(format!(
-                "Failed to create virtual environment with uv:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
-
-        messages::success("Virtual environment created successfully");
-        return Ok(());
-    }
-
-    // Create the venv.
-    let output = std::process::Command::new(python_command())
-        .args(["-m", "venv"])
-        .arg(venv_path)
-        .output()?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to create virtual environment:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-
-    // Determine the python executable inside the newly-created venv
-    let venv_python = get_venv_python_path(venv_path);
-
-    // Bootstrap pip inside the venv
-    let ensurepip_output = std::process::Command::new(&venv_python)
-        .args(["-m", "ensurepip"])
-        .output()?;
-
-    if !ensurepip_output.status.success() {
-        return Err(format!(
-            "Failed ensure pip in virtual environment:\n{}",
-            String::from_utf8_lossy(&ensurepip_output.stderr)
-        )
-        .into());
-    }
-    let upgrade_pip_output = std::process::Command::new(&venv_python)
-        .args(["-m", "pip", "install", "pip", "--upgrade"])
-        .output()?;
-
-    if !upgrade_pip_output.status.success() {
-        return Err(format!(
-            "Failed to upgrade pip in virtual environment:\n{}",
-            String::from_utf8_lossy(&upgrade_pip_output.stderr)
-        )
-        .into());
-    }
+    PythonBackend::resolve().create_venv(venv_path)?;
 
     messages::success("Virtual environment created successfully");
     Ok(())
@@ -934,8 +1077,9 @@ fn resolve_venv_python(
 }
 
 /// Run a pip install into the given venv with the supplied trailing arguments
-/// (package specifiers and/or `-r <file>` pairs). Prefers `uv` when available,
-/// otherwise invokes pip directly inside the venv with the trusted-host flags.
+/// (package specifiers and/or `-r <file>` pairs). See
+/// [`PythonBackend::pip_install`] for how the uv-vs-pip backend and
+/// `cert_validation` are applied.
 ///
 /// `cwd` is set as the subprocess's working directory. This matters because
 /// requirements files may contain local relative-path package specs and both
@@ -943,15 +1087,6 @@ fn resolve_venv_python(
 /// not relative to the requirements file's own location. Without pinning `cwd`
 /// explicitly, resolution would depend on whatever directory the user happened
 /// to invoke `cim` from.
-///
-/// `cert_validation` mirrors the `--cert-validation`/`cert_validation` config
-/// option already used for toolchain downloads (see
-/// `config::get_cert_validation_mode`): "strict" (default) changes nothing
-/// here; "relaxed"/"auto" additionally allow `uv` to skip TLS verification for
-/// the standard PyPI hostnames via `--allow-insecure-host`, matching the trust
-/// boundary the stdlib-`pip` fallback below already applies unconditionally
-/// via `--trusted-host`. Previously `uv` installs had no such override at all,
-/// unlike toolchain downloads.
 fn run_pip_install(
     venv_python: &Path,
     install_args: &[String],
@@ -966,58 +1101,7 @@ fn run_pip_install(
         ));
     }
 
-    // Standard PyPI hostnames. The stdlib-pip fallback always trusts these;
-    // `uv` is additionally given the same allowance in "relaxed"/"auto" mode.
-    const PYPI_HOSTS: [&str; 3] = ["pypi.org", "pypi.python.org", "files.pythonhosted.org"];
-
-    let status = if uv_available() {
-        let mut command = std::process::Command::new("uv");
-        command.args(["pip", "install", "--system-certs", "--python"]);
-        command.arg(venv_python);
-        if mode == "relaxed" || mode == "auto" {
-            for host in PYPI_HOSTS {
-                command.arg("--allow-insecure-host").arg(host);
-            }
-        }
-        messages::status(&format!(
-            "Running: uv pip install --system-certs --python {} {}",
-            venv_python.display(),
-            install_args.join(" ")
-        ));
-        command
-            .args(install_args)
-            .current_dir(cwd)
-            .status()
-            .map_err(|e| {
-                format!(
-                    "Could not finish setting up Python packages: failed to execute uv: {}",
-                    e
-                )
-            })?
-    } else {
-        messages::status(&format!(
-            "Running: {} -m pip install {}",
-            venv_python.display(),
-            install_args.join(" ")
-        ));
-        std::process::Command::new(venv_python)
-            .args(["-m", "pip", "install"])
-            .arg("--trusted-host")
-            .arg(PYPI_HOSTS[0])
-            .arg("--trusted-host")
-            .arg(PYPI_HOSTS[1])
-            .arg("--trusted-host")
-            .arg(PYPI_HOSTS[2])
-            .args(install_args)
-            .current_dir(cwd)
-            .status()
-            .map_err(|e| {
-                format!(
-                    "Could not finish setting up Python packages: failed to execute pip: {}",
-                    e
-                )
-            })?
-    };
+    let status = PythonBackend::resolve().pip_install(venv_python, install_args, cwd, &mode)?;
 
     if !status.success() {
         return Err(format!(
