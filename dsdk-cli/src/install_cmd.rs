@@ -130,9 +130,22 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             let filtered_gits =
                 filter_git_configs_by_group(&sdk_config.gits, &include_groups, &exclude_groups);
 
+            // Announce non-default flags once up front instead of letting every
+            // venv (git-level and workspace-level) repeat the same detail.
+            match (*force, *symlink) {
+                (true, true) => messages::status("Reinstalling venvs (--force --symlink)"),
+                (true, false) => messages::status("Reinstalling venvs (--force)"),
+                (false, true) => messages::status("Using shared mirror venv (--symlink)"),
+                (false, false) => {}
+            }
+
             // Per-repo Python deps declared in sdk.yml gits: entries are installed
             // into isolated venvs at .cim/<git>/.venv, independent of the shared
             // workspace venv populated from python-dependencies.yml profiles.
+            let git_python_deps_count = filtered_gits
+                .iter()
+                .filter(|g| g.python_deps.is_some())
+                .count();
             for git in &filtered_gits {
                 if let Some(reqs) = &git.python_deps {
                     if let Err(e) = install_git_python_deps(
@@ -162,13 +175,23 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                 sdk_config.direnv(),
                 cert_validation.as_deref(),
             ) {
-                Ok(true) => {}
+                Ok(true) => {
+                    messages::success(&format!(
+                        "Python dependencies installed: {} git venv(s), workspace venv OK",
+                        git_python_deps_count
+                    ));
+                }
                 Ok(false) if !filtered_gits.iter().any(|g| g.python_deps.is_some()) => {
                     // Nothing to do from either source: report the missing profiles file.
                     messages::error("python-dependencies.yml not found in workspace.");
                     messages::error("This file is copied automatically during 'cim init'.");
                 }
-                Ok(false) => {}
+                Ok(false) => {
+                    messages::success(&format!(
+                        "Python dependencies installed: {} git venv(s) (no workspace-wide python-dependencies.yml found)",
+                        git_python_deps_count
+                    ));
+                }
                 Err(e) => {
                     messages::error(&format!("Failed to install Python packages: {}", e));
                     std::process::exit(1);
@@ -389,7 +412,7 @@ impl VenvManager {
         if let Ok(metadata) = std::fs::symlink_metadata(&venv_path) {
             if metadata.file_type().is_symlink() {
                 if force {
-                    messages::info(&format!(
+                    messages::verbose(&format!(
                         "Virtual environment symlink exists at {}, removing due to --force",
                         venv_path.display()
                     ));
@@ -422,7 +445,7 @@ impl VenvManager {
             let functional = venv_exists(&venv_path);
             if force || !functional {
                 if force {
-                    messages::info("Virtual environment exists, removing due to --force");
+                    messages::verbose("Virtual environment exists, removing due to --force");
                 } else {
                     messages::info(&format!(
                         "Virtual environment at {} exists but its interpreter is missing/broken, recreating",
@@ -435,7 +458,7 @@ impl VenvManager {
                     );
                 }
             } else {
-                messages::info(&format!(
+                messages::verbose(&format!(
                     "Virtual environment already exists at {}, skipping (use --force to reinstall)",
                     venv_path.display()
                 ));
@@ -460,7 +483,7 @@ impl VenvManager {
                 let functional = venv_exists(&workspace_venv_path);
                 if force || !functional {
                     if force {
-                        messages::status(&format!(
+                        messages::verbose(&format!(
                             "Symlink {} exists, removing due to --force",
                             workspace_venv_path.display()
                         ));
@@ -474,14 +497,14 @@ impl VenvManager {
                         return Err(format!("Failed to remove existing symlink: {}", e).into());
                     }
                 } else {
-                    messages::status(&format!(
+                    messages::verbose(&format!(
                         "Virtual environment symlink already exists at {}, skipping (use --force to reinstall)",
                         workspace_venv_path.display()
                     ));
                     return Ok(());
                 }
             } else if force {
-                messages::status(&format!(
+                messages::verbose(&format!(
                     "Destination {} exists and is not a symlink, removing due to --force",
                     workspace_venv_path.display()
                 ));
@@ -521,7 +544,7 @@ impl VenvManager {
                 let functional = venv_exists(&mirror_venv_path);
                 if force || !functional {
                     if force {
-                        messages::info(&format!(
+                        messages::verbose(&format!(
                             "Mirror virtual environment {} exists, removing due to --force",
                             mirror_venv_path.display()
                         ));
@@ -540,7 +563,7 @@ impl VenvManager {
                         .into());
                     }
                 } else {
-                    messages::info(&format!(
+                    messages::verbose(&format!(
                         "Using existing mirror virtual environment at {}",
                         mirror_venv_path.display()
                     ));
@@ -557,7 +580,7 @@ impl VenvManager {
         // Create symlink from workspace to mirror
         self.create_symlink(&workspace_venv_path, &mirror_venv_path)?;
 
-        messages::success("Virtual environment symlink created successfully");
+        messages::verbose("Virtual environment symlink created successfully");
         Ok(())
     }
 
@@ -875,7 +898,7 @@ impl PythonBackend {
                         command.arg("--allow-insecure-host").arg(host);
                     }
                 }
-                messages::status(&format!(
+                messages::verbose(&format!(
                     "Running: VIRTUAL_ENV={} uv pip install --system-certs --refresh {}",
                     venv_dir
                         .map(|d| d.display().to_string())
@@ -895,7 +918,7 @@ impl PythonBackend {
                     })
             }
             PythonBackend::Pip => {
-                messages::status(&format!(
+                messages::verbose(&format!(
                     "Running: {} -m pip install {}",
                     venv_python.display(),
                     install_args.join(" ")
@@ -937,7 +960,7 @@ fn run_python_venv_creation(venv_path: &Path) -> Result<(), Box<dyn std::error::
 
     PythonBackend::resolve().create_venv(venv_path)?;
 
-    messages::success("Virtual environment created successfully");
+    messages::verbose("Virtual environment created successfully");
     Ok(())
 }
 
@@ -1239,7 +1262,7 @@ pub(crate) fn install_pip_packages(
 
     run_pip_install(&venv_python, packages, &workspace_path, cert_validation)?;
 
-    messages::success("Successfully installed Python packages in virtual environment");
+    messages::verbose("Successfully installed Python packages in virtual environment");
     Ok(())
 }
 
@@ -1289,7 +1312,7 @@ pub(crate) fn install_pip_requirements(
 
     run_pip_install(&venv_python, &install_args, workspace_path, cert_validation)?;
 
-    messages::success("Successfully installed Python requirements in virtual environment");
+    messages::verbose("Successfully installed Python requirements in virtual environment");
     Ok(())
 }
 
@@ -1325,13 +1348,13 @@ pub(crate) fn install_git_python_deps(
 
     if venv_path.exists() {
         if force {
-            messages::info(&format!(
+            messages::verbose(&format!(
                 "Virtual environment for '{}' exists, removing due to --force",
                 git_name
             ));
             std::fs::remove_dir_all(&venv_path)?;
         } else {
-            messages::info(&format!(
+            messages::verbose(&format!(
                 "Virtual environment for '{}' already exists at {}, reusing (use --force to reinstall)",
                 git_name,
                 venv_path.display()
@@ -1346,14 +1369,14 @@ pub(crate) fn install_git_python_deps(
     }
 
     let venv_python = get_venv_python_path(&venv_path);
-    messages::status(&format!(
+    messages::verbose(&format!(
         "Installing Python requirements for '{}' into {}",
         git_name,
         venv_path.display()
     ));
     run_pip_install(&venv_python, &install_args, workspace_path, cert_validation)?;
 
-    messages::success(&format!(
+    messages::verbose(&format!(
         "Successfully installed Python requirements for '{}'",
         git_name
     ));
@@ -1468,9 +1491,9 @@ pub(crate) fn install_python_packages_from_file(
 
     // Display which profiles are being used
     if profile_names.len() == 1 {
-        messages::status(&format!("Using Python profile: {}", profile_names[0]));
+        messages::verbose(&format!("Using Python profile: {}", profile_names[0]));
     } else {
-        messages::status(&format!(
+        messages::verbose(&format!(
             "Using Python profiles: {}",
             profile_names.join(", ")
         ));
@@ -1610,7 +1633,7 @@ pub(crate) fn install_pip_from_workspace(
     }
 
     for path in &files {
-        messages::status(&format!(
+        messages::verbose(&format!(
             "Installing Python packages from {}",
             path.display()
         ));
