@@ -339,6 +339,20 @@ impl VenvManager {
         force: bool,
         symlink: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // What's actually on disk decides where the venv lives, not whatever
+        // --symlink happens to be on this particular invocation: a workspace
+        // set up with `--symlink` should keep working with plain
+        // `cim install pip` afterward instead of erroring out. Only --force
+        // lets the caller override that and pick a side explicitly (see
+        // create_venv_direct/create_venv_with_symlink below).
+        if !force {
+            if let Ok(metadata) = std::fs::symlink_metadata(self.workspace_venv_dir()) {
+                if metadata.file_type().is_symlink() {
+                    return self.create_venv_with_symlink(false);
+                }
+            }
+        }
+
         if symlink {
             self.create_venv_with_symlink(force)
         } else {
@@ -1768,6 +1782,62 @@ mod tests {
             fs::symlink_metadata(&workspace_venv_path).expect("workspace .venv should exist");
         assert!(!metadata.file_type().is_symlink());
         assert!(venv_exists(&workspace_venv_path));
+    }
+
+    #[test]
+    fn test_create_venv_reuses_existing_functional_symlink_without_symlink_flag() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let (_mirror_temp_dir, mirror_path) = create_test_workspace();
+
+        // A workspace previously set up with `--symlink`: .venv is a real,
+        // functional venv living in the mirror, symlinked into the workspace.
+        let mirror_venv_path = mirror_path.join(".venv");
+        let bin_dir = get_venv_bin_dir(&mirror_venv_path);
+        fs::create_dir_all(&bin_dir).expect("Failed to create mirror venv structure");
+        fs::write(get_venv_python_path(&mirror_venv_path), "")
+            .expect("Failed to create python file");
+        let workspace_venv_path = workspace_path.join(".venv");
+        std::os::unix::fs::symlink(&mirror_venv_path, &workspace_venv_path)
+            .expect("Failed to create symlink fixture");
+
+        // Plain `cim install pip` (force=false, symlink=false) must reuse the
+        // existing symlink rather than erroring just because --symlink
+        // wasn't passed on this particular invocation -- what's already on
+        // disk decides, not the flag.
+        let manager = VenvManager::new(workspace_path.clone(), mirror_path.clone());
+        let result = manager.create_venv(false, false);
+
+        assert!(result.is_ok(), "expected success, got: {:?}", result);
+        let metadata =
+            fs::symlink_metadata(&workspace_venv_path).expect("workspace .venv should exist");
+        assert!(
+            metadata.file_type().is_symlink(),
+            "existing symlink should be left in place, not converted"
+        );
+    }
+
+    #[test]
+    fn test_create_venv_force_without_symlink_converts_existing_symlink_to_local() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let (_mirror_temp_dir, mirror_path) = create_test_workspace();
+
+        let mirror_venv_path = mirror_path.join(".venv");
+        fs::create_dir_all(&mirror_venv_path).expect("Failed to create mirror venv dir");
+        let workspace_venv_path = workspace_path.join(".venv");
+        std::os::unix::fs::symlink(&mirror_venv_path, &workspace_venv_path)
+            .expect("Failed to create symlink fixture");
+
+        // --force without --symlink is the explicit "switch to local" signal.
+        let manager = VenvManager::new(workspace_path.clone(), mirror_path.clone());
+        let result = manager.create_venv(true, false);
+
+        assert!(result.is_ok(), "expected success, got: {:?}", result);
+        let metadata =
+            fs::symlink_metadata(&workspace_venv_path).expect("workspace .venv should exist");
+        assert!(
+            !metadata.file_type().is_symlink(),
+            "--force without --symlink should replace the symlink with a local venv"
+        );
     }
 
     #[test]
