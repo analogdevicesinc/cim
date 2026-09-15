@@ -9,6 +9,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(target_os = "windows")]
@@ -40,6 +41,22 @@ where
         CommitValue::Float(f) => f.to_string(),
         CommitValue::Int(i) => i.to_string(),
     })
+}
+
+/// Quote unquoted, all-digit `commit:` scalar values before YAML parsing.
+///
+/// `noyalib` (like YAML generally) resolves an unquoted plain scalar made up
+/// only of digits by parsing it as a decimal integer, which silently drops
+/// leading zeros (`commit: 0111250` becomes the integer `111250`, and
+/// `deserialize_commit` above can only stringify whatever integer it is
+/// handed -- the original text is already gone by then). Commit hashes are
+/// never numeric values, so defensively quote any bare all-digit `commit:`
+/// value here, forcing it to stay a literal string regardless of leading
+/// zeros. Already-quoted values are left untouched.
+fn quote_numeric_commit_values(yaml: &str) -> String {
+    let re = Regex::new(r#"(?m)^(\s*commit\s*:\s*)([+-]?[0-9]+)(\s*(?:#.*)?)$"#)
+        .expect("static regex is valid");
+    re.replace_all(yaml, "$1\"$2\"$3").into_owned()
 }
 
 /// Custom deserializer for the `install:` `sentinel:` field. It accepts a
@@ -1111,7 +1128,8 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<SdkConfig, Box<dyn std::er
     let file_content = fs::read_to_string(&path_buf)
         .map_err(|e| format!("Cannot read config file {}: {}", path_buf.display(), e))?;
 
-    let config: SdkConfig = noyalib::from_str(&file_content)
+    let preprocessed = quote_numeric_commit_values(&file_content);
+    let config: SdkConfig = noyalib::from_str(&preprocessed)
         .map_err(|e| enhance_config_error(&file_content, &path_buf, &e))?;
 
     Ok(config)
@@ -1941,6 +1959,42 @@ gits:
         file.write_all(yaml.as_bytes()).unwrap();
 
         assert!(load_config(&file_path).is_ok());
+    }
+
+    #[test]
+    fn test_commit_leading_zero_preserved() {
+        // Regression test: an unquoted, all-digit commit hash with a
+        // leading zero must not be reinterpreted as a decimal integer
+        // (which would silently drop the leading zero).
+        let yaml =
+            "gits:\n  - name: git\n    url: https://example.com/git.git\n    commit: 0111250\n";
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(workspace::SDK_CONFIG_FILE);
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(yaml.as_bytes()).unwrap();
+
+        let config = load_config(&file_path).unwrap();
+        assert_eq!(config.gits[0].commit, "0111250");
+    }
+
+    #[test]
+    fn test_quote_numeric_commit_values() {
+        assert_eq!(
+            quote_numeric_commit_values("    commit: 0111250\n"),
+            "    commit: \"0111250\"\n"
+        );
+        assert_eq!(
+            quote_numeric_commit_values("    commit: main\n"),
+            "    commit: main\n"
+        );
+        assert_eq!(
+            quote_numeric_commit_values("    commit: \"0111250\"\n"),
+            "    commit: \"0111250\"\n"
+        );
+        assert_eq!(
+            quote_numeric_commit_values("    commit: 20240315  # a comment\n"),
+            "    commit: \"20240315\"  # a comment\n"
+        );
     }
 
     #[test]
