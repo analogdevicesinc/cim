@@ -16,6 +16,7 @@ mod makefile;
 mod release_cmd;
 mod update_cmd;
 mod utils_cmd;
+mod venv_lock;
 mod version;
 
 use clap::{CommandFactory, Parser};

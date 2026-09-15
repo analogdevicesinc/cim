@@ -484,43 +484,55 @@ impl VenvManager {
 
         // Check if mirror venv already exists and is functional; a broken mirror
         // venv (missing/dangling interpreter) is recreated regardless of --force.
-        if mirror_venv_path.exists() {
-            let functional = venv_exists(&mirror_venv_path);
-            if force || !functional {
-                if force {
-                    messages::info(&format!(
-                        "Mirror virtual environment {} exists, removing due to --force",
-                        mirror_venv_path.display()
-                    ));
-                } else {
-                    messages::info(&format!(
-                        "Mirror virtual environment at {} is missing its interpreter (broken/incomplete), recreating",
-                        mirror_venv_path.display()
-                    ));
-                }
-                if let Err(e) = std::fs::remove_dir_all(&mirror_venv_path) {
-                    return Err(format!(
-                        "Failed to remove existing mirror virtual environment: {}",
-                        e
-                    )
-                    .into());
-                }
-            } else {
-                messages::info(&format!(
-                    "Using existing mirror virtual environment at {}",
-                    mirror_venv_path.display()
-                ));
-            }
-        }
-
-        // Create mirror venv if it doesn't exist
-        if !mirror_venv_path.exists() {
-            // Ensure mirror directory exists
+        // Guard the section that (re)creates the mirror venv directory
+        // itself with the shared lock: this is the only operation that can
+        // corrupt the venv for every other workspace pointed at the same
+        // mirror. Routine reuse of an already-functional venv (the common
+        // case) never takes the lock.
+        {
+            // The lock file is a sibling of `.venv`, so its parent (the
+            // mirror directory itself) must exist before we can even attempt
+            // to acquire the lock -- this matters on a brand-new mirror that
+            // has never been used before.
             if let Some(parent) = mirror_venv_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+            let _lock = crate::venv_lock::MirrorLock::acquire(&mirror_venv_path)?;
 
-            run_python_venv_creation(&mirror_venv_path)?;
+            if mirror_venv_path.exists() {
+                let functional = venv_exists(&mirror_venv_path);
+                if force || !functional {
+                    if force {
+                        messages::info(&format!(
+                            "Mirror virtual environment {} exists, removing due to --force",
+                            mirror_venv_path.display()
+                        ));
+                    } else {
+                        messages::info(&format!(
+                            "Mirror virtual environment at {} is missing its interpreter (broken/incomplete), recreating",
+                            mirror_venv_path.display()
+                        ));
+                    }
+                    if let Err(e) = std::fs::remove_dir_all(&mirror_venv_path) {
+                        return Err(format!(
+                            "Failed to remove existing mirror virtual environment: {}",
+                            e
+                        )
+                        .into());
+                    }
+                } else {
+                    messages::info(&format!(
+                        "Using existing mirror virtual environment at {}",
+                        mirror_venv_path.display()
+                    ));
+                }
+            }
+
+            // Create mirror venv if it doesn't exist (the mirror directory
+            // itself was already ensured to exist above, for the lock file).
+            if !mirror_venv_path.exists() {
+                run_python_venv_creation(&mirror_venv_path)?;
+            }
         }
 
         // Create symlink from workspace to mirror
