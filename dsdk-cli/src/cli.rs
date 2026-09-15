@@ -496,6 +496,25 @@ pub enum InstallCommand {
                     (insecure), auto"
         )]
         cert_validation: Option<String>,
+        /// Repair a broken shared mirror virtual environment in place
+        #[arg(
+            long,
+            conflicts_with_all = [
+                "force",
+                "symlink",
+                "profile",
+                "list_profiles",
+                "include_group",
+                "exclude_group"
+            ],
+            help = "Repair the shared mirror venv in place",
+            long_help = "Repair the shared mirror virtual environment (used by \
+                    --symlink workspaces) instead of installing packages: tries \
+                    a non-destructive fix first (e.g. a stale interpreter path \
+                    after a system Python upgrade) and only rebuilds it from \
+                    scratch as a last resort"
+        )]
+        repair: bool,
     },
     /// Install and extract toolchains
     Toolchains {

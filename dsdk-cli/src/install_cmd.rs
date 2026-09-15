@@ -60,7 +60,25 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             include_group,
             exclude_group,
             cert_validation,
+            repair,
         } => {
+            if *repair {
+                let mirror_path = resolve_mirror(None);
+                if let Err(e) = handle_pip_repair(
+                    &workspace_path,
+                    &mirror_path,
+                    sdk_config.direnv(),
+                    cert_validation.as_deref(),
+                ) {
+                    messages::error(&format!(
+                        "Failed to repair shared virtual environment: {}",
+                        e
+                    ));
+                    std::process::exit(1);
+                }
+                return;
+            }
+
             let python_deps_files =
                 dsdk_cli::workspace::discover_dependency_files(&workspace_path, PYTHON_DEPS_FILE);
 
@@ -482,8 +500,6 @@ impl VenvManager {
             }
         }
 
-        // Check if mirror venv already exists and is functional; a broken mirror
-        // venv (missing/dangling interpreter) is recreated regardless of --force.
         // Guard the section that (re)creates the mirror venv directory
         // itself with the shared lock: this is the only operation that can
         // corrupt the venv for every other workspace pointed at the same
@@ -499,6 +515,8 @@ impl VenvManager {
             }
             let _lock = crate::venv_lock::MirrorLock::acquire(&mirror_venv_path)?;
 
+            // Check if mirror venv already exists and is functional; a broken mirror
+            // venv (missing/dangling interpreter) is recreated regardless of --force.
             if mirror_venv_path.exists() {
                 let functional = venv_exists(&mirror_venv_path);
                 if force || !functional {
@@ -509,7 +527,8 @@ impl VenvManager {
                         ));
                     } else {
                         messages::info(&format!(
-                            "Mirror virtual environment at {} is missing its interpreter (broken/incomplete), recreating",
+                            "Mirror virtual environment at {} is missing its interpreter (broken/incomplete), recreating. \
+                             If this keeps happening, try `cim install pip --repair` instead of --force.",
                             mirror_venv_path.display()
                         ));
                     }
@@ -920,6 +939,92 @@ fn run_python_venv_creation(venv_path: &Path) -> Result<(), Box<dyn std::error::
 
     messages::success("Virtual environment created successfully");
     Ok(())
+}
+
+/// Attempt to repair `venv_dir` without deleting anything installed in its
+/// `site-packages` -- used by `cim install pip --repair` (see
+/// `handle_pip_repair`) before that command ever resorts to a full
+/// wipe-and-recreate.
+///
+/// The common breakage this fixes: a venv's own interpreter (`bin/python3`
+/// etc.) is a symlink into whatever python installation created it, so
+/// upgrading or removing that installation leaves a dangling symlink even
+/// though `pyvenv.cfg` and `site-packages` are still perfectly intact.
+/// Repointing the interpreter at the currently resolved system python and
+/// re-running `ensurepip` brings the venv back to life without touching any
+/// already-installed third-party package.
+///
+/// Returns `Ok(true)` if the venv is functional after the attempt (whether
+/// or not repair was actually needed), `Ok(false)` if it's still broken and
+/// a full recreate is required.
+pub(crate) fn repair_venv_in_place(venv_dir: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    if dsdk_cli::workspace::venv_is_deeply_functional(venv_dir) {
+        return Ok(true);
+    }
+
+    if let Some(stale_home) = dsdk_cli::workspace::pyvenv_cfg_stale_home(venv_dir) {
+        messages::verbose(&format!(
+            "In-place repair: pyvenv.cfg home '{}' no longer exists, repointing interpreter",
+            stale_home.display()
+        ));
+    }
+
+    let Some(system_python) = resolve_system_python() else {
+        // No system python to repoint at -- in-place repair can't help.
+        return Ok(false);
+    };
+
+    let python_exe = get_venv_python_path(venv_dir);
+    if python_exe.symlink_metadata().is_ok() {
+        std::fs::remove_file(&python_exe)?;
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&system_python, &python_exe)?;
+    #[cfg(windows)]
+    std::fs::copy(&system_python, &python_exe)?;
+
+    if let Some(parent) = system_python.parent() {
+        rewrite_pyvenv_cfg_home(venv_dir, parent);
+    }
+
+    // Re-bootstrap pip. This reinstalls pip itself but never touches
+    // anything else already present in site-packages.
+    let ensurepip_output = std::process::Command::new(&python_exe)
+        .args(["-m", "ensurepip", "--upgrade"])
+        .output()?;
+    if !ensurepip_output.status.success() {
+        messages::verbose(&format!(
+            "In-place repair: ensurepip reported an issue:\n{}",
+            String::from_utf8_lossy(&ensurepip_output.stderr)
+        ));
+    }
+
+    Ok(dsdk_cli::workspace::venv_is_deeply_functional(venv_dir))
+}
+
+/// Rewrite `pyvenv.cfg`'s `home = ` line to `new_home`, if present. Best
+/// effort only: failing to update it doesn't break anything cim itself
+/// reads, it would just leave the file slightly inconsistent with the
+/// freshly relinked interpreter for external tooling that inspects it.
+fn rewrite_pyvenv_cfg_home(venv_dir: &Path, new_home: &Path) {
+    let cfg_path = venv_dir.join("pyvenv.cfg");
+    let Ok(contents) = std::fs::read_to_string(&cfg_path) else {
+        return;
+    };
+    let rewritten = contents
+        .lines()
+        .map(|line| match line.split_once('=') {
+            Some((key, _)) if key.trim() == "home" => format!("home = {}", new_home.display()),
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Err(e) = std::fs::write(&cfg_path, rewritten + "\n") {
+        messages::verbose(&format!(
+            "In-place repair: failed to update pyvenv.cfg: {}",
+            e
+        ));
+    }
 }
 
 /// Create a Python virtual environment at the given venv directory.
@@ -1523,6 +1628,96 @@ pub(crate) fn install_pip_from_workspace(
     Ok(true)
 }
 
+/// Handle `cim install pip --repair`.
+///
+/// Tries a non-destructive in-place fix first (see [`repair_venv_in_place`])
+/// and only escalates to a full wipe-and-recreate -- which reinstalls only
+/// this workspace's own profile(s), not whatever any other workspace
+/// sharing the mirror previously installed -- as a last resort. The
+/// destructive path is delegated to `install_pip_from_workspace(...,
+/// force = true, symlink = true, ...)`, which already guards mirror venv
+/// (re)creation with [`crate::venv_lock::MirrorLock`] (see
+/// `VenvManager::create_venv_with_symlink`).
+fn handle_pip_repair(
+    workspace_path: &Path,
+    mirror_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
+    cert_validation: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mirror_venv_path = mirror_path.join(".venv");
+
+    if !mirror_venv_path.exists() {
+        return Err(format!(
+            "No shared virtual environment found at {} -- nothing to repair. Run `cim install pip --symlink` first.",
+            mirror_venv_path.display()
+        )
+        .into());
+    }
+
+    if dsdk_cli::workspace::venv_is_deeply_functional(&mirror_venv_path) {
+        messages::success(&format!(
+            "Shared virtual environment at {} is already healthy.",
+            mirror_venv_path.display()
+        ));
+        return Ok(());
+    }
+
+    match repair_venv_in_place(&mirror_venv_path) {
+        Ok(true) => {
+            messages::success(&format!(
+                "Repaired shared virtual environment at {} in place; no packages were touched.",
+                mirror_venv_path.display()
+            ));
+            return Ok(());
+        }
+        Ok(false) => messages::info(
+            "In-place repair could not fix the interpreter; rebuilding the virtual environment from scratch...",
+        ),
+        Err(e) => messages::info(&format!(
+            "In-place repair attempt failed ({}); rebuilding the virtual environment from scratch...",
+            e
+        )),
+    }
+
+    messages::info(
+        "Rebuilding the shared virtual environment from scratch. Only this workspace's Python \
+         packages will be reinstalled -- other workspaces using this mirror must re-run their \
+         own `cim install pip` afterward to restore their packages.",
+    );
+
+    let reinstalled_from_workspace = install_pip_from_workspace(
+        workspace_path,
+        true, // force: this is the destructive last-resort path
+        true, // symlink: repair only concerns the shared mirror venv
+        None,
+        mirror_path,
+        direnv_cfg,
+        cert_validation,
+    )?;
+
+    if !reinstalled_from_workspace {
+        // No python-dependencies.yml in this workspace to reinstall from --
+        // still make sure the mirror venv shell itself exists for whoever
+        // installs into it next.
+        let _lock = crate::venv_lock::MirrorLock::acquire(&mirror_venv_path)?;
+        if !dsdk_cli::workspace::venv_is_deeply_functional(&mirror_venv_path) {
+            if mirror_venv_path.exists() {
+                std::fs::remove_dir_all(&mirror_venv_path)?;
+            }
+            if let Some(parent) = mirror_venv_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            run_python_venv_creation(&mirror_venv_path)?;
+        }
+    }
+
+    messages::success(&format!(
+        "Shared virtual environment at {} rebuilt from scratch.",
+        mirror_venv_path.display()
+    ));
+    Ok(())
+}
+
 pub(crate) fn install_prerequisites(
     os_deps: &config::OsDependencies,
     skip_prompt: bool,
@@ -2016,5 +2211,36 @@ mod tests {
             .expect("Failed to assert Python prefix");
 
         assert!(output.status.success());
+    }
+
+    #[test]
+    fn test_repair_venv_in_place_fixes_dangling_interpreter() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let venv_dir = workspace_path.join(".venv");
+        run_python_venv_creation(&venv_dir).expect("Failed to create virtual environment");
+
+        // Simulate the common breakage: the venv's interpreter symlink
+        // points at a python installation that no longer exists (e.g. after
+        // a system Python upgrade/removal), while everything else about the
+        // venv (site-packages, pyvenv.cfg) is untouched.
+        let python_exe = get_venv_python_path(&venv_dir);
+        fs::remove_file(&python_exe).expect("Failed to remove interpreter");
+        std::os::unix::fs::symlink("/nonexistent/python3", &python_exe)
+            .expect("Failed to create dangling symlink fixture");
+        assert!(!venv_exists(&venv_dir), "fixture should look broken");
+
+        let repaired = repair_venv_in_place(&venv_dir).expect("repair should not error");
+        assert!(repaired, "expected in-place repair to succeed");
+        assert!(dsdk_cli::workspace::venv_is_deeply_functional(&venv_dir));
+    }
+
+    #[test]
+    fn test_repair_venv_in_place_already_healthy_is_a_noop() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let venv_dir = workspace_path.join(".venv");
+        run_python_venv_creation(&venv_dir).expect("Failed to create virtual environment");
+
+        let repaired = repair_venv_in_place(&venv_dir).expect("repair should not error");
+        assert!(repaired);
     }
 }

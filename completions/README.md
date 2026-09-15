@@ -136,7 +136,7 @@ cim install <TAB>
 
 # Complete install pip options
 cim install pip --<TAB>
-# Shows: --profile --force --symlink --list-profiles --help
+# Shows: --profile --force --symlink --list-profiles --repair --help
 
 # Complete Python profiles
 cim install pip --profile <TAB>
