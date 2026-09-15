@@ -451,24 +451,18 @@ pub enum InstallCommand {
     /// Install Python packages for documentation
     Pip {
         /// Force reinstallation by removing existing virtual environment
-        #[arg(
-            short,
-            long,
-            help = "Force reinstallation by removing existing virtual environment"
-        )]
+        #[arg(short, long, help = "Reinstall by removing the existing venv")]
         force: bool,
         /// Install Python packages to mirror and create symlinks in workspace
-        #[arg(
-            long,
-            help = "Install Python packages to mirror directory and create symlinks in workspace"
-        )]
+        #[arg(long, help = "Use a shared venv in the mirror via a symlink")]
         symlink: bool,
         /// Python dependency profile to use
         #[arg(
             short,
             long,
             value_name = "PROFILE",
-            help = "Profile to use (e.g., minimal, docs, dev, full)\n\
+            help = "Profile to use (e.g. minimal, docs, dev, full)",
+            long_help = "Profile to use (e.g. minimal, docs, dev, full). \
                     Supports comma-separated: --profile dev,docs"
         )]
         profile: Option<String>,
@@ -479,21 +473,27 @@ pub enum InstallCommand {
         #[arg(
             long,
             value_name = "NAMES",
-            help = "Only install per-repo Python deps for repositories in these comma-separated group(s)"
+            help = "Only install deps for these group(s)",
+            long_help = "Only install per-repo Python deps for repositories in \
+                    these comma-separated group(s)"
         )]
         include_group: Option<String>,
         /// Exclude per-repo Python deps for repositories in the given group(s)
         #[arg(
             long,
             value_name = "NAMES",
-            help = "Exclude per-repo Python deps for repositories in these comma-separated group(s)"
+            help = "Exclude deps for these group(s)",
+            long_help = "Exclude per-repo Python deps for repositories in these \
+                    comma-separated group(s)"
         )]
         exclude_group: Option<String>,
         /// Certificate validation mode for package downloads (strict, relaxed, auto)
         #[arg(
             long,
             value_name = "MODE",
-            help = "Certificate validation: strict (default), relaxed (insecure), auto"
+            help = "Certificate validation mode",
+            long_help = "Certificate validation: strict (default), relaxed \
+                    (insecure), auto"
         )]
         cert_validation: Option<String>,
     },
