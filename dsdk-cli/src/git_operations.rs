@@ -325,6 +325,22 @@ pub fn checkout(repo_path: &Path, commit_ref: &str) -> Result<GitResult> {
     git_command(&["checkout", commit_ref], Some(repo_path))
 }
 
+/// Check if a ref is a GitHub pull request ref (e.g., "pull/33/head" or "refs/pull/33/head")
+pub fn is_pull_request_ref(ref_name: &str) -> bool {
+    ref_name.starts_with("refs/pull/") || ref_name.starts_with("pull/")
+}
+
+/// Normalize a PR ref to full refs/pull/N/head format
+pub fn normalize_pr_ref(ref_name: &str) -> String {
+    if ref_name.starts_with("refs/pull/") {
+        ref_name.to_string()
+    } else if ref_name.starts_with("pull/") {
+        format!("refs/{}", ref_name)
+    } else {
+        ref_name.to_string()
+    }
+}
+
 /// List remote references
 /// Returns `(sha, ref_name)`
 pub fn ls_remote(url: &str, heads: bool, tags: bool) -> Result<Vec<(String, String)>> {
@@ -500,6 +516,7 @@ pub fn get_latest_commit_for_remote_branch(
 /// Determine the fetch refspec, update-ref target, and resolved SHA from ls-remote pairs.
 ///
 /// Returns `(fetch_refspec, update_ref_name, sha)`, in order of precedence:
+/// - PR `pull/N/head` : `(refs/pull/N/head, refs/pull/N/head, Some(sha))`
 /// - Tag `v1.0`    : `(refs/tags/v1.0, refs/tags/v1.0, Some(sha))`
 /// - Branch `foo`  : `(refs/heads/foo, refs/heads/foo, Some(sha))`
 /// - Commit SHA    : `(sha, refs/heads/trunk, None)`
@@ -507,6 +524,16 @@ pub fn resolve_fetch_refspec(
     refs: &[(String, String)],
     ref_name: &str,
 ) -> (String, String, Option<String>) {
+    // Handle GitHub pull request refs (pull/N/head or refs/pull/N/head)
+    if is_pull_request_ref(ref_name) {
+        let full_ref = normalize_pr_ref(ref_name);
+        let sha = refs
+            .iter()
+            .find(|(_, r)| r == &full_ref)
+            .map(|(s, _)| s.clone());
+        return (full_ref.clone(), full_ref, sha);
+    }
+
     // Explicit reference
     if ref_name.starts_with("refs/heads/") || ref_name.starts_with("refs/tags/") {
         let sha = refs
