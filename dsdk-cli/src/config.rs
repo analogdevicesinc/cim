@@ -1228,6 +1228,15 @@ pub struct UserConfig {
     /// When true, `cim makefile` will not insert comment banners between sections
     #[serde(default)]
     pub no_dividers: Option<bool>,
+
+    /// Hard timeout (in seconds) applied to every git subprocess invocation
+    /// (clone, fetch, checkout, ls-remote, ...) as a backstop against hangs
+    /// the HTTP low-speed check can't see. Default: 900 (15 minutes).
+    /// Increase this for very large repositories (e.g. full kernel/monorepo
+    /// histories) on slower links, where a full `fetch --all --tags` can
+    /// legitimately take longer than the default even with no stalls.
+    #[serde(default)]
+    pub git_timeout_secs: Option<u64>,
 }
 
 impl UserConfig {
@@ -1518,6 +1527,27 @@ impl UserConfig {
 # Examples:
 # no_dividers = true     # Never add dividers to generated Makefiles
 # no_dividers = false    # Always add dividers (default behavior)
+
+# =============================================================================
+# Git Command Timeout
+# =============================================================================
+# Hard timeout (in seconds) for every git subprocess invocation (clone,
+# fetch, checkout, ls-remote, ...). This is a backstop against hangs that
+# git's own HTTP low-speed abort can't see (non-HTTP transports, a stall
+# before any bytes flow, credential-helper issues) -- it kills the git
+# process if it runs longer than this, no matter what it's doing.
+#
+# Default: 900 (15 minutes)
+# Use cases:
+#   - Very large repositories (e.g. full kernel/monorepo histories) whose
+#     `fetch --all --tags` legitimately takes longer than the default,
+#     even with zero stalls, especially on slower links (e.g. ~10 Mbps)
+#   - Lower it to fail fast in CI or scripted environments
+#
+# Examples:
+# git_timeout_secs = 900     # Default
+# git_timeout_secs = 1800    # Large repos on slow links
+# git_timeout_secs = 120     # Fail fast in CI
 "#
         .to_string()
     }
@@ -1659,6 +1689,9 @@ impl UserConfig {
         if let Some(no_dividers) = self.no_dividers {
             lines.push(format!("no_dividers={}", no_dividers));
         }
+        if let Some(secs) = self.git_timeout_secs {
+            lines.push(format!("git_timeout_secs={}", secs));
+        }
 
         lines
     }
@@ -1680,6 +1713,7 @@ impl UserConfig {
             "documentation_dirs" => self.documentation_dirs.clone(),
             "cert_validation" => self.cert_validation.clone(),
             "no_dividers" => self.no_dividers.map(|b| b.to_string()),
+            "git_timeout_secs" => self.git_timeout_secs.map(|v| v.to_string()),
             _ => {
                 // Handle nested keys like alternate_sources.0.url
                 if key.starts_with("alternate_sources.") {
@@ -2531,6 +2565,33 @@ url = "git@github.com:team/manifests.git"
         let alts = config.alternate_sources.unwrap();
         assert_eq!(alts.len(), 1);
         assert_eq!(alts[0].url, "git@github.com:team/manifests.git");
+    }
+
+    #[test]
+    fn test_user_config_git_timeout_secs() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(&config_path, "git_timeout_secs = 1800\n").unwrap();
+
+        let config = UserConfig::load_from(&config_path).unwrap().unwrap();
+        assert_eq!(config.git_timeout_secs, Some(1800));
+        assert_eq!(
+            config.get_value("git_timeout_secs"),
+            Some("1800".to_string())
+        );
+        assert_eq!(config.list_all(), vec!["git_timeout_secs=1800".to_string()]);
+    }
+
+    #[test]
+    fn test_user_config_git_timeout_secs_absent() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "").unwrap();
+
+        let config = UserConfig::load_from(&config_path).unwrap().unwrap();
+        assert_eq!(config.git_timeout_secs, None);
+        assert_eq!(config.get_value("git_timeout_secs"), None);
     }
 
     #[test]

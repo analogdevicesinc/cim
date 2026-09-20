@@ -640,6 +640,9 @@ documentation_dirs = "wiki, manual, reference"
 
 # Certificate validation: "strict" (default), "relaxed" (insecure), "auto"
 cert_validation = "strict"
+
+# Hard timeout (seconds) for every git subprocess call (default: 900)
+git_timeout_secs = 900
 ```
 
 ### Certificate Validation
@@ -655,6 +658,23 @@ cert_validation = "auto"  # try strict, fallback to relaxed with warning
 ```
 
 Use `relaxed` mode only in trusted networks. It disables certificate validation and is vulnerable to MITM attacks.
+
+### Git Command Timeout
+
+Every git subprocess cim runs (clone, fetch, checkout, ls-remote, ...) is
+guarded by two layers: git's own HTTP low-speed abort (fails a transfer that
+drops below ~1000 bytes/sec for 30s) and a hard kill timeout as a backstop
+for hangs the low-speed check can't see (non-HTTP transports, a stall before
+any bytes flow, credential-helper issues). The hard timeout defaults to 900
+seconds (15 minutes).
+
+For very large repositories (e.g. full kernel/monorepo histories) on slower
+links, a full `fetch --all --tags` can legitimately take longer than the
+default even with no stalls. Raise the hard timeout in `config.toml`:
+
+```toml
+git_timeout_secs = 1800  # 30 minutes
+```
 
 ---
 
