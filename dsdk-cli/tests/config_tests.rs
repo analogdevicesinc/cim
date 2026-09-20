@@ -490,6 +490,7 @@ fn test_user_config_list_all_simple_fields() {
         documentation_dirs: Some("docs,manuals".to_string()),
         cert_validation: None,
         no_dividers: None,
+        git_timeout_secs: None,
     };
 
     let list = config.list_all();
@@ -1173,6 +1174,7 @@ fn test_apply_to_sdk_config_no_longer_overrides_mirror() {
         documentation_dirs: None,
         cert_validation: None,
         no_dividers: None,
+        git_timeout_secs: None,
     };
     assert_eq!(
         mirror_only.apply_to_sdk_config(&mut loaded_sdk_config, false),

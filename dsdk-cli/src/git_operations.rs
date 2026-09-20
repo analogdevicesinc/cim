@@ -43,12 +43,32 @@ const GIT_LOW_SPEED_TIME_ARG: &str = "http.lowSpeedTime=30";
 // Backstop for hangs the low-speed check above can't see (non-HTTP
 // transports, a stall before any bytes flow, credential-helper weirdness).
 // A single git subprocess can never wedge the mirror-sync thread pool past
-// this, no matter what.
-const GIT_COMMAND_HARD_TIMEOUT: Duration = Duration::from_secs(600);
+// this, no matter what. Overridable via `git_timeout_secs` in
+// `~/.config/cim/config.toml` -- large repositories (e.g. full kernel
+// histories) on slower links can legitimately need more than the default.
+const DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS: u64 = 900;
+
+/// Resolve the effective hard timeout from an optional user config,
+/// falling back to [`DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS`]. Split out from
+/// [`effective_git_command_timeout`] so the resolution logic is testable
+/// without touching disk.
+fn resolve_git_command_timeout(user_config: Option<&crate::config::UserConfig>) -> Duration {
+    let secs = user_config
+        .and_then(|c| c.git_timeout_secs)
+        .unwrap_or(DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
+
+/// Effective hard timeout for git subprocess invocations, honoring the
+/// user's `git_timeout_secs` config override if set.
+fn effective_git_command_timeout() -> Duration {
+    let user_config = crate::config::UserConfig::load().ok().flatten();
+    resolve_git_command_timeout(user_config.as_ref())
+}
 
 /// Execute git command with consistent error handling
 pub fn git_command(args: &[&str], cwd: Option<&Path>) -> Result<GitResult> {
-    git_command_with_timeout(args, cwd, GIT_COMMAND_HARD_TIMEOUT)
+    git_command_with_timeout(args, cwd, effective_git_command_timeout())
 }
 
 fn git_command_with_timeout(
@@ -834,6 +854,26 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(2));
         let err = result.unwrap_err();
         assert!(err.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn test_resolve_git_command_timeout_default() {
+        assert_eq!(
+            resolve_git_command_timeout(None),
+            Duration::from_secs(DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn test_resolve_git_command_timeout_config_override() {
+        let user_config = crate::config::UserConfig {
+            git_timeout_secs: Some(120),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_git_command_timeout(Some(&user_config)),
+            Duration::from_secs(120)
+        );
     }
 
     #[test]
