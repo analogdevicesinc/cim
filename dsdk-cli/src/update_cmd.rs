@@ -712,10 +712,19 @@ pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T, mirr
                                 }
                             }
                         } else {
+                            // A failed clone can still leave a partial mirror dir
+                            // on disk (e.g. network drop mid-clone). Remove it so
+                            // a leftover broken mirror doesn't get treated as a
+                            // valid, existing one on a later run or in the
+                            // workspace-clone phase of this same run.
+                            let _ = std::fs::remove_dir_all(&repo_mirror_path);
                             MirrorOperationResult::Failed
                         }
                     }
-                    Err(_) => MirrorOperationResult::Failed,
+                    Err(_) => {
+                        let _ = std::fs::remove_dir_all(&repo_mirror_path);
+                        MirrorOperationResult::Failed
+                    }
                 }
             };
 
