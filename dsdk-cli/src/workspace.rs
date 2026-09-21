@@ -118,7 +118,7 @@ fn default_source_fallback() -> String {
 /// Get the default manifest source location, considering user config
 pub fn get_default_source() -> String {
     if let Ok(Some(user_config)) = config::UserConfig::load() {
-        if let Some(ref default_source) = user_config.default_source {
+        if let Some(ref default_source) = user_config.sources.default_source {
             return default_source.clone();
         }
     }
@@ -128,12 +128,12 @@ pub fn get_default_source() -> String {
 /// Get all manifest sources (default + alternates), deduplicated.
 /// Accepts a pre-loaded UserConfig to avoid redundant file I/O.
 pub fn get_all_sources_from_config(user_config: Option<&config::UserConfig>) -> Vec<String> {
-    let default = match user_config.and_then(|uc| uc.default_source.as_ref()) {
+    let default = match user_config.and_then(|uc| uc.sources.default_source.as_ref()) {
         Some(ds) => expand_env_vars(ds),
         None => default_source_fallback(),
     };
     let alternates = user_config
-        .and_then(|uc| uc.alternate_sources.as_ref())
+        .and_then(|uc| uc.sources.alternate_sources.as_ref())
         .cloned()
         .unwrap_or_default();
     let mut sources = vec![default.clone()];
@@ -1304,7 +1304,7 @@ pub fn expand_manifest_vars_in_config(sdk_config: &mut config::SdkConfig) {
 /// Resolve the effective mirror cache directory, highest priority first:
 ///
 /// 1. `cli_override` — the `--mirror` flag passed to `init` / `update`.
-/// 2. `mirror` in `~/.config/cim/config.toml` (the user config).
+/// 2. `mirror` under `[workspace]` in `~/.config/cim/config.toml` (the user config).
 /// 3. The built-in default, `config::default_mirror()` (`$HOME/tmp/mirror`).
 ///
 /// Environment variables (e.g. `$HOME`) in the chosen value are expanded.
@@ -1312,7 +1312,10 @@ pub fn resolve_mirror(cli_override: Option<&Path>) -> PathBuf {
     let raw = if let Some(cli) = cli_override {
         cli.to_path_buf()
     } else if let Ok(Some(user_config)) = config::UserConfig::load() {
-        user_config.mirror.unwrap_or_else(config::default_mirror)
+        user_config
+            .workspace
+            .mirror
+            .unwrap_or_else(config::default_mirror)
     } else {
         config::default_mirror()
     };
@@ -2179,8 +2182,10 @@ mod tests {
     #[test]
     fn test_get_all_sources_from_config_default_only() {
         let uc = config::UserConfig {
-            default_source: Some("/my/source".to_string()),
-            alternate_sources: None,
+            sources: config::SourcesConfig {
+                default_source: Some("/my/source".to_string()),
+                alternate_sources: None,
+            },
             ..Default::default()
         };
         let sources = get_all_sources_from_config(Some(&uc));
@@ -2196,8 +2201,10 @@ mod tests {
     #[test]
     fn test_get_all_sources_from_config_with_alternates() {
         let uc = config::UserConfig {
-            default_source: Some("/default".to_string()),
-            alternate_sources: Some(vec![alt("/alt1"), alt("/alt2")]),
+            sources: config::SourcesConfig {
+                default_source: Some("/default".to_string()),
+                alternate_sources: Some(vec![alt("/alt1"), alt("/alt2")]),
+            },
             ..Default::default()
         };
         let sources = get_all_sources_from_config(Some(&uc));
@@ -2207,11 +2214,13 @@ mod tests {
     #[test]
     fn test_get_all_sources_from_config_dedup() {
         let uc = config::UserConfig {
-            default_source: Some("/default".to_string()),
-            alternate_sources: Some(vec![
-                alt("/default"), // duplicate of default
-                alt("/alt1"),
-            ]),
+            sources: config::SourcesConfig {
+                default_source: Some("/default".to_string()),
+                alternate_sources: Some(vec![
+                    alt("/default"), // duplicate of default
+                    alt("/alt1"),
+                ]),
+            },
             ..Default::default()
         };
         let sources = get_all_sources_from_config(Some(&uc));
@@ -2221,8 +2230,10 @@ mod tests {
     #[test]
     fn test_get_all_sources_from_config_filters_empty() {
         let uc = config::UserConfig {
-            default_source: Some("/default".to_string()),
-            alternate_sources: Some(vec![alt(""), alt("   "), alt("/valid")]),
+            sources: config::SourcesConfig {
+                default_source: Some("/default".to_string()),
+                alternate_sources: Some(vec![alt(""), alt("   "), alt("/valid")]),
+            },
             ..Default::default()
         };
         let sources = get_all_sources_from_config(Some(&uc));

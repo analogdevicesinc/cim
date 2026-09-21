@@ -43,8 +43,8 @@ const GIT_LOW_SPEED_TIME_ARG: &str = "http.lowSpeedTime=30";
 // Backstop for hangs the low-speed check above can't see (non-HTTP
 // transports, a stall before any bytes flow, credential-helper weirdness).
 // A single git subprocess can never wedge the mirror-sync thread pool past
-// this, no matter what. Overridable via `git_timeout_secs` in
-// `~/.config/cim/config.toml` -- large repositories (e.g. full kernel
+// this, no matter what. Overridable via `git_timeout_secs` under `[network]`
+// in `~/.config/cim/config.toml` -- large repositories (e.g. full kernel
 // histories) on slower links can legitimately need more than the default.
 const DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS: u64 = 900;
 
@@ -54,7 +54,7 @@ const DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS: u64 = 900;
 /// without touching disk.
 fn resolve_git_command_timeout(user_config: Option<&crate::config::UserConfig>) -> Duration {
     let secs = user_config
-        .and_then(|c| c.git_timeout_secs)
+        .and_then(|c| c.network.git_timeout_secs)
         .unwrap_or(DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS);
     Duration::from_secs(secs)
 }
@@ -867,7 +867,10 @@ mod tests {
     #[test]
     fn test_resolve_git_command_timeout_config_override() {
         let user_config = crate::config::UserConfig {
-            git_timeout_secs: Some(120),
+            network: crate::config::NetworkConfig {
+                git_timeout_secs: Some(120),
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert_eq!(

@@ -563,11 +563,13 @@ impl ToolchainConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AlternateSourceConfig {
     pub url: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct CopyFileConfig {
     pub source: String,
     pub dest: String,
@@ -1175,6 +1177,29 @@ pub fn load_python_dependencies<P: AsRef<Path>>(
 /// the manifest sdk.yml files.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct UserConfig {
+    /// Workspace creation/layout settings: mirror location, workspace
+    /// directory/prefix, mirror skipping, extra copy_files.
+    #[serde(default)]
+    pub workspace: WorkspaceConfig,
+
+    /// Manifest source settings: default and alternate manifest locations.
+    #[serde(default)]
+    pub sources: SourcesConfig,
+
+    /// Build/generation behavior: shell used for post-install commands,
+    /// documentation search dirs, Makefile divider style.
+    #[serde(default)]
+    pub build: BuildConfig,
+
+    /// Network-facing settings: TLS certificate validation, git subprocess
+    /// timeout.
+    #[serde(default)]
+    pub network: NetworkConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceConfig {
     /// Override default mirror directory
     #[serde(default)]
     pub mirror: Option<PathBuf>,
@@ -1187,14 +1212,6 @@ pub struct UserConfig {
     #[serde(default)]
     pub workspace_prefix: Option<String>,
 
-    /// Default manifest source location
-    #[serde(default)]
-    pub default_source: Option<String>,
-
-    /// Additional manifest sources to search alongside default_source
-    #[serde(default)]
-    pub alternate_sources: Option<Vec<AlternateSourceConfig>>,
-
     /// Skip mirror operations (behaves as if --no-mirror flag is always specified)
     #[serde(default)]
     pub no_mirror: Option<bool>,
@@ -1202,7 +1219,23 @@ pub struct UserConfig {
     /// Additional files to copy during initialization (merged with manifest)
     #[serde(default)]
     pub copy_files: Option<Vec<CopyFileConfig>>,
+}
 
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SourcesConfig {
+    /// Default manifest source location
+    #[serde(default)]
+    pub default_source: Option<String>,
+
+    /// Additional manifest sources to search alongside default_source
+    #[serde(default)]
+    pub alternate_sources: Option<Vec<AlternateSourceConfig>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct BuildConfig {
     /// Override default shell for post-install commands
     #[serde(default)]
     pub shell: Option<String>,
@@ -1217,17 +1250,21 @@ pub struct UserConfig {
     #[serde(default)]
     pub documentation_dirs: Option<String>,
 
+    /// Skip section dividers in generated Makefiles
+    /// When true, `cim makefile` will not insert comment banners between sections
+    #[serde(default)]
+    pub no_dividers: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkConfig {
     /// TLS certificate validation mode for downloads
     /// Values: "strict" (never bypass SSL), "relaxed" (always bypass), "auto" (fallback)
     /// Default: "strict" - requires valid certificates, recommended for security
     /// Use "relaxed" or "auto" only in corporate environments with SSL inspection
     #[serde(default)]
     pub cert_validation: Option<String>,
-
-    /// Skip section dividers in generated Makefiles
-    /// When true, `cim makefile` will not insert comment banners between sections
-    #[serde(default)]
-    pub no_dividers: Option<bool>,
 
     /// Hard timeout (in seconds) applied to every git subprocess invocation
     /// (clone, fetch, checkout, ls-remote, ...) as a backstop against hangs
@@ -1272,8 +1309,18 @@ impl UserConfig {
 # This file allows you to override manifest settings with personal preferences
 # that apply across all SDK targets and workspaces.
 #
-# All settings are optional. Uncomment and modify values as needed.
-# Changes take effect immediately on next cim command.
+# All settings are optional and are grouped into tables below. Uncomment and
+# modify values as needed. Changes take effect immediately on next cim
+# command.
+#
+# IMPORTANT: every setting lives under one of the [workspace] / [sources] /
+# [build] / [network] tables below. In TOML, a bare `key = value` line
+# always belongs to whichever table header appears above it in the file --
+# there is no way to "return to root". If you add a new setting, make sure
+# it goes under the correct table header, not after some unrelated table or
+# array entry (e.g. not right after a [[sources.alternate_sources]] block).
+
+[workspace]
 
 # =============================================================================
 # Mirror Directory
@@ -1335,6 +1382,55 @@ impl UserConfig {
 # workspace_prefix = "project-"  # Creates: ~/project-adi-sdk
 
 # =============================================================================
+# Skip Mirror Operations
+# =============================================================================
+# Skip mirror operations and clone repositories directly from remote URLs.
+# Behaves as if --no-mirror flag is always specified.
+#
+# Default: false
+# Use cases:
+#   - Avoid local mirror overhead for single workspace use
+#   - Reduce disk space usage when mirror is not needed
+#   - Simplify workflow when always working with latest remote versions
+#   - CI/CD environments where mirror adds no value
+#
+# Examples:
+# no_mirror = true
+# no_mirror = false
+
+# =============================================================================
+# Additional Copy Files
+# =============================================================================
+# Additional files to copy during workspace initialization.
+# These are merged with copy_files from the manifest target.
+# Useful for personal scripts, patches, or configuration files.
+#
+# Use cases:
+#   - Add personal initialization scripts to all workspaces
+#   - Include custom patches or configuration files
+#   - Add team-specific tools or helpers
+#
+# Format:
+#   [[workspace.copy_files]]
+#   source = "path/to/source/file"
+#   dest = "destination/in/workspace"
+#
+# Examples:
+# [[workspace.copy_files]]
+# source = "~/.my-scripts/personal-init.sh"
+# dest = "personal-init.sh"
+#
+# [[workspace.copy_files]]
+# source = "/path/to/patches/my-custom-fix.patch"
+# dest = "patches/my-custom-fix.patch"
+#
+# [[workspace.copy_files]]
+# source = "~/dotfiles/.vimrc"
+# dest = ".vimrc"
+
+[sources]
+
+# =============================================================================
 # Default Manifest Source
 # =============================================================================
 # Set the default manifest source location.
@@ -1368,61 +1464,16 @@ impl UserConfig {
 #   - Test new targets in a side repository before merging upstream
 #
 # Examples:
-# [[alternate_sources]]
+# [[sources.alternate_sources]]
 # url = "https://github.com/myteam/custom-manifests"
 #
-# [[alternate_sources]]
+# [[sources.alternate_sources]]
 # url = "git@github.com:team-b/manifests.git"
 #
-# [[alternate_sources]]
+# [[sources.alternate_sources]]
 # url = "/home/user/experimental-manifests"
 
-# =============================================================================
-# Skip Mirror Operations
-# =============================================================================
-# Skip mirror operations and clone repositories directly from remote URLs.
-# Behaves as if --no-mirror flag is always specified.
-#
-# Default: false
-# Use cases:
-#   - Avoid local mirror overhead for single workspace use
-#   - Reduce disk space usage when mirror is not needed
-#   - Simplify workflow when always working with latest remote versions
-#   - CI/CD environments where mirror adds no value
-#
-# Examples:
-# no_mirror = true
-# no_mirror = false
-
-# =============================================================================
-# Additional Copy Files
-# =============================================================================
-# Additional files to copy during workspace initialization.
-# These are merged with copy_files from the manifest target.
-# Useful for personal scripts, patches, or configuration files.
-#
-# Use cases:
-#   - Add personal initialization scripts to all workspaces
-#   - Include custom patches or configuration files
-#   - Add team-specific tools or helpers
-#
-# Format:
-#   [[copy_files]]
-#   source = "path/to/source/file"
-#   dest = "destination/in/workspace"
-#
-# Examples:
-# [[copy_files]]
-# source = "~/.my-scripts/personal-init.sh"
-# dest = "personal-init.sh"
-#
-# [[copy_files]]
-# source = "/path/to/patches/my-custom-fix.patch"
-# dest = "patches/my-custom-fix.patch"
-#
-# [[copy_files]]
-# source = "~/dotfiles/.vimrc"
-# dest = ".vimrc"
+[build]
 
 # =============================================================================
 # Shell Configuration
@@ -1472,6 +1523,28 @@ impl UserConfig {
 # documentation_dirs = "wiki, manual, reference"    # Multiple alternatives
 
 # =============================================================================
+# Makefile Section Dividers
+# =============================================================================
+# Control whether section dividers (comment banners) are inserted between
+# sections in the generated Makefile. Dividers improve readability for large
+# Makefiles by visually separating variables, SDK targets, install targets,
+# and git repository targets.
+#
+# Default: false (dividers are included)
+# Use cases:
+#   - Set to true if you prefer minimal, compact Makefiles
+#   - Keep false (or omit) for readable Makefiles with section headers
+#
+# To temporarily override for a single command, use --no-dividers flag:
+#   cim makefile --no-dividers
+#
+# Examples:
+# no_dividers = true     # Never add dividers to generated Makefiles
+# no_dividers = false    # Always add dividers (default behavior)
+
+[network]
+
+# =============================================================================
 # TLS Certificate Validation (Security)
 # =============================================================================
 # Control TLS certificate validation for toolchain and file downloads.
@@ -1507,26 +1580,6 @@ impl UserConfig {
 # cert_validation = "strict"     # Default: Maximum security, valid certs required
 # cert_validation = "relaxed"    # Corporate: Bypass all cert validation (INSECURE!)
 # cert_validation = "auto"       # Fallback: Try strict, use relaxed if fails (INSECURE!)
-
-# =============================================================================
-# Makefile Section Dividers
-# =============================================================================
-# Control whether section dividers (comment banners) are inserted between
-# sections in the generated Makefile. Dividers improve readability for large
-# Makefiles by visually separating variables, SDK targets, install targets,
-# and git repository targets.
-#
-# Default: false (dividers are included)
-# Use cases:
-#   - Set to true if you prefer minimal, compact Makefiles
-#   - Keep false (or omit) for readable Makefiles with section headers
-#
-# To temporarily override for a single command, use --no-dividers flag:
-#   cim makefile --no-dividers
-#
-# Examples:
-# no_dividers = true     # Never add dividers to generated Makefiles
-# no_dividers = false    # Always add dividers (default behavior)
 
 # =============================================================================
 # Git Command Timeout
@@ -1627,7 +1680,7 @@ impl UserConfig {
     pub fn apply_to_sdk_config(&self, config: &mut SdkConfig, verbose: bool) -> usize {
         let mut override_count = 0;
 
-        if let Some(ref user_copy_files) = self.copy_files {
+        if let Some(ref user_copy_files) = self.workspace.copy_files {
             if verbose {
                 messages::verbose(&format!(
                     "User config: adding {} additional copy_files entries",
@@ -1644,113 +1697,65 @@ impl UserConfig {
     }
 
     /// List all configuration values in key=value format (similar to git config -l)
-    /// Uses dot notation for nested structures (e.g., copy_files.0.src=/path)
+    /// Uses dot notation for nested tables/arrays (e.g., workspace.copy_files.0.source=/path).
+    /// Generic over the current schema: derived from a `toml::Value` serialization of
+    /// `self`, so a new table/field never needs separate wiring here.
     pub fn list_all(&self) -> Vec<String> {
+        let value = match toml::Value::try_from(self) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
         let mut lines = Vec::new();
-
-        if let Some(ref mirror) = self.mirror {
-            lines.push(format!("mirror={}", mirror.display()));
-        }
-        if let Some(ref ws) = self.default_workspace {
-            lines.push(format!("default_workspace={}", ws.display()));
-        }
-        if let Some(ref prefix) = self.workspace_prefix {
-            lines.push(format!("workspace_prefix={}", prefix));
-        }
-        if let Some(ref source) = self.default_source {
-            lines.push(format!("default_source={}", source));
-        }
-        if let Some(ref alts) = self.alternate_sources {
-            for (idx, alt) in alts.iter().enumerate() {
-                lines.push(format!("alternate_sources.{}.url={}", idx, alt.url));
-            }
-        }
-        if let Some(no_mirror) = self.no_mirror {
-            lines.push(format!("no_mirror={}", no_mirror));
-        }
-        if let Some(ref files) = self.copy_files {
-            for (idx, file) in files.iter().enumerate() {
-                lines.push(format!("copy_files.{}.source={}", idx, file.source));
-                lines.push(format!("copy_files.{}.dest={}", idx, file.dest));
-            }
-        }
-        if let Some(ref shell) = self.shell {
-            lines.push(format!("shell={}", shell));
-        }
-        if let Some(ref shell_arg) = self.shell_arg {
-            lines.push(format!("shell_arg={}", shell_arg));
-        }
-        if let Some(ref docs_dirs) = self.documentation_dirs {
-            lines.push(format!("documentation_dirs={}", docs_dirs));
-        }
-        if let Some(ref cert_val) = self.cert_validation {
-            lines.push(format!("cert_validation={}", cert_val));
-        }
-        if let Some(no_dividers) = self.no_dividers {
-            lines.push(format!("no_dividers={}", no_dividers));
-        }
-        if let Some(secs) = self.git_timeout_secs {
-            lines.push(format!("git_timeout_secs={}", secs));
-        }
-
+        flatten_toml_value("", &value, &mut lines);
         lines
     }
 
-    /// Get a specific configuration value by key
-    /// Supports dot notation for nested values (e.g., "copy_files.0.src")
+    /// Get a specific configuration value by key.
+    /// Supports dot notation for nested values (e.g., "workspace.copy_files.0.source").
     pub fn get_value(&self, key: &str) -> Option<String> {
-        match key {
-            "mirror" => self.mirror.as_ref().map(|p| p.display().to_string()),
-            "default_workspace" => self
-                .default_workspace
-                .as_ref()
-                .map(|p| p.display().to_string()),
-            "workspace_prefix" => self.workspace_prefix.clone(),
-            "default_source" => self.default_source.clone(),
-            "no_mirror" => self.no_mirror.map(|b| b.to_string()),
-            "shell" => self.shell.clone(),
-            "shell_arg" => self.shell_arg.clone(),
-            "documentation_dirs" => self.documentation_dirs.clone(),
-            "cert_validation" => self.cert_validation.clone(),
-            "no_dividers" => self.no_dividers.map(|b| b.to_string()),
-            "git_timeout_secs" => self.git_timeout_secs.map(|v| v.to_string()),
-            _ => {
-                // Handle nested keys like alternate_sources.0.url
-                if key.starts_with("alternate_sources.") {
-                    let parts: Vec<&str> = key.split('.').collect();
-                    if parts.len() == 3 {
-                        if let Ok(idx) = parts[1].parse::<usize>() {
-                            if let Some(ref alts) = self.alternate_sources {
-                                if let Some(alt) = alts.get(idx) {
-                                    return match parts[2] {
-                                        "url" => Some(alt.url.clone()),
-                                        _ => None,
-                                    };
-                                }
-                            }
-                        }
-                    }
-                }
-                // Handle nested keys like copy_files.0.src
-                if key.starts_with("copy_files.") {
-                    let parts: Vec<&str> = key.split('.').collect();
-                    if parts.len() == 3 {
-                        if let Ok(idx) = parts[1].parse::<usize>() {
-                            if let Some(ref files) = self.copy_files {
-                                if let Some(file) = files.get(idx) {
-                                    return match parts[2] {
-                                        "source" => Some(file.source.clone()),
-                                        "dest" => Some(file.dest.clone()),
-                                        _ => None,
-                                    };
-                                }
-                            }
-                        }
-                    }
-                }
-                None
+        self.list_all().into_iter().find_map(|line| {
+            let (k, v) = line.split_once('=')?;
+            (k == key).then(|| v.to_string())
+        })
+    }
+}
+
+/// Recursively flatten a `toml::Value` into `key=value` lines, joining nested
+/// table/array path segments with `.` (e.g. `workspace.copy_files.0.source=...`).
+fn flatten_toml_value(prefix: &str, value: &toml::Value, out: &mut Vec<String>) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, val) in table {
+                flatten_toml_value(&dotted_key(prefix, key), val, out);
             }
         }
+        toml::Value::Array(items) => {
+            for (idx, val) in items.iter().enumerate() {
+                flatten_toml_value(&dotted_key(prefix, &idx.to_string()), val, out);
+            }
+        }
+        scalar => out.push(format!("{prefix}={}", display_toml_scalar(scalar))),
+    }
+}
+
+fn dotted_key(prefix: &str, segment: &str) -> String {
+    if prefix.is_empty() {
+        segment.to_string()
+    } else {
+        format!("{prefix}.{segment}")
+    }
+}
+
+/// Render a scalar `toml::Value` the way `list_all`/`get_value` have always
+/// rendered it: unquoted, e.g. `mirror=/path` not `mirror="/path"`.
+fn display_toml_scalar(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(s) => s.clone(),
+        toml::Value::Integer(i) => i.to_string(),
+        toml::Value::Float(f) => f.to_string(),
+        toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::Datetime(d) => d.to_string(),
+        toml::Value::Table(_) | toml::Value::Array(_) => value.to_string(),
     }
 }
 
@@ -1824,7 +1829,7 @@ pub fn get_cert_validation_mode(cli_override: Option<&str>) -> (String, bool) {
 
     // Try to load from user config
     if let Ok(Some(user_config)) = UserConfig::load() {
-        if let Some(mode) = user_config.cert_validation {
+        if let Some(mode) = user_config.network.cert_validation {
             let show_warning = mode == "relaxed" || mode == "auto";
             return (mode, show_warning);
         }
@@ -2282,11 +2287,11 @@ install:
 
         let config = parsed.unwrap();
         // Template has most fields commented out, so they should be None/empty
-        assert!(config.mirror.is_none());
-        assert!(config.default_workspace.is_none());
-        assert!(config.default_source.is_none());
-        assert!(config.no_mirror.is_none());
-        assert!(config.copy_files.is_none());
+        assert!(config.workspace.mirror.is_none());
+        assert!(config.workspace.default_workspace.is_none());
+        assert!(config.sources.default_source.is_none());
+        assert!(config.workspace.no_mirror.is_none());
+        assert!(config.workspace.copy_files.is_none());
     }
 
     #[test]
@@ -2338,17 +2343,20 @@ install:
 
         // Create a config with actual values
         let config_content = r#"
+[workspace]
 mirror = "/custom/mirror"
 default_workspace = "/custom/workspace"
-default_source = "https://example.com/manifests"
 
-[[copy_files]]
+[[workspace.copy_files]]
 source = "file1.txt"
 dest = "dest1.txt"
 
-[[copy_files]]
+[[workspace.copy_files]]
 source = "file2.txt"
 dest = "dest2.txt"
+
+[sources]
+default_source = "https://example.com/manifests"
 "#;
         fs::write(&config_path, config_content).unwrap();
 
@@ -2360,17 +2368,25 @@ dest = "dest2.txt"
         assert!(config.is_some());
 
         let config = config.unwrap();
-        assert_eq!(config.mirror.unwrap().to_str().unwrap(), "/custom/mirror");
         assert_eq!(
-            config.default_workspace.unwrap().to_str().unwrap(),
+            config.workspace.mirror.unwrap().to_str().unwrap(),
+            "/custom/mirror"
+        );
+        assert_eq!(
+            config
+                .workspace
+                .default_workspace
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "/custom/workspace"
         );
         assert_eq!(
-            config.default_source.unwrap(),
+            config.sources.default_source.unwrap(),
             "https://example.com/manifests"
         );
 
-        let copy_files = config.copy_files.unwrap();
+        let copy_files = config.workspace.copy_files.unwrap();
         assert_eq!(copy_files.len(), 2);
         assert_eq!(copy_files[0].source, "file1.txt");
         assert_eq!(copy_files[0].dest, "dest1.txt");
@@ -2383,9 +2399,9 @@ dest = "dest2.txt"
 
         // Create a config with only some values set
         let config_content = r#"
+[workspace]
 mirror = "/only/mirror/set"
 # default_workspace not set
-# default_source not set
 "#;
         fs::write(&config_path, config_content).unwrap();
 
@@ -2394,10 +2410,10 @@ mirror = "/only/mirror/set"
         assert!(result.is_ok());
 
         let config = result.unwrap().unwrap();
-        assert!(config.mirror.is_some());
-        assert!(config.default_workspace.is_none());
-        assert!(config.default_source.is_none());
-        assert!(config.copy_files.is_none());
+        assert!(config.workspace.mirror.is_some());
+        assert!(config.workspace.default_workspace.is_none());
+        assert!(config.sources.default_source.is_none());
+        assert!(config.workspace.copy_files.is_none());
     }
 
     /// Helper to create a GitConfig for testing resolve_clone_order
@@ -2529,22 +2545,23 @@ mirror = "/only/mirror/set"
         let config_path = dir.path().join("config.toml");
 
         let content = r#"
+[sources]
 default_source = "https://example.com/manifests"
 
-[[alternate_sources]]
+[[sources.alternate_sources]]
 url = "https://alt1.com/repo"
 
-[[alternate_sources]]
+[[sources.alternate_sources]]
 url = "https://alt2.com/repo"
 "#;
         fs::write(&config_path, content).unwrap();
 
         let config = UserConfig::load_from(&config_path).unwrap().unwrap();
         assert_eq!(
-            config.default_source.unwrap(),
+            config.sources.default_source.unwrap(),
             "https://example.com/manifests"
         );
-        let alts = config.alternate_sources.unwrap();
+        let alts = config.sources.alternate_sources.unwrap();
         assert_eq!(alts.len(), 2);
         assert_eq!(alts[0].url, "https://alt1.com/repo");
         assert_eq!(alts[1].url, "https://alt2.com/repo");
@@ -2556,13 +2573,13 @@ url = "https://alt2.com/repo"
         let config_path = dir.path().join("config.toml");
 
         let content = r#"
-[[alternate_sources]]
+[[sources.alternate_sources]]
 url = "git@github.com:team/manifests.git"
 "#;
         fs::write(&config_path, content).unwrap();
 
         let config = UserConfig::load_from(&config_path).unwrap().unwrap();
-        let alts = config.alternate_sources.unwrap();
+        let alts = config.sources.alternate_sources.unwrap();
         assert_eq!(alts.len(), 1);
         assert_eq!(alts[0].url, "git@github.com:team/manifests.git");
     }
@@ -2572,15 +2589,18 @@ url = "git@github.com:team/manifests.git"
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
-        fs::write(&config_path, "git_timeout_secs = 1800\n").unwrap();
+        fs::write(&config_path, "[network]\ngit_timeout_secs = 1800\n").unwrap();
 
         let config = UserConfig::load_from(&config_path).unwrap().unwrap();
-        assert_eq!(config.git_timeout_secs, Some(1800));
+        assert_eq!(config.network.git_timeout_secs, Some(1800));
         assert_eq!(
-            config.get_value("git_timeout_secs"),
+            config.get_value("network.git_timeout_secs"),
             Some("1800".to_string())
         );
-        assert_eq!(config.list_all(), vec!["git_timeout_secs=1800".to_string()]);
+        assert_eq!(
+            config.list_all(),
+            vec!["network.git_timeout_secs=1800".to_string()]
+        );
     }
 
     #[test]
@@ -2590,8 +2610,8 @@ url = "git@github.com:team/manifests.git"
         fs::write(&config_path, "").unwrap();
 
         let config = UserConfig::load_from(&config_path).unwrap().unwrap();
-        assert_eq!(config.git_timeout_secs, None);
-        assert_eq!(config.get_value("git_timeout_secs"), None);
+        assert_eq!(config.network.git_timeout_secs, None);
+        assert_eq!(config.get_value("network.git_timeout_secs"), None);
     }
 
     #[test]
@@ -2600,12 +2620,13 @@ url = "git@github.com:team/manifests.git"
         let config_path = dir.path().join("config.toml");
 
         let content = r#"
+[sources]
 default_source = "https://example.com/manifests"
 "#;
         fs::write(&config_path, content).unwrap();
 
         let config = UserConfig::load_from(&config_path).unwrap().unwrap();
-        assert!(config.alternate_sources.is_none());
+        assert!(config.sources.alternate_sources.is_none());
     }
 
     fn copy_file_config(

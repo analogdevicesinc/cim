@@ -541,7 +541,7 @@ pub(crate) fn handle_update_command(
         (true, "workspace preference")
     } else if user_config
         .as_ref()
-        .and_then(|uc| uc.no_mirror)
+        .and_then(|uc| uc.workspace.no_mirror)
         .unwrap_or(false)
     {
         (true, "user config")

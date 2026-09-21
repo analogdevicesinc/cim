@@ -9,7 +9,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use dsdk_cli::config::{GitConfig, SdkConfig, UserConfig};
+use dsdk_cli::config::{BuildConfig, GitConfig, SdkConfig, UserConfig};
 use dsdk_cli::doc_manager::DocManager;
 use std::fs;
 use std::path::PathBuf;
@@ -184,7 +184,10 @@ fn test_discover_with_user_config_directories() {
     };
 
     let user_config = UserConfig {
-        documentation_dirs: Some("my_docs".to_string()),
+        build: BuildConfig {
+            documentation_dirs: Some("my_docs".to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -271,7 +274,10 @@ fn test_discover_combined_search_list() {
     };
 
     let user_config = UserConfig {
-        documentation_dirs: Some("user_docs".to_string()),
+        build: BuildConfig {
+            documentation_dirs: Some("user_docs".to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -314,7 +320,10 @@ fn test_discover_empty_strings_skipped() {
     };
 
     let user_config = UserConfig {
-        documentation_dirs: Some("".to_string()), // Empty string
+        build: BuildConfig {
+            documentation_dirs: Some("".to_string()), // Empty string
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -343,7 +352,10 @@ fn test_discover_deduplication() {
     };
 
     let user_config = UserConfig {
-        documentation_dirs: Some("docs".to_string()), // Duplicate
+        build: BuildConfig {
+            documentation_dirs: Some("docs".to_string()), // Duplicate
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -418,7 +430,10 @@ fn test_discover_with_comma_separated_user_dirs() {
 
     // Test comma-separated list with various whitespace patterns
     let user_config = UserConfig {
-        documentation_dirs: Some("custom1, custom2,  custom3  ".to_string()),
+        build: BuildConfig {
+            documentation_dirs: Some("custom1, custom2,  custom3  ".to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -445,7 +460,10 @@ fn test_discover_with_empty_entries_in_comma_list() {
 
     // Test with empty entries and whitespace-only entries
     let user_config = UserConfig {
-        documentation_dirs: Some("custom1, , custom2,   , custom3".to_string()),
+        build: BuildConfig {
+            documentation_dirs: Some("custom1, , custom2,   , custom3".to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     };
 

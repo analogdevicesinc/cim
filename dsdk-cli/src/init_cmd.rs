@@ -1031,7 +1031,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
                     } else if config.source.is_none()
                         && user_config
                             .as_ref()
-                            .and_then(|uc| uc.default_source.as_ref())
+                            .and_then(|uc| uc.sources.default_source.as_ref())
                             .is_some()
                     {
                         " (user config default_source)".to_string()
@@ -1137,14 +1137,14 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     // Determine workspace path (default: $HOME/{prefix}{target-name} or user config)
     let workspace_path = config.workspace.unwrap_or_else(|| {
         if let Some(ref uc) = user_config {
-            if let Some(ref dw) = uc.default_workspace {
+            if let Some(ref dw) = uc.workspace.default_workspace {
                 return dw.clone();
             }
         }
         // Get workspace prefix from user config, default to "dsdk-"
         let prefix = user_config
             .as_ref()
-            .and_then(|uc| uc.workspace_prefix.clone())
+            .and_then(|uc| uc.workspace.workspace_prefix.clone())
             .unwrap_or_else(|| "dsdk-".to_string());
         // Use {prefix}{target-name} as default workspace name
         let workspace_name = format!("{}{}", prefix, config.target);
@@ -1274,7 +1274,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     let skip_mirror = config.no_mirror
         || user_config
             .as_ref()
-            .and_then(|uc| uc.no_mirror)
+            .and_then(|uc| uc.workspace.no_mirror)
             .unwrap_or(false);
 
     // Create workspace marker file
@@ -1459,7 +1459,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
 
             let dividers = !user_config
                 .as_ref()
-                .and_then(|uc| uc.no_dividers)
+                .and_then(|uc| uc.build.no_dividers)
                 .unwrap_or(false);
             let makefile_content =
                 generate_makefile_content(&makefile_sdk_config, dividers, Some(&workspace_path));

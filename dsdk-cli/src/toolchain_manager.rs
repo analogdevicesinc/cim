@@ -1016,7 +1016,7 @@ impl ToolchainManager {
         // Determine shell based on user config or platform defaults
         let (shell, shell_arg) = if let Ok(Some(user_config)) = crate::config::UserConfig::load() {
             // Use user-configured shell if available
-            if let (Some(s), Some(a)) = (user_config.shell, user_config.shell_arg) {
+            if let (Some(s), Some(a)) = (user_config.build.shell, user_config.build.shell_arg) {
                 (s, a)
             } else {
                 get_default_shell()
