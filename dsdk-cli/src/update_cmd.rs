@@ -871,8 +871,11 @@ pub(crate) fn handle_existing_workspace_repo(
 
         if mirror_repo_path.exists() {
             if !git_operations::cat_file(&mirror_repo_path, &target) {
+                // No depth limit: a shallow fetch here would write a .git/shallow
+                // file into the persistent mirror, which later makes `git clone
+                // --reference` refuse to use it.
                 let fetch_ok =
-                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1))
+                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, None)
                         .is_ok_and(|r| r.is_success());
                 if fetch_ok {
                     let _ = git_operations::update_ref(
@@ -1046,11 +1049,14 @@ pub(crate) fn clone_repo_to_workspace(
                 git_operations::resolve_fetch_refspec(&refs, &git_cfg.commit);
             let target_sha = sha.unwrap_or_else(|| git_cfg.commit.clone());
 
-            // Ensure the commit is present in the mirror, fetching it if needed
+            // Ensure the commit is present in the mirror, fetching it if needed.
+            // No depth limit here: a shallow fetch would write a .git/shallow
+            // file into the persistent mirror, which later makes `git clone
+            // --reference` refuse to use it (as seen with no-OS).
             if !git_operations::cat_file(&mirror_repo_path, &target_sha) {
                 spinner.set_action(&git_cfg.name, "fetching into mirror…");
                 let fetch_ok =
-                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, Some(1))
+                    git_operations::fetch_ref(&mirror_repo_path, "origin", &fetch_refspec, None)
                         .is_ok_and(|r| r.is_success());
                 if fetch_ok {
                     let _ = git_operations::update_ref(
