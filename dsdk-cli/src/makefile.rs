@@ -48,7 +48,7 @@ pub(crate) fn handle_makefile_command(
     match config::UserConfig::load() {
         Ok(Some(user_config)) => {
             user_config.apply_to_sdk_config(&mut sdk_config, false);
-            if let Some(config_no_dividers) = user_config.no_dividers {
+            if let Some(config_no_dividers) = user_config.build.no_dividers {
                 effective_no_dividers = config_no_dividers;
             }
         }

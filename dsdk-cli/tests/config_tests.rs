@@ -474,130 +474,150 @@ fn test_user_config_list_all_empty() {
 
 #[test]
 fn test_user_config_list_all_simple_fields() {
-    use dsdk_cli::config::UserConfig;
+    use dsdk_cli::config::{BuildConfig, SourcesConfig, UserConfig, WorkspaceConfig};
     use std::path::PathBuf;
 
     let config = UserConfig {
-        mirror: Some(PathBuf::from("/custom/mirror")),
-        default_workspace: Some(PathBuf::from("/home/user/workspace")),
-        workspace_prefix: Some("myprefix-".to_string()),
-        default_source: Some("https://example.com/manifests".to_string()),
-        alternate_sources: None,
-        no_mirror: Some(true),
-        copy_files: None,
-        shell: Some("/bin/zsh".to_string()),
-        shell_arg: Some("-c".to_string()),
-        documentation_dirs: Some("docs,manuals".to_string()),
-        cert_validation: None,
-        no_dividers: None,
-        git_timeout_secs: None,
+        workspace: WorkspaceConfig {
+            mirror: Some(PathBuf::from("/custom/mirror")),
+            default_workspace: Some(PathBuf::from("/home/user/workspace")),
+            workspace_prefix: Some("myprefix-".to_string()),
+            no_mirror: Some(true),
+            copy_files: None,
+        },
+        sources: SourcesConfig {
+            default_source: Some("https://example.com/manifests".to_string()),
+            alternate_sources: None,
+        },
+        build: BuildConfig {
+            shell: Some("/bin/zsh".to_string()),
+            shell_arg: Some("-c".to_string()),
+            documentation_dirs: Some("docs,manuals".to_string()),
+            no_dividers: None,
+        },
+        network: Default::default(),
     };
 
     let list = config.list_all();
     assert_eq!(list.len(), 8);
-    assert!(list.contains(&"mirror=/custom/mirror".to_string()));
-    assert!(list.contains(&"default_workspace=/home/user/workspace".to_string()));
-    assert!(list.contains(&"workspace_prefix=myprefix-".to_string()));
-    assert!(list.contains(&"default_source=https://example.com/manifests".to_string()));
-    assert!(list.contains(&"no_mirror=true".to_string()));
-    assert!(list.contains(&"shell=/bin/zsh".to_string()));
-    assert!(list.contains(&"shell_arg=-c".to_string()));
-    assert!(list.contains(&"documentation_dirs=docs,manuals".to_string()));
+    assert!(list.contains(&"workspace.mirror=/custom/mirror".to_string()));
+    assert!(list.contains(&"workspace.default_workspace=/home/user/workspace".to_string()));
+    assert!(list.contains(&"workspace.workspace_prefix=myprefix-".to_string()));
+    assert!(list.contains(&"sources.default_source=https://example.com/manifests".to_string()));
+    assert!(list.contains(&"workspace.no_mirror=true".to_string()));
+    assert!(list.contains(&"build.shell=/bin/zsh".to_string()));
+    assert!(list.contains(&"build.shell_arg=-c".to_string()));
+    assert!(list.contains(&"build.documentation_dirs=docs,manuals".to_string()));
 }
 
 #[test]
 fn test_user_config_list_all_with_copy_files() {
-    use dsdk_cli::config::{CopyFileConfig, UserConfig};
+    use dsdk_cli::config::{CopyFileConfig, UserConfig, WorkspaceConfig};
     use std::path::PathBuf;
 
     let config = UserConfig {
-        mirror: Some(PathBuf::from("/mirror")),
-        copy_files: Some(vec![
-            CopyFileConfig {
-                source: "file1.txt".to_string(),
-                dest: "dest1.txt".to_string(),
-                cache: None,
-                sha256: None,
-                post_data: None,
-                symlink: None,
-                headers: None,
-                basic_auth: None,
-            },
-            CopyFileConfig {
-                source: "file2.txt".to_string(),
-                dest: "dest2.txt".to_string(),
-                cache: None,
-                sha256: None,
-                post_data: None,
-                symlink: None,
-                headers: None,
-                basic_auth: None,
-            },
-        ]),
+        workspace: WorkspaceConfig {
+            mirror: Some(PathBuf::from("/mirror")),
+            copy_files: Some(vec![
+                CopyFileConfig {
+                    source: "file1.txt".to_string(),
+                    dest: "dest1.txt".to_string(),
+                    cache: None,
+                    sha256: None,
+                    post_data: None,
+                    symlink: None,
+                    headers: None,
+                    basic_auth: None,
+                },
+                CopyFileConfig {
+                    source: "file2.txt".to_string(),
+                    dest: "dest2.txt".to_string(),
+                    cache: None,
+                    sha256: None,
+                    post_data: None,
+                    symlink: None,
+                    headers: None,
+                    basic_auth: None,
+                },
+            ]),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
     let list = config.list_all();
-    assert!(list.contains(&"mirror=/mirror".to_string()));
-    assert!(list.contains(&"copy_files.0.source=file1.txt".to_string()));
-    assert!(list.contains(&"copy_files.0.dest=dest1.txt".to_string()));
-    assert!(list.contains(&"copy_files.1.source=file2.txt".to_string()));
-    assert!(list.contains(&"copy_files.1.dest=dest2.txt".to_string()));
+    assert!(list.contains(&"workspace.mirror=/mirror".to_string()));
+    assert!(list.contains(&"workspace.copy_files.0.source=file1.txt".to_string()));
+    assert!(list.contains(&"workspace.copy_files.0.dest=dest1.txt".to_string()));
+    assert!(list.contains(&"workspace.copy_files.1.source=file2.txt".to_string()));
+    assert!(list.contains(&"workspace.copy_files.1.dest=dest2.txt".to_string()));
     assert_eq!(list.len(), 5); // mirror + 4 copy_files entries
 }
 
 #[test]
 fn test_user_config_get_value_simple() {
-    use dsdk_cli::config::UserConfig;
+    use dsdk_cli::config::{SourcesConfig, UserConfig, WorkspaceConfig};
     use std::path::PathBuf;
 
     let config = UserConfig {
-        mirror: Some(PathBuf::from("/custom/mirror")),
-        default_source: Some("https://example.com".to_string()),
-        no_mirror: Some(false),
+        workspace: WorkspaceConfig {
+            mirror: Some(PathBuf::from("/custom/mirror")),
+            no_mirror: Some(false),
+            ..Default::default()
+        },
+        sources: SourcesConfig {
+            default_source: Some("https://example.com".to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
     assert_eq!(
-        config.get_value("mirror"),
+        config.get_value("workspace.mirror"),
         Some("/custom/mirror".to_string())
     );
     assert_eq!(
-        config.get_value("default_source"),
+        config.get_value("sources.default_source"),
         Some("https://example.com".to_string())
     );
-    assert_eq!(config.get_value("no_mirror"), Some("false".to_string()));
+    assert_eq!(
+        config.get_value("workspace.no_mirror"),
+        Some("false".to_string())
+    );
     assert_eq!(config.get_value("nonexistent"), None);
 }
 
 #[test]
 fn test_user_config_get_value_copy_files() {
-    use dsdk_cli::config::{CopyFileConfig, UserConfig};
+    use dsdk_cli::config::{CopyFileConfig, UserConfig, WorkspaceConfig};
 
     let config = UserConfig {
-        copy_files: Some(vec![CopyFileConfig {
-            source: "source.txt".to_string(),
-            dest: "destination.txt".to_string(),
-            cache: None,
-            sha256: None,
-            post_data: None,
-            symlink: None,
-            headers: None,
-            basic_auth: None,
-        }]),
+        workspace: WorkspaceConfig {
+            copy_files: Some(vec![CopyFileConfig {
+                source: "source.txt".to_string(),
+                dest: "destination.txt".to_string(),
+                cache: None,
+                sha256: None,
+                post_data: None,
+                symlink: None,
+                headers: None,
+                basic_auth: None,
+            }]),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
     assert_eq!(
-        config.get_value("copy_files.0.source"),
+        config.get_value("workspace.copy_files.0.source"),
         Some("source.txt".to_string())
     );
     assert_eq!(
-        config.get_value("copy_files.0.dest"),
+        config.get_value("workspace.copy_files.0.dest"),
         Some("destination.txt".to_string())
     );
-    assert_eq!(config.get_value("copy_files.1.source"), None);
-    assert_eq!(config.get_value("copy_files.0.invalid"), None);
+    assert_eq!(config.get_value("workspace.copy_files.1.source"), None);
+    assert_eq!(config.get_value("workspace.copy_files.0.invalid"), None);
 }
 
 #[test]
@@ -606,10 +626,13 @@ fn test_user_config_load_and_list() {
     let config_path = fixture.path().join("config.toml");
 
     let config_content = r#"
+[workspace]
 mirror = "/custom/mirror"
-default_source = "https://example.com/manifests"
 workspace_prefix = "myprefix-"
 no_mirror = true
+
+[sources]
+default_source = "https://example.com/manifests"
 "#;
 
     fixture.write_file("config.toml", config_content);
@@ -620,10 +643,10 @@ no_mirror = true
 
     let list = config.list_all();
     assert_eq!(list.len(), 4);
-    assert!(list.contains(&"mirror=/custom/mirror".to_string()));
-    assert!(list.contains(&"default_source=https://example.com/manifests".to_string()));
-    assert!(list.contains(&"workspace_prefix=myprefix-".to_string()));
-    assert!(list.contains(&"no_mirror=true".to_string()));
+    assert!(list.contains(&"workspace.mirror=/custom/mirror".to_string()));
+    assert!(list.contains(&"sources.default_source=https://example.com/manifests".to_string()));
+    assert!(list.contains(&"workspace.workspace_prefix=myprefix-".to_string()));
+    assert!(list.contains(&"workspace.no_mirror=true".to_string()));
 }
 
 #[test]
@@ -632,6 +655,7 @@ fn test_user_config_partial_config() {
     let config_path = fixture.path().join("config.toml");
 
     let config_content = r#"
+[workspace]
 mirror = "/some/mirror"
 "#;
 
@@ -643,7 +667,7 @@ mirror = "/some/mirror"
 
     let list = config.list_all();
     assert_eq!(list.len(), 1);
-    assert!(list.contains(&"mirror=/some/mirror".to_string()));
+    assert!(list.contains(&"workspace.mirror=/some/mirror".to_string()));
 }
 
 #[test]
@@ -683,7 +707,10 @@ fn test_config_validate_valid_file() {
     let config_path = fixture.path().join("config.toml");
 
     let config_content = r#"
+[workspace]
 mirror = "/test/mirror"
+
+[sources]
 default_source = "https://example.com"
 "#;
 
@@ -743,33 +770,36 @@ fn test_cert_validation_in_user_config() {
 
     // Test strict mode
     let config_content = r#"
+[network]
 cert_validation = "strict"
 "#;
     fixture.write_file("config.toml", config_content);
     let config = dsdk_cli::config::UserConfig::load_from(&config_path)
         .expect("Should load config")
         .expect("Should have config");
-    assert_eq!(config.cert_validation, Some("strict".to_string()));
+    assert_eq!(config.network.cert_validation, Some("strict".to_string()));
 
     // Test relaxed mode
     let config_content = r#"
+[network]
 cert_validation = "relaxed"
 "#;
     fixture.write_file("config.toml", config_content);
     let config = dsdk_cli::config::UserConfig::load_from(&config_path)
         .expect("Should load config")
         .expect("Should have config");
-    assert_eq!(config.cert_validation, Some("relaxed".to_string()));
+    assert_eq!(config.network.cert_validation, Some("relaxed".to_string()));
 
     // Test auto mode
     let config_content = r#"
+[network]
 cert_validation = "auto"
 "#;
     fixture.write_file("config.toml", config_content);
     let config = dsdk_cli::config::UserConfig::load_from(&config_path)
         .expect("Should load config")
         .expect("Should have config");
-    assert_eq!(config.cert_validation, Some("auto".to_string()));
+    assert_eq!(config.network.cert_validation, Some("auto".to_string()));
 }
 
 #[test]
@@ -779,13 +809,14 @@ fn test_cert_validation_config_omitted() {
 
     // Config without cert_validation should use default
     let config_content = r#"
+[sources]
 default_source = "/some/path"
 "#;
     fixture.write_file("config.toml", config_content);
     let config = dsdk_cli::config::UserConfig::load_from(&config_path)
         .expect("Should load config")
         .expect("Should have config");
-    assert_eq!(config.cert_validation, None);
+    assert_eq!(config.network.cert_validation, None);
 }
 
 // Tests for os-dependencies multi-version support
@@ -1150,7 +1181,7 @@ fn test_resolve_mirror_cli_override_wins() {
 
 #[test]
 fn test_apply_to_sdk_config_no_longer_overrides_mirror() {
-    use dsdk_cli::config::{CopyFileConfig, UserConfig};
+    use dsdk_cli::config::{CopyFileConfig, UserConfig, WorkspaceConfig};
 
     let fixture = TestFixture::new();
     let config_path = fixture.path().join("sdk.yml");
@@ -1162,19 +1193,14 @@ fn test_apply_to_sdk_config_no_longer_overrides_mirror() {
     // A user config that sets only `mirror` produces no SdkConfig overrides:
     // the mirror is resolved separately (via resolve_mirror), not applied here.
     let mirror_only = UserConfig {
-        mirror: Some(fixture.path().join("user-mirror")),
-        default_source: None,
-        alternate_sources: None,
-        default_workspace: None,
-        workspace_prefix: None,
-        no_mirror: None,
-        copy_files: None,
-        shell: None,
-        shell_arg: None,
-        documentation_dirs: None,
-        cert_validation: None,
-        no_dividers: None,
-        git_timeout_secs: None,
+        workspace: WorkspaceConfig {
+            mirror: Some(fixture.path().join("user-mirror")),
+            default_workspace: None,
+            workspace_prefix: None,
+            no_mirror: None,
+            copy_files: None,
+        },
+        ..Default::default()
     };
     assert_eq!(
         mirror_only.apply_to_sdk_config(&mut loaded_sdk_config, false),
@@ -1184,16 +1210,19 @@ fn test_apply_to_sdk_config_no_longer_overrides_mirror() {
 
     // copy_files is still applied by apply_to_sdk_config.
     let with_copy_files = UserConfig {
-        copy_files: Some(vec![CopyFileConfig {
-            source: "test.txt".to_string(),
-            dest: "test-dest.txt".to_string(),
-            cache: None,
-            sha256: None,
-            post_data: None,
-            symlink: None,
-            headers: None,
-            basic_auth: None,
-        }]),
+        workspace: WorkspaceConfig {
+            copy_files: Some(vec![CopyFileConfig {
+                source: "test.txt".to_string(),
+                dest: "test-dest.txt".to_string(),
+                cache: None,
+                sha256: None,
+                post_data: None,
+                symlink: None,
+                headers: None,
+                basic_auth: None,
+            }]),
+            ..Default::default()
+        },
         ..Default::default()
     };
     assert_eq!(

@@ -616,34 +616,45 @@ cim utils update
 
 ### Configuration File
 
-`cim config -c` will create it for you. Here are a few example settings you can customize, for a complete list, generate the file and check the comments.
+`cim config -c` will create it for you. Every setting lives under one of
+four tables -- `[workspace]`, `[sources]`, `[build]`, `[network]` -- for a
+complete list, generate the file and check the comments.
 
 ```toml
-# Override default manifest source
-default_source = "https://github.com/<a-path-to>/cim-manifests"
-
-# Additional manifest sources (searched after default_source)
-[[alternate_sources]]
-url = "https://github.com/myteam/custom-manifests"
-
-[[alternate_sources]]
-url = "$HOME/devel/local-manifests"
-
+[workspace]
 # Override mirror location
-mirror_path = "/custom/mirror"
+mirror = "/custom/mirror"
 
 # Workspace naming prefix (default: "dsdk-")
 workspace_prefix = "sdk-"
 
+[sources]
+# Override default manifest source
+default_source = "https://github.com/<a-path-to>/cim-manifests"
+
+# Additional manifest sources (searched after default_source)
+[[sources.alternate_sources]]
+url = "https://github.com/myteam/custom-manifests"
+
+[[sources.alternate_sources]]
+url = "$HOME/devel/local-manifests"
+
+[build]
 # Additional documentation directories
 documentation_dirs = "wiki, manual, reference"
 
+[network]
 # Certificate validation: "strict" (default), "relaxed" (insecure), "auto"
 cert_validation = "strict"
 
 # Hard timeout (seconds) for every git subprocess call (default: 900)
 git_timeout_secs = 900
 ```
+
+Note: in TOML, a bare `key = value` line always belongs to whichever table
+header appears above it in the file -- there's no syntax to "return to
+root". Always add new settings directly under the correct `[table]` header,
+not after some unrelated table or array entry.
 
 ### Certificate Validation
 
@@ -654,6 +665,7 @@ By default, cim validates TLS certificates when downloading files. By default we
 cim install toolchains --cert-validation=relaxed  # INSECURE
 
 # Or set in config.toml
+[network]
 cert_validation = "auto"  # try strict, fallback to relaxed with warning
 ```
 
@@ -673,6 +685,7 @@ links, a full `fetch --all --tags` can legitimately take longer than the
 default even with no stalls. Raise the hard timeout in `config.toml`:
 
 ```toml
+[network]
 git_timeout_secs = 1800  # 30 minutes
 ```
 

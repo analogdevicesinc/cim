@@ -196,7 +196,7 @@ impl DocManager {
 
         // User config directories (parse comma-separated string)
         if let Some(user_cfg) = user_config {
-            if let Some(user_dirs_str) = &user_cfg.documentation_dirs {
+            if let Some(user_dirs_str) = &user_cfg.build.documentation_dirs {
                 for dir in user_dirs_str.split(',') {
                     let trimmed = dir.trim();
                     if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
@@ -235,7 +235,7 @@ impl DocManager {
 
         // User config directories (parse comma-separated string)
         if let Some(user_cfg) = user_config {
-            if let Some(user_dirs_str) = &user_cfg.documentation_dirs {
+            if let Some(user_dirs_str) = &user_cfg.build.documentation_dirs {
                 for dir in user_dirs_str.split(',') {
                     let trimmed = dir.trim();
                     if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
