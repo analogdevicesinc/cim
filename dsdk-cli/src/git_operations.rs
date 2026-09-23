@@ -35,16 +35,11 @@ impl GitResult {
     }
 }
 
-// Abort an HTTP(S) transfer if it drops below this average speed for this
-// long, instead of letting a stalled connection block the caller forever.
-const GIT_LOW_SPEED_LIMIT_ARG: &str = "http.lowSpeedLimit=1000";
-const GIT_LOW_SPEED_TIME_ARG: &str = "http.lowSpeedTime=30";
-
-// Backstop for hangs the low-speed check above can't see (non-HTTP
-// transports, a stall before any bytes flow, credential-helper weirdness).
-// A single git subprocess can never wedge the mirror-sync thread pool past
-// this, no matter what. Overridable via `git_timeout_secs` under `[network]`
-// in `~/.config/cim/config.toml` -- large repositories (e.g. full kernel
+// Backstop for hangs a low-speed check can't see (non-HTTP transports, a
+// stall before any bytes flow, credential-helper weirdness). A single git
+// subprocess can never wedge the mirror-sync thread pool past this, no
+// matter what. Overridable via `git_timeout_secs` under `[network]` in
+// `~/.config/cim/config.toml` -- large repositories (e.g. full kernel
 // histories) on slower links can legitimately need more than the default.
 const DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS: u64 = 900;
 
@@ -66,15 +61,50 @@ fn effective_git_command_timeout() -> Duration {
     resolve_git_command_timeout(user_config.as_ref())
 }
 
+/// Resolve the `-c http.lowSpeedLimit=...`/`-c http.lowSpeedTime=...` args
+/// from an optional user config. Disabled (empty) unless the user has
+/// explicitly set `low_speed_limit`/`low_speed_time_secs` under `[network]`
+/// in `~/.config/cim/config.toml` -- large repositories (e.g. full kernel
+/// histories) can legitimately dip below typical low-speed thresholds
+/// without being stalled, so this abort is opt-in rather than a default.
+/// Split out from [`effective_git_low_speed_args`] so the resolution logic
+/// is testable without touching disk.
+fn resolve_git_low_speed_args(user_config: Option<&crate::config::UserConfig>) -> Vec<String> {
+    let network = user_config.map(|c| &c.network);
+    let mut args = Vec::new();
+    if let Some(limit) = network.and_then(|n| n.low_speed_limit) {
+        args.push("-c".to_string());
+        args.push(format!("http.lowSpeedLimit={limit}"));
+    }
+    if let Some(time) = network.and_then(|n| n.low_speed_time_secs) {
+        args.push("-c".to_string());
+        args.push(format!("http.lowSpeedTime={time}"));
+    }
+    args
+}
+
+/// Effective low-speed args for git subprocess invocations, honoring the
+/// user's `low_speed_limit`/`low_speed_time_secs` config overrides if set.
+fn effective_git_low_speed_args() -> Vec<String> {
+    let user_config = crate::config::UserConfig::load().ok().flatten();
+    resolve_git_low_speed_args(user_config.as_ref())
+}
+
 /// Execute git command with consistent error handling
 pub fn git_command(args: &[&str], cwd: Option<&Path>) -> Result<GitResult> {
-    git_command_with_timeout(args, cwd, effective_git_command_timeout())
+    git_command_with_timeout(
+        args,
+        cwd,
+        effective_git_command_timeout(),
+        &effective_git_low_speed_args(),
+    )
 }
 
 fn git_command_with_timeout(
     args: &[&str],
     cwd: Option<&Path>,
     hard_timeout: Duration,
+    low_speed_args: &[String],
 ) -> Result<GitResult> {
     // Print verbose output showing the full command
     if crate::messages::is_verbose() {
@@ -87,7 +117,7 @@ fn git_command_with_timeout(
     }
 
     let mut cmd = Command::new("git");
-    cmd.args(["-c", GIT_LOW_SPEED_LIMIT_ARG, "-c", GIT_LOW_SPEED_TIME_ARG]);
+    cmd.args(low_speed_args);
     cmd.args(args);
 
     // Disable interactive authentication prompts (fixes Windows /dev/tty issue)
@@ -849,6 +879,7 @@ mod tests {
             ],
             None,
             Duration::from_millis(300),
+            &[],
         );
 
         assert!(start.elapsed() < Duration::from_secs(2));
@@ -861,6 +892,55 @@ mod tests {
         assert_eq!(
             resolve_git_command_timeout(None),
             Duration::from_secs(DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn test_resolve_git_low_speed_args_disabled_by_default() {
+        // No user config at all, and a user config with the [network]
+        // table but neither low-speed field set, must both produce no args:
+        // low-speed detection is opt-in.
+        assert!(resolve_git_low_speed_args(None).is_empty());
+
+        let user_config = crate::config::UserConfig::default();
+        assert!(resolve_git_low_speed_args(Some(&user_config)).is_empty());
+    }
+
+    #[test]
+    fn test_resolve_git_low_speed_args_config_override() {
+        let user_config = crate::config::UserConfig {
+            network: crate::config::NetworkConfig {
+                low_speed_limit: Some(1000),
+                low_speed_time_secs: Some(30),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_git_low_speed_args(Some(&user_config)),
+            vec![
+                "-c".to_string(),
+                "http.lowSpeedLimit=1000".to_string(),
+                "-c".to_string(),
+                "http.lowSpeedTime=30".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolve_git_low_speed_args_partial_config() {
+        // Only one of the two values set: only the corresponding -c flag is
+        // emitted, letting git fall back to its own default for the other.
+        let user_config = crate::config::UserConfig {
+            network: crate::config::NetworkConfig {
+                low_speed_limit: Some(500),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_git_low_speed_args(Some(&user_config)),
+            vec!["-c".to_string(), "http.lowSpeedLimit=500".to_string()]
         );
     }
 
