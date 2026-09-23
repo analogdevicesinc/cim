@@ -246,7 +246,7 @@ make sdk-test            # test
 
 **Workspace**: A directory with sdk.yml, os-dependencies.yml, python-dependencies.yml, cloned git repos, and a .workspace marker file. Workspaces are isolated.
 
-**Mirror**: Local cache at `$HOME/tmp/mirror` (configurable) for offline operation. Stores downloaded toolchains, files and repo mirrors. Possible to opt out of mirroring with `--no-mirror` or disable in user config.
+**Mirror**: Local cache at `$HOME/tmp/mirror` by default, for offline operation. Stores downloaded toolchains, files and repo mirrors. It is a machine-local cache, not part of any manifest, and is resolved with the following precedence (highest first): the `--mirror` flag, `mirror` under `[workspace]` in `~/.config/cim/config.toml`, then the built-in default. Possible to opt out of mirroring entirely with `--no-mirror`.
 
 > **Mirror dependency warning**: Workspaces initialized from a mirror borrow git
 > objects from it via git alternates (`.git/objects/info/alternates`). This
@@ -287,7 +287,7 @@ Initialize workspace from target.
 ```bash
 cim init --target NAME [--workspace PATH] [--version VERSION]
           [--match REGEX] [--include-group NAMES] [--exclude-group NAMES]
-          [--install] [--full] [--symlink] [--no-mirror]
+          [--install] [--full] [--symlink] [--no-mirror] [--mirror PATH]
 ```
 
 - `--install`: Install toolchains and pip packages after init
@@ -297,6 +297,7 @@ cim init --target NAME [--workspace PATH] [--version VERSION]
 - `--include-group NAMES`: Only clone repos belonging to these comma-separated group(s)
 - `--exclude-group NAMES`: Skip repos belonging to these comma-separated group(s)
 - `--no-mirror`: Disable mirroring for this workspace
+- `--mirror PATH`: Override the mirror cache directory for this invocation (see [Mirror](#concepts))
 
 #### update
 
@@ -305,7 +306,7 @@ with `--match`, only the matched repositories are updated.
 
 ```bash
 cim update [--match REGEX] [--include-group NAMES] [--exclude-group NAMES]
-           [--all] [--no-mirror]
+           [--all] [--no-mirror] [--mirror PATH]
 ```
 
 - `--all`: Update all repositories, ignoring any stored match filter
@@ -704,13 +705,6 @@ Note that this example, isn't a complete manifest, but rather a demonstration of
 
 #### sdk.yml
 ```yaml
-################################################################################
-# Mirror location serving as a local cache for downloads, git etc.
-# Possible to opt-out of mirroring with --no-mirror or disable in user config.
-################################################################################
-mirror: $HOME/tmp/mirror
-
-
 ################################################################################
 # Manifest variables — optional key-value pairs that can be reused across
 # the manifest with ${{ VAR }} syntax.
@@ -1310,8 +1304,6 @@ mkdir -p my-manifests/targets/my-sdk
 
 # Create sdk.yml
 cat > my-manifests/targets/my-sdk/sdk.yml << 'EOF'
-mirror: $HOME/tmp/mirror
-
 build:
   - make -j$(nproc)
 
