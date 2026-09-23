@@ -981,7 +981,10 @@ pub fn process_copy_files(
             let basic_auth = copy_file
                 .resolved_basic_auth()
                 .map_err(|e| format!("copy_files entry '{}': {}", copy_file.dest, e))?;
-            resolved.push((*copy_file, headers, basic_auth));
+            // Expand $VAR/${VAR} in the source URL itself, e.g. for a
+            // query-string API key -- same as toolchains: url is expanded.
+            let url = expand_env_vars(&copy_file.source);
+            resolved.push((*copy_file, url, headers, basic_auth));
         }
 
         let multi_progress = MultiProgress::new();
@@ -990,8 +993,7 @@ pub fn process_copy_files(
 
         messages::status("Downloading and checking file integrity...");
 
-        for (copy_file, headers, basic_auth) in resolved {
-            let url = copy_file.source.clone();
+        for (copy_file, url, headers, basic_auth) in resolved {
             let dest = expand_env_vars(&copy_file.dest);
             let dest_path = workspace_path.join(&dest);
             let use_cache = copy_file.cache.unwrap_or(false);

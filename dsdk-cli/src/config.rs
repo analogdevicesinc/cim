@@ -11,7 +11,7 @@
 
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(target_os = "windows")]
 use std::env;
 use std::fs;
@@ -539,9 +539,31 @@ pub struct ToolchainConfig {
     /// ```
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub post_install_commands: Option<Vec<String>>,
+    /// Optional: custom HTTP header(s) sent with the download request, a
+    /// map of header name to value. Values may reference a host env var
+    /// via `$VAR`/`${VAR}`. Use `resolved_headers()` to expand + validate
+    /// before use -- never send `headers` directly, they may still
+    /// contain an unexpanded `$VAR`.
+    #[serde(default)]
+    pub headers: Option<BTreeMap<String, String>>,
+    /// Optional: HTTP Basic auth, curl `-u` style ("user:password"). Same
+    /// expansion contract as `headers`, via `resolved_basic_auth()`.
+    #[serde(default)]
+    pub basic_auth: Option<String>,
 }
 
 impl ToolchainConfig {
+    /// See `resolve_headers_map` -- never send `headers` directly, they
+    /// may still contain an unexpanded `$VAR`.
+    pub fn resolved_headers(&self) -> Result<Vec<(String, String)>, String> {
+        resolve_headers_map(&self.headers, &self.basic_auth)
+    }
+
+    /// See `resolve_basic_auth_value`.
+    pub fn resolved_basic_auth(&self) -> Result<Option<(String, String)>, String> {
+        resolve_basic_auth_value(&self.basic_auth)
+    }
+
     /// Get the effective name, either from explicit name field or derived from URL
     pub fn get_name(&self) -> String {
         if let Some(ref name) = self.name {
@@ -585,59 +607,95 @@ pub struct CopyFileConfig {
     /// Optional: create symlink instead of copying when cache is true
     #[serde(default)]
     pub symlink: Option<bool>,
-    /// Optional: custom HTTP header(s), curl `-H` style ("Name: value").
+    /// Optional: custom HTTP header(s), a map of header name to value.
     /// Values may reference a host env var via `$VAR`/`${VAR}`. Use
     /// `resolved_headers()` to expand + validate before use -- never send
     /// `headers` directly, they may still contain an unexpanded `$VAR`.
     #[serde(default)]
-    pub headers: Option<Vec<String>>,
+    pub headers: Option<BTreeMap<String, String>>,
     /// Optional: HTTP Basic auth, curl `-u` style ("user:password"). Same
     /// expansion contract as `headers`, via `resolved_basic_auth()`.
     #[serde(default)]
     pub basic_auth: Option<String>,
 }
 
-impl CopyFileConfig {
-    /// Expand env vars in each `headers:` entry and split "Name: value"
-    /// into a `(name, value)` tuple. Returns `Err` naming the specific
-    /// unresolved `$VAR`/`${VAR}` if the referenced env var is not set, or
-    /// naming a malformed entry missing the `:` separator. Never touches
-    /// the network.
-    pub fn resolved_headers(&self) -> Result<Vec<(String, String)>, String> {
-        let mut out = Vec::new();
-        for raw in self.headers.iter().flatten() {
-            let expanded = workspace::expand_env_vars(raw);
-            if let Some(var) = workspace::find_unresolved_env_var_name(&expanded) {
-                return Err(format!(
-                    "header '{}' references environment variable '{}' which is not set",
-                    raw, var
-                ));
-            }
-            let (name, value) = expanded
-                .split_once(':')
-                .ok_or_else(|| format!("header '{}' is not in 'Name: value' format", raw))?;
-            out.push((name.trim().to_string(), value.trim().to_string()));
-        }
-        Ok(out)
-    }
-
-    /// Same expansion/fail-fast contract as `resolved_headers`, for
-    /// `basic_auth: "user:password"`.
-    pub fn resolved_basic_auth(&self) -> Result<Option<(String, String)>, String> {
-        let Some(raw) = &self.basic_auth else {
-            return Ok(None);
-        };
-        let expanded = workspace::expand_env_vars(raw);
-        if let Some(var) = workspace::find_unresolved_env_var_name(&expanded) {
+/// Expand env vars in each `headers:` value and validate the result.
+/// Returns `Err` naming the specific unresolved `$VAR`/`${VAR}` if the
+/// referenced env var is not set, naming a header name that collides with
+/// another one case-insensitively (HTTP header names are case-insensitive
+/// even though YAML map keys are not), or if an `Authorization` header is
+/// combined with `basic_auth` (both would set the request's Authorization
+/// header). Never touches the network. Shared by
+/// `CopyFileConfig`/`ToolchainConfig`'s `resolved_headers()`.
+fn resolve_headers_map(
+    headers: &Option<BTreeMap<String, String>>,
+    basic_auth: &Option<String>,
+) -> Result<Vec<(String, String)>, String> {
+    if basic_auth.is_some() {
+        if let Some((name, _)) = headers
+            .iter()
+            .flatten()
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        {
             return Err(format!(
-                "basic_auth references environment variable '{}' which is not set",
-                var
+                "header '{}' cannot be combined with 'basic_auth' -- both would set the request's Authorization header",
+                name
             ));
         }
-        let (user, pass) = expanded
-            .split_once(':')
-            .ok_or_else(|| "basic_auth value must be in 'user:password' format".to_string())?;
-        Ok(Some((user.to_string(), pass.to_string())))
+    }
+    let mut out = Vec::new();
+    let mut seen_lower = HashSet::new();
+    for (name, raw_value) in headers.iter().flatten() {
+        if !seen_lower.insert(name.to_ascii_lowercase()) {
+            return Err(format!(
+                "header '{}' is defined more than once (header names are case-insensitive)",
+                name
+            ));
+        }
+        let value = workspace::expand_env_vars(raw_value);
+        if let Some(var) = workspace::find_unresolved_env_var_name(&value) {
+            return Err(format!(
+                "header '{}' references environment variable '{}' which is not set",
+                name, var
+            ));
+        }
+        out.push((name.clone(), value));
+    }
+    Ok(out)
+}
+
+/// Same expansion/fail-fast contract as `resolve_headers_list`, for a
+/// `basic_auth: "user:password"` value. Shared by
+/// `CopyFileConfig`/`ToolchainConfig`'s `resolved_basic_auth()`.
+fn resolve_basic_auth_value(
+    basic_auth: &Option<String>,
+) -> Result<Option<(String, String)>, String> {
+    let Some(raw) = basic_auth else {
+        return Ok(None);
+    };
+    let expanded = workspace::expand_env_vars(raw);
+    if let Some(var) = workspace::find_unresolved_env_var_name(&expanded) {
+        return Err(format!(
+            "basic_auth references environment variable '{}' which is not set",
+            var
+        ));
+    }
+    let (user, pass) = expanded
+        .split_once(':')
+        .ok_or_else(|| "basic_auth value must be in 'user:password' format".to_string())?;
+    Ok(Some((user.to_string(), pass.to_string())))
+}
+
+impl CopyFileConfig {
+    /// See `resolve_headers_map` -- never send `headers` directly, they
+    /// may still contain an unexpanded `$VAR`.
+    pub fn resolved_headers(&self) -> Result<Vec<(String, String)>, String> {
+        resolve_headers_map(&self.headers, &self.basic_auth)
+    }
+
+    /// See `resolve_basic_auth_value`.
+    pub fn resolved_basic_auth(&self) -> Result<Option<(String, String)>, String> {
+        resolve_basic_auth_value(&self.basic_auth)
     }
 }
 
@@ -2701,7 +2759,7 @@ default_source = "https://example.com/manifests"
     }
 
     fn copy_file_config(
-        headers: Option<Vec<String>>,
+        headers: Option<BTreeMap<String, String>>,
         basic_auth: Option<String>,
     ) -> CopyFileConfig {
         CopyFileConfig {
@@ -2726,7 +2784,10 @@ default_source = "https://example.com/manifests"
     fn test_resolved_headers_expands_env_var() {
         std::env::set_var("TEST_CS_TOKEN", "abc123");
         let cf = copy_file_config(
-            Some(vec!["Authorization: Bearer $TEST_CS_TOKEN".to_string()]),
+            Some(BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer $TEST_CS_TOKEN".to_string(),
+            )])),
             None,
         );
         assert_eq!(
@@ -2740,9 +2801,10 @@ default_source = "https://example.com/manifests"
     fn test_resolved_headers_missing_env_var() {
         std::env::remove_var("TEST_CS_TOKEN_MISSING");
         let cf = copy_file_config(
-            Some(vec![
-                "Authorization: Bearer $TEST_CS_TOKEN_MISSING".to_string()
-            ]),
+            Some(BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer $TEST_CS_TOKEN_MISSING".to_string(),
+            )])),
             None,
         );
         let err = cf.resolved_headers().unwrap_err();
@@ -2750,9 +2812,52 @@ default_source = "https://example.com/manifests"
     }
 
     #[test]
-    fn test_resolved_headers_malformed_entry() {
-        let cf = copy_file_config(Some(vec!["not-a-header".to_string()]), None);
+    fn test_resolved_headers_case_insensitive_duplicate() {
+        let cf = copy_file_config(
+            Some(BTreeMap::from([
+                ("Authorization".to_string(), "a".to_string()),
+                ("authorization".to_string(), "b".to_string()),
+            ])),
+            None,
+        );
         assert!(cf.resolved_headers().is_err());
+    }
+
+    #[test]
+    fn test_resolved_headers_conflicts_with_basic_auth() {
+        let cf = copy_file_config(
+            Some(BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer x".to_string(),
+            )])),
+            Some("token:secret".to_string()),
+        );
+        let err = cf.resolved_headers().unwrap_err();
+        assert!(err.contains("basic_auth"));
+    }
+
+    #[test]
+    fn test_resolved_headers_case_insensitive_authorization_conflicts_with_basic_auth() {
+        let cf = copy_file_config(
+            Some(BTreeMap::from([(
+                "authorization".to_string(),
+                "Bearer x".to_string(),
+            )])),
+            Some("token:secret".to_string()),
+        );
+        assert!(cf.resolved_headers().is_err());
+    }
+
+    #[test]
+    fn test_resolved_headers_other_header_allowed_alongside_basic_auth() {
+        let cf = copy_file_config(
+            Some(BTreeMap::from([(
+                "X-Api-Key".to_string(),
+                "abc".to_string(),
+            )])),
+            Some("token:secret".to_string()),
+        );
+        assert!(cf.resolved_headers().is_ok());
     }
 
     #[test]
@@ -2784,5 +2889,79 @@ default_source = "https://example.com/manifests"
     fn test_resolved_basic_auth_malformed_value() {
         let cf = copy_file_config(None, Some("no-colon-here".to_string()));
         assert!(cf.resolved_basic_auth().is_err());
+    }
+
+    fn toolchain_config(
+        headers: Option<BTreeMap<String, String>>,
+        basic_auth: Option<String>,
+    ) -> ToolchainConfig {
+        ToolchainConfig {
+            name: Some("toolchain_files.tgz".to_string()),
+            url: "https://example.com/toolchain".to_string(),
+            destination: "toolchains/test".to_string(),
+            strip_components: None,
+            os: None,
+            arch: None,
+            sha256: None,
+            mirror_destination: None,
+            environment: None,
+            post_install_commands: None,
+            headers,
+            basic_auth,
+        }
+    }
+
+    // ToolchainConfig delegates to the same resolve_headers_map/
+    // resolve_basic_auth_value helpers as CopyFileConfig (tested exhaustively
+    // above), so these just confirm the delegation is wired up.
+    #[test]
+    fn test_toolchain_resolved_headers_none() {
+        let tc = toolchain_config(None, None);
+        assert_eq!(tc.resolved_headers().unwrap(), vec![]);
+    }
+
+    #[test]
+    fn test_toolchain_resolved_headers_expands_env_var() {
+        std::env::set_var("TEST_TOOLCHAIN_TOKEN", "secret-token");
+        let tc = toolchain_config(
+            Some(BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer $TEST_TOOLCHAIN_TOKEN".to_string(),
+            )])),
+            None,
+        );
+        assert_eq!(
+            tc.resolved_headers().unwrap(),
+            vec![(
+                "Authorization".to_string(),
+                "Bearer secret-token".to_string()
+            )]
+        );
+        std::env::remove_var("TEST_TOOLCHAIN_TOKEN");
+    }
+
+    #[test]
+    fn test_toolchain_resolved_headers_missing_env_var() {
+        std::env::remove_var("TEST_TOOLCHAIN_TOKEN_MISSING");
+        let tc = toolchain_config(
+            Some(BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer $TEST_TOOLCHAIN_TOKEN_MISSING".to_string(),
+            )])),
+            None,
+        );
+        let err = tc.resolved_headers().unwrap_err();
+        assert!(err.contains("TEST_TOOLCHAIN_TOKEN_MISSING"));
+    }
+
+    #[test]
+    fn test_toolchain_resolved_basic_auth_expands_env_var() {
+        std::env::set_var("TEST_TOOLCHAIN_TOKEN2", "xyz789");
+        let tc = toolchain_config(None, Some("token:$TEST_TOOLCHAIN_TOKEN2".to_string()));
+        assert_eq!(
+            tc.resolved_basic_auth().unwrap(),
+            Some(("token".to_string(), "xyz789".to_string()))
+        );
+        std::env::remove_var("TEST_TOOLCHAIN_TOKEN2");
     }
 }
