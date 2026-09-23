@@ -536,8 +536,13 @@ pub(crate) fn ensure_file_in_mirror(
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Check if source is URL or local path
     if is_url(&copy_file.source) {
+        // Expand $VAR/${VAR} in the source URL first -- generate_cache_path
+        // must hash the same URL process_copy_files will actually request,
+        // or the cache path computed here won't match the one looked up at
+        // init time.
+        let expanded_url = expand_env_vars(&copy_file.source);
         // For URLs, use generate_cache_path to determine where it will be downloaded
-        let cache_path = generate_cache_path(&copy_file.source, mirror_path);
+        let cache_path = generate_cache_path(&expanded_url, mirror_path);
         let headers = copy_file
             .resolved_headers()
             .map_err(|e| format!("copy_files entry '{}': {}", copy_file.dest, e))?;
@@ -546,7 +551,7 @@ pub(crate) fn ensure_file_in_mirror(
             .map_err(|e| format!("copy_files entry '{}': {}", copy_file.dest, e))?;
 
         download_file_with_cache(DownloadConfig {
-            url: &copy_file.source,
+            url: &expanded_url,
             dest_path: &cache_path,
             mirror_path,
             use_cache: copy_file.cache.unwrap_or(false),
@@ -1399,8 +1404,11 @@ pub(crate) fn handle_sync_files_hash_command(
             }
         };
 
+        // Expand $VAR/${VAR} in the source URL, matching process_copy_files
+        // so cache-path hashing stays consistent across both code paths.
+        let expanded_url = expand_env_vars(&copy_file.source);
         match download_file_with_cache(DownloadConfig {
-            url: &copy_file.source,
+            url: &expanded_url,
             dest_path: &dest_path,
             mirror_path: &mirror_path,
             use_cache,

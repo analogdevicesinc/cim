@@ -854,6 +854,11 @@ impl ToolchainManager {
         let download_url = self.construct_download_url(&expanded_url, &toolchain.get_name());
         let max_attempts: u32 = if expected_sha256.is_some() { 3 } else { 1 };
 
+        // Resolve headers/basic_auth up front -- never touch the network with
+        // an unexpanded $VAR still in a header value.
+        let headers = toolchain.resolved_headers()?;
+        let basic_auth = toolchain.resolved_basic_auth()?;
+
         for attempt in 1..=max_attempts {
             messages::status(&format!(
                 "Downloading {} from {}...{}",
@@ -870,6 +875,8 @@ impl ToolchainManager {
                 &archive_path,
                 cert_validation,
                 expected_sha256,
+                &headers,
+                basic_auth.as_ref(),
             ) {
                 Ok(()) => return Ok(archive_path),
                 Err(e) => {
@@ -1132,6 +1139,8 @@ impl ToolchainManager {
         dest_path: &Path,
         cert_validation: Option<&str>,
         expected_sha256: Option<&str>,
+        headers: &[(String, String)],
+        basic_auth: Option<&(String, String)>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Use a wget-like user agent that is generally accepted by most servers
         // This avoids user-agent blocking from servers like rustup.rs
@@ -1203,7 +1212,14 @@ impl ToolchainManager {
         let mut last_error = None;
 
         for (i, client) in clients.iter().enumerate() {
-            match client.get(url).send() {
+            let mut request = client.get(url);
+            for (name, value) in headers {
+                request = request.header(name, value);
+            }
+            if let Some((user, pass)) = basic_auth {
+                request = request.basic_auth(user, Some(pass));
+            }
+            match request.send() {
                 Ok(response) => {
                     if response.status().is_success() {
                         if mode == "auto" && i == 1 {
@@ -1254,15 +1270,20 @@ impl ToolchainManager {
         // For relaxed and auto modes, try wget as fallback
         if mode == "relaxed" || mode == "auto" {
             messages::verbose("HTTP clients failed, trying wget as fallback...");
-            if let Ok(output) = Command::new("wget")
+            let mut wget_cmd = Command::new("wget");
+            wget_cmd
                 .arg("--no-check-certificate")
                 .arg(format!("--user-agent={}", user_agent))
-                .arg("--timeout=300")
-                .arg("-O")
-                .arg(dest_path)
-                .arg(url)
-                .output()
-            {
+                .arg("--timeout=300");
+            for (name, value) in headers {
+                wget_cmd.arg(format!("--header={}: {}", name, value));
+            }
+            if let Some((user, pass)) = basic_auth {
+                wget_cmd
+                    .arg(format!("--http-user={}", user))
+                    .arg(format!("--http-password={}", pass));
+            }
+            if let Ok(output) = wget_cmd.arg("-O").arg(dest_path).arg(url).output() {
                 if output.status.success() {
                     messages::verbose("Download successful using wget");
                     if mode == "auto" {
@@ -1286,12 +1307,20 @@ impl ToolchainManager {
 
             // If wget is not available or failed, try curl
             messages::verbose("wget not available or failed, trying curl as fallback...");
-            if let Ok(output) = Command::new("curl")
+            let mut curl_cmd = Command::new("curl");
+            curl_cmd
                 .arg("--insecure")
                 .arg("--user-agent")
                 .arg(user_agent)
                 .arg("--max-time")
-                .arg("300")
+                .arg("300");
+            for (name, value) in headers {
+                curl_cmd.arg("-H").arg(format!("{}: {}", name, value));
+            }
+            if let Some((user, pass)) = basic_auth {
+                curl_cmd.arg("-u").arg(format!("{}:{}", user, pass));
+            }
+            if let Ok(output) = curl_cmd
                 .arg("-L") // follow redirects
                 .arg("-o")
                 .arg(dest_path)
@@ -1556,6 +1585,7 @@ fn get_default_shell() -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     fn create_test_toolchain(name: &str, destination: &str) -> ToolchainConfig {
@@ -1570,6 +1600,8 @@ mod tests {
             mirror_destination: None,
             environment: None,
             post_install_commands: None,
+            headers: None,
+            basic_auth: None,
         }
     }
 
@@ -2225,6 +2257,8 @@ mod tests {
             mirror_destination: None,
             environment: None,
             post_install_commands: None,
+            headers: None,
+            basic_auth: None,
         };
 
         // Download will fail (invalid URL), but the zero-byte file should be removed
@@ -2237,6 +2271,41 @@ mod tests {
             !archive_path.exists(),
             "Zero-byte file should have been removed from mirror"
         );
+    }
+
+    #[test]
+    fn test_ensure_archive_downloaded_fails_fast_on_unresolved_header_env_var() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let mirror_path = fixture.path().join("mirror");
+        fs::create_dir_all(&mirror_path).expect("Failed to create mirror dir");
+
+        let manager = ToolchainManager::new(fixture.path().to_path_buf(), mirror_path.clone());
+
+        std::env::remove_var("TEST_MANAGER_TOKEN_MISSING");
+        let toolchain = ToolchainConfig {
+            name: Some("test-toolchain.tar.gz".to_string()),
+            url: "https://invalid.example.com/nonexistent".to_string(),
+            destination: "toolchains/test".to_string(),
+            strip_components: None,
+            os: None,
+            arch: None,
+            sha256: None,
+            mirror_destination: None,
+            environment: None,
+            post_install_commands: None,
+            headers: Some(BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer $TEST_MANAGER_TOKEN_MISSING".to_string(),
+            )])),
+            basic_auth: None,
+        };
+
+        // Header resolution must fail before any network request is attempted.
+        let err = manager
+            .ensure_archive_downloaded(&toolchain, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("TEST_MANAGER_TOKEN_MISSING"));
+        assert!(!mirror_path.join("test-toolchain.tar.gz").exists());
     }
 
     #[test]

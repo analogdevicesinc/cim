@@ -39,7 +39,7 @@ use crate::config::{
     MakefileIncludeConfig, SdkConfig, SdkConfigCore, ToolchainConfig,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// A patch applied to an existing `gits:` entry identified by `name`. Only
 /// fields explicitly set in the `overlay:` key are overridden; all other
@@ -94,6 +94,10 @@ pub struct ToolchainPatch {
     pub environment: Option<HashMap<String, String>>,
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub post_install_commands: Option<Vec<String>>,
+    #[serde(default)]
+    pub headers: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub basic_auth: Option<String>,
 }
 
 /// A patch applied to an existing `install:` entry, identified by `name`.
@@ -125,7 +129,7 @@ pub struct CopyFilePatch {
     #[serde(default)]
     pub symlink: Option<bool>,
     #[serde(default)]
-    pub headers: Option<Vec<String>>,
+    pub headers: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub basic_auth: Option<String>,
 }
@@ -284,6 +288,12 @@ fn apply_toolchain_patch(target: &mut ToolchainConfig, patch: &ToolchainPatch) {
     }
     if patch.post_install_commands.is_some() {
         target.post_install_commands = patch.post_install_commands.clone();
+    }
+    if patch.headers.is_some() {
+        target.headers = patch.headers.clone();
+    }
+    if patch.basic_auth.is_some() {
+        target.basic_auth = patch.basic_auth.clone();
     }
 }
 

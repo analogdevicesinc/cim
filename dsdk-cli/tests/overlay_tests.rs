@@ -32,7 +32,7 @@ use dsdk_cli::overlay::{
     GitPatch, GitsOverlay, InstallOverlay, InstallPatch, OverlayConfig, ToolchainPatch,
     ToolchainsOverlay, VariablesOverlay,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 fn new_git(name: &str, url: &str, commit: &str) -> GitConfig {
     GitConfig {
@@ -55,6 +55,8 @@ fn new_toolchain(name: &str) -> ToolchainConfig {
         mirror_destination: None,
         environment: None,
         post_install_commands: None,
+        headers: None,
+        basic_auth: None,
     }
 }
 
@@ -272,6 +274,11 @@ fn test_merge_toolchains_own_remove_modify() {
             mirror_destination: None,
             environment: None,
             post_install_commands: None,
+            headers: Some(BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer $TEST_TOOLCHAIN_TOKEN".to_string(),
+            )])),
+            basic_auth: None,
         }],
     };
 
@@ -283,6 +290,13 @@ fn test_merge_toolchains_own_remove_modify() {
     assert!(merged.iter().any(|t| t.get_name() == "c"));
     let patched = merged.iter().find(|t| t.get_name() == "b").unwrap();
     assert_eq!(patched.destination, "toolchains/patched");
+    assert_eq!(
+        patched.headers,
+        Some(BTreeMap::from([(
+            "Authorization".to_string(),
+            "Bearer $TEST_TOOLCHAIN_TOKEN".to_string(),
+        )]))
+    );
 }
 
 #[test]
