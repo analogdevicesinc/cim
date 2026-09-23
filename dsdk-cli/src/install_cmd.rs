@@ -26,7 +26,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
         Ok(paths) => paths,
         Err(e) => {
             messages::error(&e);
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -39,7 +39,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                 config_path.display(),
                 e
             ));
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -221,6 +221,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
                 cert_validation.as_deref(),
             ) {
                 messages::error(&format!("Error installing toolchains: {}", e));
+                std::process::exit(1);
             }
         }
         InstallCommand::Tools {
