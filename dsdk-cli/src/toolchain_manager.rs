@@ -1132,6 +1132,13 @@ impl ToolchainManager {
         }
     }
 
+    /// True if `path` exists and is exactly 0 bytes -- used to catch a
+    /// download tool that exits successfully but wrote an HTTP error
+    /// response (e.g. an auth challenge) instead of the actual archive.
+    fn is_empty_file(&self, path: &Path) -> bool {
+        fs::metadata(path).map(|m| m.len() == 0).unwrap_or(false)
+    }
+
     /// Download toolchain archive from URL
     fn download_toolchain(
         &self,
@@ -1226,11 +1233,16 @@ impl ToolchainManager {
                             messages::info("Strict SSL verification failed, used relaxed mode");
                             messages::info("Consider fixing SSL certificates or use --cert-validation=relaxed explicitly");
                         }
+                        let content = response.bytes()?;
+                        if content.is_empty() {
+                            last_error =
+                                Some("Server returned an empty (0-byte) response body".to_string());
+                            continue;
+                        }
                         messages::verbose(&format!(
                             "Download successful using client configuration {}",
                             i + 1
                         ));
-                        let content = response.bytes()?;
                         fs::write(dest_path, content)?;
                         self.verify_toolchain_sha256(dest_path, expected_sha256)?;
                         return Ok(());
@@ -1284,7 +1296,7 @@ impl ToolchainManager {
                     .arg(format!("--http-password={}", pass));
             }
             if let Ok(output) = wget_cmd.arg("-O").arg(dest_path).arg(url).output() {
-                if output.status.success() {
+                if output.status.success() && !self.is_empty_file(dest_path) {
                     messages::verbose("Download successful using wget");
                     if mode == "auto" {
                         messages::info(
@@ -1294,10 +1306,14 @@ impl ToolchainManager {
                     self.verify_toolchain_sha256(dest_path, expected_sha256)?;
                     return Ok(());
                 } else {
-                    messages::verbose(&format!(
-                        "wget failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ));
+                    if output.status.success() {
+                        messages::verbose("wget wrote an empty (0-byte) file, treating as failure");
+                    } else {
+                        messages::verbose(&format!(
+                            "wget failed: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        ));
+                    }
                     // Remove partial/empty file left by wget
                     if dest_path.exists() {
                         let _ = fs::remove_file(dest_path);
@@ -1310,6 +1326,7 @@ impl ToolchainManager {
             let mut curl_cmd = Command::new("curl");
             curl_cmd
                 .arg("--insecure")
+                .arg("--fail") // non-2xx responses must be a failure, not a "successful" download of the error body
                 .arg("--user-agent")
                 .arg(user_agent)
                 .arg("--max-time")
@@ -1327,7 +1344,7 @@ impl ToolchainManager {
                 .arg(url)
                 .output()
             {
-                if output.status.success() {
+                if output.status.success() && !self.is_empty_file(dest_path) {
                     messages::verbose("Download successful using curl");
                     if mode == "auto" {
                         messages::info(
@@ -1337,10 +1354,14 @@ impl ToolchainManager {
                     self.verify_toolchain_sha256(dest_path, expected_sha256)?;
                     return Ok(());
                 } else {
-                    messages::verbose(&format!(
-                        "curl failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ));
+                    if output.status.success() {
+                        messages::verbose("curl wrote an empty (0-byte) file, treating as failure");
+                    } else {
+                        messages::verbose(&format!(
+                            "curl failed: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        ));
+                    }
                     // Remove partial/empty file left by curl
                     if dest_path.exists() {
                         let _ = fs::remove_file(dest_path);
@@ -2229,6 +2250,30 @@ mod tests {
             rustup_home,
             "/home/user/mirror/toolchains/rust-1.75.0/rustup"
         );
+    }
+
+    #[test]
+    fn test_is_empty_file_true_for_zero_byte_file() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let manager = create_test_manager();
+        let path = fixture.path().join("empty.tgz");
+        fs::write(&path, b"").expect("Failed to create empty file");
+        assert!(manager.is_empty_file(&path));
+    }
+
+    #[test]
+    fn test_is_empty_file_false_for_non_empty_file() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let manager = create_test_manager();
+        let path = fixture.path().join("archive.tgz");
+        fs::write(&path, b"not empty").expect("Failed to create file");
+        assert!(!manager.is_empty_file(&path));
+    }
+
+    #[test]
+    fn test_is_empty_file_false_for_missing_file() {
+        let manager = create_test_manager();
+        assert!(!manager.is_empty_file(Path::new("/nonexistent/path/to/file.tgz")));
     }
 
     #[test]
