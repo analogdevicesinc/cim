@@ -819,6 +819,43 @@ default_source = "/some/path"
     assert_eq!(config.network.cert_validation, None);
 }
 
+#[test]
+fn test_low_speed_settings_in_user_config() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("config.toml");
+
+    let config_content = r#"
+[network]
+low_speed_limit = 1000
+low_speed_time_secs = 30
+"#;
+    fixture.write_file("config.toml", config_content);
+    let config = dsdk_cli::config::UserConfig::load_from(&config_path)
+        .expect("Should load config")
+        .expect("Should have config");
+    assert_eq!(config.network.low_speed_limit, Some(1000));
+    assert_eq!(config.network.low_speed_time_secs, Some(30));
+}
+
+#[test]
+fn test_low_speed_settings_disabled_by_default() {
+    let fixture = TestFixture::new();
+    let config_path = fixture.path().join("config.toml");
+
+    // Config with no [network] table at all should leave low-speed
+    // detection disabled (both fields None).
+    let config_content = r#"
+[sources]
+default_source = "/some/path"
+"#;
+    fixture.write_file("config.toml", config_content);
+    let config = dsdk_cli::config::UserConfig::load_from(&config_path)
+        .expect("Should load config")
+        .expect("Should have config");
+    assert_eq!(config.network.low_speed_limit, None);
+    assert_eq!(config.network.low_speed_time_secs, None);
+}
+
 // Tests for os-dependencies multi-version support
 
 #[test]

@@ -1274,6 +1274,22 @@ pub struct NetworkConfig {
     /// legitimately take longer than the default even with no stalls.
     #[serde(default)]
     pub git_timeout_secs: Option<u64>,
+
+    /// Git's `http.lowSpeedLimit` (bytes/sec): abort an HTTP(S) transfer
+    /// once its average speed drops below this for `low_speed_time_secs`.
+    /// Unset by default, meaning no low-speed abort is applied -- only the
+    /// `git_timeout_secs` hard timeout guards against hangs. Large clones
+    /// (e.g. full kernel histories) can legitimately dip below typical
+    /// low-speed thresholds without being stalled, so both this and
+    /// `low_speed_time_secs` must be set explicitly to opt back in.
+    #[serde(default)]
+    pub low_speed_limit: Option<u64>,
+
+    /// Git's `http.lowSpeedTime` (seconds): how long the transfer must
+    /// stay below `low_speed_limit` before git aborts it. See
+    /// `low_speed_limit` -- unset by default (low-speed detection disabled).
+    #[serde(default)]
+    pub low_speed_time_secs: Option<u64>,
 }
 
 impl UserConfig {
@@ -1601,6 +1617,26 @@ impl UserConfig {
 # git_timeout_secs = 900     # Default
 # git_timeout_secs = 1800    # Large repos on slow links
 # git_timeout_secs = 120     # Fail fast in CI
+
+# =============================================================================
+# Git Low-Speed Detection
+# =============================================================================
+# Git's own `http.lowSpeedLimit`/`http.lowSpeedTime` abort an HTTP(S)
+# transfer that drops below a minimum average speed for too long. Disabled
+# by default -- only `git_timeout_secs` above guards against hangs. Cloning
+# very large repositories (e.g. full kernel histories) can legitimately dip
+# below typical low-speed thresholds for a while without being stalled,
+# which made this abort fire on healthy clones. Set both values below to
+# opt back in.
+#
+# Values:
+#   - low_speed_limit: minimum average transfer speed, in bytes/sec
+#   - low_speed_time_secs: seconds the transfer may stay below that speed
+#     before git aborts it
+#
+# Examples:
+# low_speed_limit = 1000        # Abort if slower than 1000 bytes/sec...
+# low_speed_time_secs = 30      # ...for more than 30 seconds
 "#
         .to_string()
     }
@@ -2612,6 +2648,41 @@ url = "git@github.com:team/manifests.git"
         let config = UserConfig::load_from(&config_path).unwrap().unwrap();
         assert_eq!(config.network.git_timeout_secs, None);
         assert_eq!(config.get_value("network.git_timeout_secs"), None);
+    }
+
+    #[test]
+    fn test_user_config_low_speed_settings() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            "[network]\nlow_speed_limit = 1000\nlow_speed_time_secs = 30\n",
+        )
+        .unwrap();
+
+        let config = UserConfig::load_from(&config_path).unwrap().unwrap();
+        assert_eq!(config.network.low_speed_limit, Some(1000));
+        assert_eq!(config.network.low_speed_time_secs, Some(30));
+        assert_eq!(
+            config.get_value("network.low_speed_limit"),
+            Some("1000".to_string())
+        );
+        assert_eq!(
+            config.get_value("network.low_speed_time_secs"),
+            Some("30".to_string())
+        );
+    }
+
+    #[test]
+    fn test_user_config_low_speed_settings_absent_by_default() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "").unwrap();
+
+        let config = UserConfig::load_from(&config_path).unwrap().unwrap();
+        assert_eq!(config.network.low_speed_limit, None);
+        assert_eq!(config.network.low_speed_time_secs, None);
     }
 
     #[test]
