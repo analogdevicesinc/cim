@@ -650,6 +650,11 @@ cert_validation = "strict"
 
 # Hard timeout (seconds) for every git subprocess call (default: 900)
 git_timeout_secs = 900
+
+# Git low-speed abort: disabled unless both are set (see "Git Command
+# Timeout" below)
+low_speed_limit = 1000
+low_speed_time_secs = 30
 ```
 
 Note: in TOML, a bare `key = value` line always belongs to whichever table
@@ -675,11 +680,9 @@ Use `relaxed` mode only in trusted networks. It disables certificate validation 
 ### Git Command Timeout
 
 Every git subprocess cim runs (clone, fetch, checkout, ls-remote, ...) is
-guarded by two layers: git's own HTTP low-speed abort (fails a transfer that
-drops below ~1000 bytes/sec for 30s) and a hard kill timeout as a backstop
-for hangs the low-speed check can't see (non-HTTP transports, a stall before
-any bytes flow, credential-helper issues). The hard timeout defaults to 900
-seconds (15 minutes).
+guarded by a hard kill timeout, defaulting to 900 seconds (15 minutes), as a
+backstop for hangs (non-HTTP transports, a stall before any bytes flow,
+credential-helper issues).
 
 For very large repositories (e.g. full kernel/monorepo histories) on slower
 links, a full `fetch --all --tags` can legitimately take longer than the
@@ -688,6 +691,20 @@ default even with no stalls. Raise the hard timeout in `config.toml`:
 ```toml
 [network]
 git_timeout_secs = 1800  # 30 minutes
+```
+
+Git also has its own HTTP low-speed abort (`http.lowSpeedLimit`/
+`http.lowSpeedTime`), which fails a transfer that drops below a minimum
+average speed for too long. cim leaves this **disabled by default**: large
+clones can legitimately dip below typical low-speed thresholds for a while
+(e.g. while git computes deltas for a huge history) without actually being
+stalled, which caused spurious aborts on otherwise-healthy clones of large
+repositories. Opt back in by setting both values in `config.toml`:
+
+```toml
+[network]
+low_speed_limit = 1000      # Abort if slower than 1000 bytes/sec...
+low_speed_time_secs = 30    # ...for more than 30 seconds
 ```
 
 ---
