@@ -778,6 +778,9 @@ build_folder: build
 # environment: optional environment variables to set during post-install commands
 #   - Supports variable expansion: $PWD (install dir), $WORKSPACE (workspace root), $HOME
 #   - Useful for isolating toolchain installations from system-wide installations
+# headers/basic_auth: optional, for downloads that require authentication
+#   - headers is a map of header name to value ($VAR/${VAR} expansion in
+#     values); same as copy_files:'s headers/basic_auth (see below)
 ################################################################################
 toolchains:
   # Example: ARM GNU Toolchain for aarch32 (macOS ARM64)
@@ -788,6 +791,19 @@ toolchains:
     strip_components: 1
     os: darwin
     arch: arm64
+
+  # Example: proprietary toolchain behind a Bearer-token-gated download.
+  # $MY_API_TOKEN must be exported in the host environment before running
+  # "cim install toolchains" -- cim never stores or logs the token.
+  - name: toolchain_files.tgz
+    url: https://my-remote-server.com/protected/versions/some-toolchain
+    destination: toolchains/some-toolchain
+    strip_components: 2 # flatten the tarball's embedded version/component dirs
+    os: linux
+    headers:
+      Authorization: "Bearer $MY_API_TOKEN"
+    post_install_commands:
+      - "find ${{ PWD }} -name '*.so' -exec patchelf --clear-execstack {} \\;"
 
   # Example: Rust toolchain with environment isolation
   # Downloads rustup installer script and runs it with isolated environment
@@ -879,11 +895,13 @@ flash:
 # sha256: optional checksum for integrity verification. If the checksum does not
 #         match, the file will be re-downloaded (threshold of 3 attempts before
 #         an error is reporterd)
-# headers: list of "Name: value" strings, curl -H style, for URL downloads
-#          that need a custom request header (e.g. an auth token). Values
-#          may reference a host env var via $VAR/${VAR}; if that var is
-#          still unset after expansion, cim fails fast with an error naming
-#          it, before making any request.
+# headers: map of header name to value, for URL downloads that need a
+#          custom request header (e.g. an auth token). Values may
+#          reference a host env var via $VAR/${VAR}; if that var is still
+#          unset after expansion, cim fails fast with an error naming it,
+#          before making any request. Header names are case-insensitive:
+#          defining the same name twice (e.g. Authorization/authorization)
+#          is a fail-fast error.
 # basic_auth: "user:password" string, curl -u style, for URL downloads that
 #          need HTTP Basic auth. Same $VAR expansion and fail-fast behavior
 #          as headers.
@@ -901,7 +919,7 @@ copy_files:
   - source: https://my-remote-server.com/protected/foobar.tgz
     dest: downloads/protected-foobar.tgz
     headers:
-      - "Authorization: Bearer $MY_API_TOKEN"
+      Authorization: "Bearer $MY_API_TOKEN"
     cache: true
 
   - source: https://my-remote-server.com/generic/foobar.zip
