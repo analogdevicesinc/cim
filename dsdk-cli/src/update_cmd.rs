@@ -239,15 +239,43 @@ fn create_config_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// One manifest source and the targets it exposes, for `--format json`.
+#[derive(serde::Serialize)]
+struct JsonSourceTargets {
+    source: String,
+    kind: &'static str,
+    targets: Vec<String>,
+}
+
+/// A single target's available versions, for `--format json`.
+#[derive(serde::Serialize)]
+struct JsonTargetVersions {
+    target: String,
+    source: String,
+    versions: Vec<String>,
+}
+
 /// Handle the list-targets command
-pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: Option<&str>) {
+pub(crate) fn handle_list_targets_command(
+    source: Option<&str>,
+    target_filter: Option<&str>,
+    format: &str,
+) {
+    let json = format.eq_ignore_ascii_case("json");
+
     // If --source is explicitly given, use only that single source (no alternates)
     if let Some(src) = source {
         let source_path = src.to_string();
         if let Some(target_name) = target_filter {
             match list_target_versions(&source_path, target_name) {
                 Ok(versions) => {
-                    if versions.is_empty() {
+                    if json {
+                        print_json(&JsonTargetVersions {
+                            target: target_name.to_string(),
+                            source: source_path,
+                            versions,
+                        });
+                    } else if versions.is_empty() {
                         messages::status(&format!(
                             "No versions found for target '{}'",
                             target_name
@@ -273,7 +301,13 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
         } else {
             match list_targets_from_source(&source_path) {
                 Ok(targets) => {
-                    if targets.is_empty() {
+                    if json {
+                        print_json(&JsonSourceTargets {
+                            source: source_path,
+                            kind: "default",
+                            targets,
+                        });
+                    } else if targets.is_empty() {
                         messages::status(&format!("No targets found in {}", source_path));
                     } else {
                         messages::status(&format!("Available targets from {}:", source_path));
@@ -297,22 +331,32 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
 
     if let Some(target_name) = target_filter {
         let mut any_versions = false;
+        let mut json_results: Vec<JsonTargetVersions> = Vec::new();
         for (i, source_path) in sources.iter().enumerate() {
             match list_target_versions(source_path, target_name) {
                 Ok(versions) => {
                     if !versions.is_empty() {
                         any_versions = true;
-                        if has_alternates {
+                        if json {
+                            json_results.push(JsonTargetVersions {
+                                target: target_name.to_string(),
+                                source: source_path.clone(),
+                                versions,
+                            });
+                        } else if has_alternates {
                             messages::status(&format!(
                                 "  Source: {} ({})",
                                 source_path,
                                 source_label(i)
                             ));
+                            for version in versions {
+                                messages::status(&format!("    - {}", version));
+                            }
                         } else {
                             messages::status(&format!("  Source: {}", source_path));
-                        }
-                        for version in versions {
-                            messages::status(&format!("    - {}", version));
+                            for version in versions {
+                                messages::status(&format!("    - {}", version));
+                            }
                         }
                     }
                 }
@@ -329,29 +373,41 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
                 }
             }
         }
-        if !any_versions {
+        if json {
+            print_json(&json_results);
+        } else if !any_versions {
             messages::status(&format!("No versions found for target '{}'", target_name));
         }
     } else {
         let mut any_targets = false;
+        let mut json_results: Vec<JsonSourceTargets> = Vec::new();
         for (i, source_path) in sources.iter().enumerate() {
             match list_targets_from_source(source_path) {
                 Ok(targets) => {
                     if !targets.is_empty() {
                         any_targets = true;
-                        if has_alternates {
+                        if json {
+                            json_results.push(JsonSourceTargets {
+                                source: source_path.clone(),
+                                kind: source_label(i),
+                                targets,
+                            });
+                        } else if has_alternates {
                             messages::status(&format!(
                                 "  Source: {} ({})",
                                 source_path,
                                 source_label(i)
                             ));
+                            for target in targets {
+                                messages::status(&format!("    - {}", target));
+                            }
                         } else {
                             messages::status(&format!("Available targets from {}:", source_path));
+                            for target in targets {
+                                messages::status(&format!("    - {}", target));
+                            }
                         }
-                        for target in targets {
-                            messages::status(&format!("    - {}", target));
-                        }
-                    } else if !has_alternates {
+                    } else if !has_alternates && !json {
                         messages::status(&format!("No targets found in {}", source_path));
                     }
                 }
@@ -365,10 +421,21 @@ pub(crate) fn handle_list_targets_command(source: Option<&str>, target_filter: O
                 }
             }
         }
-        if !any_targets {
+        if json {
+            print_json(&json_results);
+        } else if !any_targets {
             messages::status("No targets found in any configured manifest source");
         }
     }
+}
+
+/// Serialize `value` to pretty JSON on stdout; any serialization failure is a bug, not a
+/// runtime condition, so it aborts rather than silently printing nothing.
+fn print_json<T: serde::Serialize>(value: &T) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("JSON serialization must not fail")
+    );
 }
 
 /// Update all git repositories in the mirror and workspace

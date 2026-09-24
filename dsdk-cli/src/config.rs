@@ -364,6 +364,17 @@ pub fn default_mirror() -> PathBuf {
     PathBuf::from("$HOME/tmp/mirror")
 }
 
+/// Phases `cim bootstrap` runs when `[bootstrap] phases` is absent from
+/// config.toml entirely. An explicit `phases = []` disables phase
+/// execution instead of falling back to this.
+pub fn default_bootstrap_phases() -> Vec<String> {
+    vec![
+        "envsetup".to_string(),
+        "build".to_string(),
+        "test".to_string(),
+    ]
+}
+
 pub trait SdkConfigCore {
     fn gits(&self) -> &Vec<GitConfig>;
     fn install(&self) -> &Option<Vec<InstallConfig>>;
@@ -1253,6 +1264,11 @@ pub struct UserConfig {
     /// timeout.
     #[serde(default)]
     pub network: NetworkConfig,
+
+    /// `cim bootstrap` behavior: which phases to auto-run after workspace
+    /// creation, and whether to pass --force/--symlink to the underlying init.
+    #[serde(default)]
+    pub bootstrap: BootstrapConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -1312,6 +1328,27 @@ pub struct BuildConfig {
     /// When true, `cim makefile` will not insert comment banners between sections
     #[serde(default)]
     pub no_dividers: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapConfig {
+    /// Ordered list of logical phase names `cim bootstrap` runs after
+    /// workspace creation (each resolves to a `make sdk-<phase>` call).
+    /// Absent entirely -> built-in default (see `default_bootstrap_phases()`).
+    /// Explicit empty list (`phases = []`) -> run no phases.
+    #[serde(default)]
+    pub phases: Option<Vec<String>>,
+
+    /// Pass `--force` to the underlying `cim init` (removes an existing
+    /// workspace directory at the target path). Default: false.
+    #[serde(default)]
+    pub force: Option<bool>,
+
+    /// Pass `--symlink` to the underlying `cim init` (toolchains/pip
+    /// installed to the mirror with symlinks in the workspace). Default: false.
+    #[serde(default)]
+    pub symlink: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -1388,9 +1425,10 @@ impl UserConfig {
 # command.
 #
 # IMPORTANT: every setting lives under one of the [workspace] / [sources] /
-# [build] / [network] tables below. In TOML, a bare `key = value` line
-# always belongs to whichever table header appears above it in the file --
-# there is no way to "return to root". If you add a new setting, make sure
+# [build] / [network] / [bootstrap] tables below. In TOML, a bare
+# `key = value` line always belongs to whichever table header appears above
+# it in the file -- there is no way to "return to root". If you add a new
+# setting, make sure
 # it goes under the correct table header, not after some unrelated table or
 # array entry (e.g. not right after a [[sources.alternate_sources]] block).
 
@@ -1695,6 +1733,37 @@ impl UserConfig {
 # Examples:
 # low_speed_limit = 1000        # Abort if slower than 1000 bytes/sec...
 # low_speed_time_secs = 30      # ...for more than 30 seconds
+
+[bootstrap]
+
+# =============================================================================
+# Bootstrap Phases
+# =============================================================================
+# Ordered list of phases `cim bootstrap` runs after creating the workspace.
+# Each name must match a phase the target's sdk.yml declares (or one of the
+# standard phases: envsetup, build, clean, test, flash, help) and resolves
+# to a `make sdk-<phase>` call. Execution stops at the first failing phase.
+#
+# Default (when this key is omitted entirely): ["envsetup", "build", "test"]
+# Set to an empty list to disable phase execution and only create the
+# workspace.
+#
+# Examples:
+# phases = ["envsetup", "build", "test"]   # Default behavior, spelled out
+# phases = ["envsetup", "build"]           # Skip running tests
+# phases = []                              # Only create the workspace
+
+# =============================================================================
+# Bootstrap Force/Symlink
+# =============================================================================
+# Whether `cim bootstrap` passes --force and --symlink to the underlying
+# `cim init`. Both default to false: `cim bootstrap` will not remove an
+# existing workspace directory, and will not symlink toolchains/pip to the
+# mirror, unless explicitly enabled here.
+#
+# Examples:
+# force = true      # Remove an existing workspace directory before init
+# symlink = true     # Install toolchains/pip to mirror with symlinks
 "#
         .to_string()
     }
