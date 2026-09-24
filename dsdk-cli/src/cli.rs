@@ -9,8 +9,80 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
+
+/// Flags shared verbatim by `init` and `bootstrap` for selecting/locating a
+/// target and controlling how its workspace is cloned. Flattened into both
+/// subcommands via `#[command(flatten)]` so the two can never drift apart --
+/// adding or changing a flag here automatically applies to both.
+#[derive(Args, Debug)]
+pub struct WorkspaceSelectionArgs {
+    /// Source location (git repository URL or local path, default: $HOME/devel/cim-manifests)
+    #[arg(
+        short,
+        long,
+        value_name = "URL|PATH",
+        help = "Git repository URL or local path to manifests"
+    )]
+    pub source: Option<String>,
+    /// Target version (branch or tag name); when omitted, uses the target's default version
+    #[arg(
+        short,
+        long,
+        value_name = "VERSION",
+        help = "Target version (branch/tag name)"
+    )]
+    pub version: Option<String>,
+    /// Workspace directory path (default: $HOME/dsdk-workspace)
+    #[arg(
+        short,
+        long,
+        value_name = "DIR",
+        help = "Directory where to create the workspace"
+    )]
+    pub workspace: Option<PathBuf>,
+    /// Skip mirror operations and clone directly from remote URLs
+    #[arg(long, help = "Skip mirror, clone directly from remote repos")]
+    pub no_mirror: bool,
+    /// Override the mirror cache directory for this invocation
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Mirror cache directory (overrides config file and default)"
+    )]
+    pub mirror: Option<PathBuf>,
+    /// Only initialize repositories matching the given regex pattern
+    #[arg(long, help = "Only clone repositories matching this regex pattern")]
+    pub r#match: Option<String>,
+    /// Only initialize repositories belonging to the given group(s)
+    #[arg(
+        long,
+        value_name = "NAMES",
+        help = "Only clone repositories in these comma-separated group(s)"
+    )]
+    pub include_group: Option<String>,
+    /// Exclude repositories belonging to the given group(s)
+    #[arg(
+        long,
+        value_name = "NAMES",
+        help = "Exclude repositories in these comma-separated group(s)"
+    )]
+    pub exclude_group: Option<String>,
+    /// Enable verbose output
+    #[arg(long, help = "Show detailed progress information")]
+    pub verbose: bool,
+    /// Skip all confirmation prompts
+    #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
+    pub yes: bool,
+    /// Certificate validation mode for downloads (strict, relaxed, auto)
+    #[arg(
+        long,
+        value_name = "MODE",
+        help = "Certificate validation: strict (default), relaxed (insecure), auto"
+    )]
+    pub cert_validation: Option<String>,
+}
 
 #[derive(Parser)]
 #[command(name = "cim")]
@@ -69,63 +141,11 @@ pub enum Commands {
             help = "Target name of the project"
         )]
         target: Option<String>,
-        /// Source location (git repository URL or local path, default: $HOME/devel/cim-manifests)
-        #[arg(
-            short,
-            long,
-            value_name = "URL|PATH",
-            help = "Git repository URL or local path to manifests"
-        )]
-        source: Option<String>,
-        /// Target version (branch or tag name)
-        #[arg(
-            short,
-            long,
-            value_name = "VERSION",
-            help = "Target version (branch/tag name)"
-        )]
-        version: Option<String>,
-        /// Workspace directory path (default: $HOME/dsdk-workspace)
-        #[arg(
-            short,
-            long,
-            value_name = "DIR",
-            help = "Directory where to create the workspace"
-        )]
-        workspace: Option<PathBuf>,
-        /// Skip mirror operations and clone directly from remote URLs
-        #[arg(long, help = "Skip mirror, clone directly from remote repos")]
-        no_mirror: bool,
-        /// Override the mirror cache directory for this invocation
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Mirror cache directory (overrides config file and default)"
-        )]
-        mirror: Option<PathBuf>,
+        #[command(flatten)]
+        common: WorkspaceSelectionArgs,
         /// Force initialization by removing existing workspace directory
         #[arg(long, help = "Force workspace creation (removes existing")]
         force: bool,
-        /// Only initialize repositories matching the given regex pattern
-        #[arg(long, help = "Only clone repositories matching this regex pattern")]
-        r#match: Option<String>,
-        /// Only initialize repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Only clone repositories in these comma-separated group(s)"
-        )]
-        include_group: Option<String>,
-        /// Exclude repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Exclude repositories in these comma-separated group(s)"
-        )]
-        exclude_group: Option<String>,
-        /// Enable verbose output
-        #[arg(long, help = "Show detailed progress information")]
-        verbose: bool,
         /// Install toolchains, pip packages, and install targets after workspace initialization
         #[arg(long, help = "Install toolchains, pip packages, and install targets")]
         install: bool,
@@ -147,16 +167,6 @@ pub enum Commands {
             help = "Install toolchains and pip to mirror with symlinks in workspace"
         )]
         symlink: bool,
-        /// Skip all confirmation prompts
-        #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
-        yes: bool,
-        /// Certificate validation mode for downloads (strict, relaxed, auto)
-        #[arg(
-            long,
-            value_name = "MODE",
-            help = "Certificate validation: strict (default), relaxed (insecure), auto"
-        )]
-        cert_validation: Option<String>,
     },
     /// Pick (or accept) a target, initialize a workspace, and run its build phases in one go
     Bootstrap {
@@ -169,70 +179,8 @@ pub enum Commands {
             help = "Target name of the project"
         )]
         target: Option<String>,
-        /// Source location (git repository URL or local path, default: $HOME/devel/cim-manifests)
-        #[arg(
-            short,
-            long,
-            value_name = "URL|PATH",
-            help = "Git repository URL or local path to manifests"
-        )]
-        source: Option<String>,
-        /// Target version (branch or tag name); omit to pick interactively or use the default
-        #[arg(
-            short,
-            long,
-            value_name = "VERSION",
-            help = "Target version (branch/tag name)"
-        )]
-        version: Option<String>,
-        /// Workspace directory path (default: $HOME/dsdk-workspace)
-        #[arg(
-            short,
-            long,
-            value_name = "DIR",
-            help = "Directory where to create the workspace"
-        )]
-        workspace: Option<PathBuf>,
-        /// Skip mirror operations and clone directly from remote URLs
-        #[arg(long, help = "Skip mirror, clone directly from remote repos")]
-        no_mirror: bool,
-        /// Override the mirror cache directory for this invocation
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Mirror cache directory (overrides config file and default)"
-        )]
-        mirror: Option<PathBuf>,
-        /// Only initialize repositories matching the given regex pattern
-        #[arg(long, help = "Only clone repositories matching this regex pattern")]
-        r#match: Option<String>,
-        /// Only initialize repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Only clone repositories in these comma-separated group(s)"
-        )]
-        include_group: Option<String>,
-        /// Exclude repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Exclude repositories in these comma-separated group(s)"
-        )]
-        exclude_group: Option<String>,
-        /// Enable verbose output
-        #[arg(long, help = "Show detailed progress information")]
-        verbose: bool,
-        /// Skip all confirmation prompts
-        #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
-        yes: bool,
-        /// Certificate validation mode for downloads (strict, relaxed, auto)
-        #[arg(
-            long,
-            value_name = "MODE",
-            help = "Certificate validation: strict (default), relaxed (insecure), auto"
-        )]
-        cert_validation: Option<String>,
+        #[command(flatten)]
+        common: WorkspaceSelectionArgs,
     },
     /// Update all git repositories
     Update {
@@ -785,29 +733,19 @@ mod tests {
         match &cli.command {
             Some(Commands::Init {
                 target,
-                source,
-                version,
-                workspace: _,
-                no_mirror: _,
-                mirror: _,
+                common,
                 force: _,
-                r#match: _,
-                include_group: _,
-                exclude_group: _,
-                verbose: _,
                 install: _,
                 full: _,
                 no_sudo: _,
                 symlink: _,
-                yes: _,
-                cert_validation: _,
             }) => {
                 assert_eq!(target, &Some("my-target".to_string()));
                 assert_eq!(
-                    source,
-                    &Some("https://github.com/user/repo.git".to_string())
+                    common.source,
+                    Some("https://github.com/user/repo.git".to_string())
                 );
-                assert_eq!(version, &Some("v1.0.0".to_string()));
+                assert_eq!(common.version, Some("v1.0.0".to_string()));
             }
             _ => panic!("Expected Init command"),
         }
@@ -827,15 +765,10 @@ mod tests {
         assert!(cli_result.is_ok());
         let cli = cli_result.unwrap();
         match &cli.command {
-            Some(Commands::Bootstrap {
-                target,
-                source,
-                version,
-                ..
-            }) => {
+            Some(Commands::Bootstrap { target, common }) => {
                 assert!(target.is_none());
-                assert!(source.is_none());
-                assert!(version.is_none());
+                assert!(common.source.is_none());
+                assert!(common.version.is_none());
             }
             _ => panic!("Expected Bootstrap command"),
         }
@@ -855,20 +788,14 @@ mod tests {
         assert!(cli_result.is_ok());
         let cli = cli_result.unwrap();
         match &cli.command {
-            Some(Commands::Bootstrap {
-                target,
-                source,
-                version,
-                yes,
-                ..
-            }) => {
+            Some(Commands::Bootstrap { target, common }) => {
                 assert_eq!(target, &Some("my-target".to_string()));
                 assert_eq!(
-                    source,
-                    &Some("https://github.com/user/repo.git".to_string())
+                    common.source,
+                    Some("https://github.com/user/repo.git".to_string())
                 );
-                assert_eq!(version, &Some("v1.0.0".to_string()));
-                assert!(yes);
+                assert_eq!(common.version, Some("v1.0.0".to_string()));
+                assert!(common.yes);
             }
             _ => panic!("Expected Bootstrap command"),
         }
