@@ -961,6 +961,53 @@ pub(crate) fn setup_direnv(
     Ok(())
 }
 
+/// Resolve the workspace directory `cim init` (and `cim bootstrap`, which needs to know
+/// this path before/after delegating to init) will use for `target`.
+///
+/// Resolution order: `workspace_override` (`--workspace`/`-w`) > user config
+/// `default_workspace` > `{workspace_prefix}{target}` under the home directory. The
+/// result has environment variables expanded and, if it doesn't yet exist, is made
+/// absolute (relative to the current directory) without touching the filesystem.
+pub(crate) fn resolve_workspace_path(
+    workspace_override: Option<PathBuf>,
+    target: &str,
+    user_config: Option<&config::UserConfig>,
+) -> PathBuf {
+    let workspace_path = workspace_override.unwrap_or_else(|| {
+        if let Some(uc) = user_config {
+            if let Some(ref dw) = uc.workspace.default_workspace {
+                return dw.clone();
+            }
+        }
+        // Get workspace prefix from user config, default to "dsdk-"
+        let prefix = user_config
+            .and_then(|uc| uc.workspace.workspace_prefix.clone())
+            .unwrap_or_else(|| "dsdk-".to_string());
+        // Use {prefix}{target-name} as default workspace name
+        let workspace_name = format!("{}{}", prefix, target);
+        get_home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(workspace_name)
+    });
+
+    // Expand environment variables in workspace path (e.g., $HOME, ~/path)
+    let workspace_path = PathBuf::from(expand_env_vars(&workspace_path.to_string_lossy()));
+
+    // Canonicalize the workspace path if it exists, or make it absolute if it's relative.
+    // Strip the Windows extended-length prefix \\?\ that canonicalize() adds on Windows,
+    // since git does not accept that prefix in destination paths.
+    if workspace_path.exists() {
+        git_operations::strip_unc_prefix(workspace_path.canonicalize().unwrap_or(workspace_path))
+    } else if workspace_path.is_relative() {
+        env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(&workspace_path))
+            .unwrap_or(workspace_path)
+    } else {
+        workspace_path
+    }
+}
+
 /// Initialize a new workspace
 pub(crate) fn handle_init_command(config: InitConfig) {
     // Start background version check so it runs concurrently with the rest of init
@@ -1135,40 +1182,11 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         .unwrap_or_default();
 
     // Determine workspace path (default: $HOME/{prefix}{target-name} or user config)
-    let workspace_path = config.workspace.unwrap_or_else(|| {
-        if let Some(ref uc) = user_config {
-            if let Some(ref dw) = uc.workspace.default_workspace {
-                return dw.clone();
-            }
-        }
-        // Get workspace prefix from user config, default to "dsdk-"
-        let prefix = user_config
-            .as_ref()
-            .and_then(|uc| uc.workspace.workspace_prefix.clone())
-            .unwrap_or_else(|| "dsdk-".to_string());
-        // Use {prefix}{target-name} as default workspace name
-        let workspace_name = format!("{}{}", prefix, config.target);
-        get_home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(workspace_name)
-    });
-
-    // Expand environment variables in workspace path (e.g., $HOME, ~/path)
-    let workspace_path = PathBuf::from(expand_env_vars(&workspace_path.to_string_lossy()));
-
-    // Canonicalize the workspace path if it exists, or make it absolute if it's relative.
-    // Strip the Windows extended-length prefix \\?\ that canonicalize() adds on Windows,
-    // since git does not accept that prefix in destination paths.
-    let workspace_path = if workspace_path.exists() {
-        git_operations::strip_unc_prefix(workspace_path.canonicalize().unwrap_or(workspace_path))
-    } else if workspace_path.is_relative() {
-        env::current_dir()
-            .ok()
-            .map(|cwd| cwd.join(&workspace_path))
-            .unwrap_or(workspace_path)
-    } else {
-        workspace_path
-    };
+    let workspace_path = resolve_workspace_path(
+        config.workspace.clone(),
+        &config.target,
+        user_config.as_ref(),
+    );
 
     // Check if workspace already exists and handle force flag
     if workspace_path.exists() {

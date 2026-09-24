@@ -50,6 +50,14 @@ pub enum Commands {
         /// Show detailed output (credential attempts, git operations)
         #[arg(long)]
         verbose: bool,
+        /// Output format
+        #[arg(
+            long,
+            value_name = "FORMAT",
+            default_value = "text",
+            help = "Output format: text (default) or json"
+        )]
+        format: String,
     },
     /// Initialize a new workspace from a configuration file
     Init {
@@ -139,6 +147,82 @@ pub enum Commands {
             help = "Install toolchains and pip to mirror with symlinks in workspace"
         )]
         symlink: bool,
+        /// Skip all confirmation prompts
+        #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
+        yes: bool,
+        /// Certificate validation mode for downloads (strict, relaxed, auto)
+        #[arg(
+            long,
+            value_name = "MODE",
+            help = "Certificate validation: strict (default), relaxed (insecure), auto"
+        )]
+        cert_validation: Option<String>,
+    },
+    /// Pick (or accept) a target, initialize a workspace, and run its build phases in one go
+    Bootstrap {
+        /// Target name or URL (omit to pick interactively; required when not running in a
+        /// terminal, e.g. in CI)
+        #[arg(
+            short,
+            long,
+            value_name = "TARGET",
+            help = "Target name of the project"
+        )]
+        target: Option<String>,
+        /// Source location (git repository URL or local path, default: $HOME/devel/cim-manifests)
+        #[arg(
+            short,
+            long,
+            value_name = "URL|PATH",
+            help = "Git repository URL or local path to manifests"
+        )]
+        source: Option<String>,
+        /// Target version (branch or tag name); omit to pick interactively or use the default
+        #[arg(
+            short,
+            long,
+            value_name = "VERSION",
+            help = "Target version (branch/tag name)"
+        )]
+        version: Option<String>,
+        /// Workspace directory path (default: $HOME/dsdk-workspace)
+        #[arg(
+            short,
+            long,
+            value_name = "DIR",
+            help = "Directory where to create the workspace"
+        )]
+        workspace: Option<PathBuf>,
+        /// Skip mirror operations and clone directly from remote URLs
+        #[arg(long, help = "Skip mirror, clone directly from remote repos")]
+        no_mirror: bool,
+        /// Override the mirror cache directory for this invocation
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Mirror cache directory (overrides config file and default)"
+        )]
+        mirror: Option<PathBuf>,
+        /// Only initialize repositories matching the given regex pattern
+        #[arg(long, help = "Only clone repositories matching this regex pattern")]
+        r#match: Option<String>,
+        /// Only initialize repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Only clone repositories in these comma-separated group(s)"
+        )]
+        include_group: Option<String>,
+        /// Exclude repositories belonging to the given group(s)
+        #[arg(
+            long,
+            value_name = "NAMES",
+            help = "Exclude repositories in these comma-separated group(s)"
+        )]
+        exclude_group: Option<String>,
+        /// Enable verbose output
+        #[arg(long, help = "Show detailed progress information")]
+        verbose: bool,
         /// Skip all confirmation prompts
         #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
         yes: bool,
@@ -647,10 +731,12 @@ mod tests {
                 source,
                 target,
                 verbose,
+                format,
             }) => {
                 assert!(source.is_none());
                 assert!(target.is_none());
                 assert!(!verbose);
+                assert_eq!(format, "text");
             }
             _ => panic!("Expected ListTargets command"),
         }
@@ -666,10 +752,12 @@ mod tests {
                 source,
                 target,
                 verbose,
+                format,
             }) => {
                 assert_eq!(source, &Some("/path/to/source".to_string()));
                 assert!(target.is_none());
                 assert!(!verbose);
+                assert_eq!(format, "text");
             }
             _ => panic!("Expected ListTargets command"),
         }
@@ -728,5 +816,61 @@ mod tests {
         let invalid_args = vec!["cim", "init", "--list-targets"];
         let cli_result = Cli::try_parse_from(invalid_args);
         assert!(cli_result.is_err()); // Should fail because --list-targets is removed from init
+    }
+
+    #[test]
+    fn test_bootstrap_cli_structure() {
+        use clap::Parser;
+
+        // No flags: interactive picker path (target/version/source all None)
+        let cli_result = Cli::try_parse_from(vec!["cim", "bootstrap"]);
+        assert!(cli_result.is_ok());
+        let cli = cli_result.unwrap();
+        match &cli.command {
+            Some(Commands::Bootstrap {
+                target,
+                source,
+                version,
+                ..
+            }) => {
+                assert!(target.is_none());
+                assert!(source.is_none());
+                assert!(version.is_none());
+            }
+            _ => panic!("Expected Bootstrap command"),
+        }
+
+        // Explicit target/version/source: fully non-interactive/CI-friendly path
+        let cli_result = Cli::try_parse_from(vec![
+            "cim",
+            "bootstrap",
+            "--target",
+            "my-target",
+            "--source",
+            "https://github.com/user/repo.git",
+            "--version",
+            "v1.0.0",
+            "--yes",
+        ]);
+        assert!(cli_result.is_ok());
+        let cli = cli_result.unwrap();
+        match &cli.command {
+            Some(Commands::Bootstrap {
+                target,
+                source,
+                version,
+                yes,
+                ..
+            }) => {
+                assert_eq!(target, &Some("my-target".to_string()));
+                assert_eq!(
+                    source,
+                    &Some("https://github.com/user/repo.git".to_string())
+                );
+                assert_eq!(version, &Some("v1.0.0".to_string()));
+                assert!(yes);
+            }
+            _ => panic!("Expected Bootstrap command"),
+        }
     }
 }

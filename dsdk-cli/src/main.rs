@@ -9,6 +9,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod bootstrap_cmd;
 mod cli;
 mod init_cmd;
 mod install_cmd;
@@ -19,6 +20,7 @@ mod utils_cmd;
 mod venv_lock;
 mod version;
 
+use bootstrap_cmd::{handle_bootstrap_command, BootstrapConfig};
 use clap::{CommandFactory, Parser};
 use cli::{Cli, Commands};
 use dsdk_cli::messages;
@@ -61,9 +63,10 @@ fn main() {
             source,
             target,
             verbose,
+            format,
         } => {
             messages::set_verbose(*verbose);
-            handle_list_targets_command(source.as_deref(), target.as_deref());
+            handle_list_targets_command(source.as_deref(), target.as_deref(), format);
         }
         Commands::Init {
             target,
@@ -112,6 +115,35 @@ fn main() {
                 symlink: *symlink,
                 yes: *yes,
                 _cert_validation: cert_validation.as_deref(),
+            });
+        }
+        Commands::Bootstrap {
+            target,
+            source,
+            version,
+            workspace,
+            no_mirror,
+            mirror,
+            r#match,
+            include_group,
+            exclude_group,
+            verbose,
+            yes,
+            cert_validation,
+        } => {
+            handle_bootstrap_command(BootstrapConfig {
+                target: target.clone(),
+                source: source.clone(),
+                version: version.clone(),
+                workspace: workspace.clone(),
+                no_mirror: *no_mirror,
+                mirror: mirror.clone(),
+                match_pattern: r#match.clone(),
+                include_group: include_group.clone(),
+                exclude_group: exclude_group.clone(),
+                verbose: *verbose,
+                yes: *yes,
+                cert_validation: cert_validation.clone(),
             });
         }
         Commands::Foreach {
