@@ -173,11 +173,19 @@ pub(crate) fn handle_bootstrap_command(cfg: BootstrapConfig) {
         }
     }
 
+    let jobs = user_config
+        .as_ref()
+        .and_then(|uc| uc.bootstrap.jobs)
+        .filter(|&j| j > 0)
+        .map(|j| j as usize)
+        .unwrap_or_else(config::default_bootstrap_jobs);
+
     for phase in &phases {
         messages::status("");
-        messages::status(&format!("Running make sdk-{}...", phase));
+        messages::status(&format!("Running make sdk-{} (-j{})...", phase, jobs));
         let status = std::process::Command::new("make")
             .arg(format!("sdk-{}", phase))
+            .arg(format!("-j{}", jobs))
             .current_dir(&workspace_path)
             .status();
         match status {

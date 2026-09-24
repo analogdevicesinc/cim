@@ -365,12 +365,16 @@ cim bootstrap [--target NAME] [--source URL|PATH] [--version VERSION]
   phases = ["envsetup", "build", "test"]
   force = false
   symlink = false
+  jobs = 8
   ```
 
   Each phase name must be one sdk.yml declares (or one of the standard
   `envsetup`/`build`/`clean`/`test`/`flash`/`help` phases) and runs as
-  `make sdk-<phase>`, in order, stopping at the first failure. Set
+  `make sdk-<phase> -j<jobs>`, in order, stopping at the first failure. Set
   `phases = []` to only create the workspace and run no phases.
+- `jobs` controls the `-j<N>` passed to each `make sdk-<phase>` call.
+  When omitted, it defaults to the number of logical CPUs on the machine
+  running `cim`, queried at runtime (never hardcoded at compile time).
 
 > **OS dependencies are not installed by `bootstrap`**: it always runs the
 > equivalent of `init --install`, never `--full`, so host OS packages from
@@ -746,6 +750,10 @@ phases = ["envsetup", "build", "test"]
 # Whether 'cim bootstrap' passes --force/--symlink to the underlying init
 force = false
 symlink = false
+
+# Parallel jobs passed as -j<N> to each 'make sdk-<phase>' call.
+# Default when omitted: the number of logical CPUs on this machine.
+jobs = 8
 ```
 
 Note: in TOML, a bare `key = value` line always belongs to whichever table
