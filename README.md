@@ -130,6 +130,25 @@ Or copy to a directory in your PATH:
 cp target/release/cim ~/.local/bin/
 ```
 
+### Shell Completion (Bash)
+
+Bash completion is available for all commands and flags.
+
+```bash
+# Recommended: auto-detects the best install method (system-wide or user-only)
+./completions/install.sh
+
+# Or pick one explicitly
+./completions/install.sh --user      # ~/.local/share/bash-completion/completions
+./completions/install.sh --system    # system-wide (may require sudo)
+
+# Or just source it for the current shell session
+source completions/cim.bash
+```
+
+macOS ships with an outdated bash (3.2) that doesn't support completion.
+Install a newer one first: `brew install bash bash-completion`.
+
 ---
 
 ## Quick Start
@@ -238,6 +257,21 @@ make sdk-build           # build
 make sdk-test            # test
 ```
 
+### One-Shot: Pick, Init, and Build
+
+`cim bootstrap` combines the steps above into a single command: pick (or
+accept) a target and version, initialize the workspace, and run its build
+phases -- all in one go.
+
+```bash
+cim bootstrap
+```
+
+Without `--target`, it shows an interactive numbered list of every
+available target (and, after that, its versions) to choose from. See
+[bootstrap](#bootstrap) below for CI-friendly explicit flags,
+configuring which phases run, and a caveat about host OS dependencies.
+
 ---
 
 ## Advanced Usage
@@ -298,6 +332,52 @@ cim init --target NAME [--workspace PATH] [--version VERSION]
 - `--exclude-group NAMES`: Skip repos belonging to these comma-separated group(s)
 - `--no-mirror`: Disable mirroring for this workspace
 - `--mirror PATH`: Override the mirror cache directory for this invocation (see [Mirror](#concepts))
+
+#### bootstrap
+
+Pick (or accept) a target and version, initialize a workspace, and run its
+build phases -- all in one command. Delegates to the exact same
+underlying logic as `init` above, so every flag it accepts behaves
+identically; it just adds target/version selection before, and phase
+execution after.
+
+```bash
+cim bootstrap [--target NAME] [--source URL|PATH] [--version VERSION]
+              [--workspace PATH] [--match REGEX] [--include-group NAMES]
+              [--exclude-group NAMES] [--no-mirror] [--mirror PATH]
+              [--yes] [--cert-validation MODE]
+```
+
+- Omit `--target` to pick interactively from a numbered list of every
+  target found across configured manifest sources -- only shown when
+  running in a terminal. Without a terminal (e.g. CI), omitting
+  `--target` is an error: pass it explicitly instead.
+- Omit `--version` to pick interactively (same terminal-only rule), or
+  fall back to the target's default version.
+- Which phases run afterward (and whether `--force`/`--symlink` are
+  passed to the underlying init) are controlled by the `[bootstrap]`
+  table in `config.toml`, not by flags -- see
+  [Configuration File](#configuration-file):
+
+  ```toml
+  [bootstrap]
+  # Default when this key is omitted entirely: ["envsetup", "build", "test"]
+  phases = ["envsetup", "build", "test"]
+  force = false
+  symlink = false
+  ```
+
+  Each phase name must be one sdk.yml declares (or one of the standard
+  `envsetup`/`build`/`clean`/`test`/`flash`/`help` phases) and runs as
+  `make sdk-<phase>`, in order, stopping at the first failure. Set
+  `phases = []` to only create the workspace and run no phases.
+
+> **OS dependencies are not installed by `bootstrap`**: it always runs the
+> equivalent of `init --install`, never `--full`, so host OS packages from
+> `os-dependencies.yml` are never installed automatically. If a target
+> needs system packages, run `cim install os-deps` (or a one-off `cim init
+> --full ...`) manually, once, before using `bootstrap` against that
+> target -- otherwise its build phases may fail for missing tools.
 
 #### update
 
@@ -618,8 +698,9 @@ cim utils update
 ### Configuration File
 
 `cim config -c` will create it for you. Every setting lives under one of
-four tables -- `[workspace]`, `[sources]`, `[build]`, `[network]` -- for a
-complete list, generate the file and check the comments.
+five tables -- `[workspace]`, `[sources]`, `[build]`, `[network]`,
+`[bootstrap]` -- for a complete list, generate the file and check the
+comments.
 
 ```toml
 [workspace]
@@ -655,6 +736,16 @@ git_timeout_secs = 900
 # Timeout" below)
 low_speed_limit = 1000
 low_speed_time_secs = 30
+
+[bootstrap]
+# Phases 'cim bootstrap' runs after creating the workspace, in order.
+# Default when omitted entirely: ["envsetup", "build", "test"]. Set to []
+# to only create the workspace and run no phases.
+phases = ["envsetup", "build", "test"]
+
+# Whether 'cim bootstrap' passes --force/--symlink to the underlying init
+force = false
+symlink = false
 ```
 
 Note: in TOML, a bare `key = value` line always belongs to whichever table
