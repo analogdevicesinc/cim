@@ -5,6 +5,12 @@ os-dependencies.yml
 python-dependencies.yml
 sdk.yml
 
+# Tracked manifest target
+!/targets/hdl_2023_r2/sdk.yml
+!/targets/hdl_2023_r2/os-dependencies.yml
+!/targets/hdl_2026_r1/sdk.yml
+!/targets/hdl_2026_r1/os-dependencies.yml
+
 # Workspace-generated Makefile (but allow root dev Makefile)
 /**/Makefile
 !/Makefile

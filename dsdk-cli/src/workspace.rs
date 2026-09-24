@@ -700,7 +700,7 @@ pub fn expand_env_vars_with_overrides(
 }
 
 /// Return `true` if `s` contains a `$` that is **not** part of a `${{ … }}`
-/// manifest-variable reference.
+/// manifest-variable reference or a `$$` Make/shell escape.
 ///
 /// `${{ VAR }}` patterns are intentionally kept as-is so that Makefile
 /// generation can later convert them to `$(VAR)` Make references.  They must
@@ -714,6 +714,7 @@ pub fn expand_env_vars_with_overrides(
 /// assert!(!has_unresolved_env_var_refs("https://example.com"));
 /// assert!(!has_unresolved_env_var_refs("${{ WORKSPACE }}/bin"));
 /// assert!(!has_unresolved_env_var_refs("${{ A }}/${{ B }}"));
+/// assert!(!has_unresolved_env_var_refs("-j$$(nproc)"));
 /// assert!(has_unresolved_env_var_refs("$UNSET_HOST_VAR/path"));
 /// assert!(has_unresolved_env_var_refs("${{ WORKSPACE }}/$UNSET"));
 /// ```
@@ -722,6 +723,11 @@ pub fn has_unresolved_env_var_refs(s: &str) -> bool {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'$' {
+            // Make uses $$ to pass a literal $ to the recipe shell.
+            if bytes.get(i + 1) == Some(&b'$') {
+                i += 2;
+                continue;
+            }
             // Check for ${{ … }} pattern — skip it entirely.
             if bytes.get(i + 1) == Some(&b'{') && bytes.get(i + 2) == Some(&b'{') {
                 if let Some(rel) = s[i + 3..].find("}}") {
@@ -1784,6 +1790,11 @@ mod tests {
         assert!(!has_unresolved_env_var_refs(
             "prefix/${{ WORKSPACE }}/suffix"
         ));
+    }
+
+    #[test]
+    fn test_has_unresolved_env_var_refs_make_escape() {
+        assert!(!has_unresolved_env_var_refs("-j$$(nproc)"));
     }
 
     #[test]

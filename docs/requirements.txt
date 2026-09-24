@@ -1,0 +1,4 @@
+sphinx
+myst-parser
+adi-doctools>=0.4.21
+sphinxcontrib-mermaid

@@ -1,0 +1,35 @@
+mirror: $HOME/tmp/mirror
+
+variables:
+  VIVADO: /opt/Xilinx/2023.2/Vivado
+  MAKE_JOBS: -j$$(nproc)
+  HDL_PROJECT: fmcomms2
+  HDL_BOARD: zcu102
+  DIR_NAME: build
+  BUILD_BOOT_BIN: "false"
+  BOOT_BIN_UBOOT: download
+
+copy_files:
+  - source: https://raw.githubusercontent.com/analogdevicesinc/wiki-scripts/main/zynq_boot_bin/build_boot_bin.sh
+    dest: scripts/build_boot_bin.sh
+    cache: true
+
+gits:
+  - name: hdl
+    url: https://github.com/analogdevicesinc/hdl.git
+    commit: hdl_2023_r2
+
+build:
+  - >-
+    bash -c 'hdl_project="${{ HDL_PROJECT }}"; hdl_board="${{ HDL_BOARD }}"; dir_name="${{ DIR_NAME }}"; make_jobs="${{ MAKE_JOBS }}";
+    boot_bin_enabled="${{ BUILD_BOOT_BIN }}"; boot_bin_uboot="${{ BOOT_BIN_UBOOT }}";
+    source "${{ VIVADO }}/settings64.sh" && MAKEOVERRIDES= $(MAKE) --no-print-directory $$make_jobs
+    -C hdl/projects/$$hdl_project/$$hdl_board DIR_NAME=$$dir_name && if [ "$$boot_bin_enabled" = "true" ]; then
+    cd hdl/projects/$$hdl_project/$$hdl_board && bash "${{ WORKSPACE }}/scripts/build_boot_bin.sh"
+    "$$dir_name/$${hdl_project}_$${hdl_board}.sdk/system_top.xsa" "$$boot_bin_uboot"; fi'
+
+clean:
+  - >-
+    bash -c 'hdl_project="${{ HDL_PROJECT }}"; hdl_board="${{ HDL_BOARD }}"; dir_name="${{ DIR_NAME }}";
+    source "${{ VIVADO }}/settings64.sh" && MAKEOVERRIDES= $(MAKE)
+    -C hdl/projects/$$hdl_project/$$hdl_board DIR_NAME=$$dir_name clean'
