@@ -13,11 +13,14 @@
 # Bash completion for cim command
 #
 # Supports all commands and options:
-#   - list-targets: --source (-s), --target (-t)
+#   - list-targets: --source (-s), --target (-t), --format
 #   - init: --target (-t), --source (-s), --version (-v), --workspace (-w),
 #           --no-mirror, --mirror, --force, --match, --include-group,
 #           --exclude-group, --verbose, --install, --full, --symlink,
 #           --yes (-y), --cert-validation, --no-includes
+#   - bootstrap: --target (-t), --source (-s), --version (-v), --workspace (-w),
+#           --no-mirror, --mirror, --match, --include-group, --exclude-group,
+#           --verbose, --yes (-y), --cert-validation
 #   - update: --no-mirror, --mirror, --match, --include-group, --exclude-group,
 #             --all, --verbose (-v), --cert-validation
 #   - foreach: command, --match, --include-group, --exclude-group
@@ -48,7 +51,7 @@ _cim_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Main commands
-    local main_commands="list-targets init update foreach makefile add install docs docker release config utils help"
+    local main_commands="list-targets init bootstrap update foreach makefile add install docs docker release config utils help"
 
     # Global options
     local global_opts="--help --version -v"
@@ -151,8 +154,12 @@ _cim_completions() {
                     _complete_targets
                     return 0
                     ;;
+                --format)
+                    COMPREPLY=( $(compgen -W "text json" -- "${cur}") )
+                    return 0
+                    ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--source -s --target -t --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--source -s --target -t --format --help" -- "${cur}") )
                     return 0
                     ;;
             esac
@@ -201,6 +208,45 @@ _cim_completions() {
                     ;;
                 *)
                     COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --mirror --force --match --include-group --exclude-group --install --full --symlink --yes -y --verbose --cert-validation --no-includes --help" -- "${cur}") )
+                    return 0
+                    ;;
+            esac
+            ;;
+
+        bootstrap)
+            case "${prev}" in
+                -t|--target)
+                    _complete_targets
+                    return 0
+                    ;;
+                -s|--source)
+                    # Complete directories and common URL prefixes
+                    COMPREPLY=( $(compgen -d "${cur}") $(compgen -W "https://github.com/ http://localhost:" -- "${cur}") )
+                    return 0
+                    ;;
+                -v|--version)
+                    _complete_versions
+                    return 0
+                    ;;
+                -w|--workspace)
+                    _complete_dir_path
+                    return 0
+                    ;;
+                --match)
+                    # Common regex patterns
+                    COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
+                    return 0
+                    ;;
+                --include-group|--exclude-group)
+                    _complete_groups
+                    return 0
+                    ;;
+                --cert-validation)
+                    COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --mirror --match --include-group --exclude-group --yes -y --verbose --cert-validation --help" -- "${cur}") )
                     return 0
                     ;;
             esac
