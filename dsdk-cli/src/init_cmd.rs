@@ -1008,16 +1008,21 @@ pub(crate) fn resolve_workspace_path(
     }
 }
 
-/// Initialize a new workspace
-pub(crate) fn handle_init_command(config: InitConfig) {
-    // Start background version check so it runs concurrently with the rest of init
-    let version_check = spawn_version_check();
+/// Everything resolved about where a target's sdk.yml came from: the
+/// on-disk path plus enough provenance to write the workspace marker and
+/// resolve any URL-relative copy_files/YAML references later.
+struct ResolvedTargetConfig {
+    config_path: PathBuf,
+    config_url: Option<String>,
+    is_remote_git_source: bool,
+    resolved_source_path: Option<String>,
+}
 
-    // Set verbose mode for this command
-    messages::set_verbose(config.verbose);
-
-    // Load user config early to get default values
-    let user_config = match config::UserConfig::load() {
+/// Load the user config file, logging where it came from. Never fails init: a
+/// missing or unreadable user config just means every setting falls back to
+/// its built-in default.
+fn load_user_config_for_init() -> Option<config::UserConfig> {
+    match config::UserConfig::load() {
         Ok(Some(uc)) => {
             messages::verbose(&format!(
                 "Loaded user config from {}",
@@ -1030,79 +1035,110 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             messages::info(&format!("Warning: Failed to load user config: {}", e));
             None
         }
-    };
+    }
+}
 
-    // Determine all sources to search
-    let sources: Vec<String> = if let Some(ref src) = config.source {
-        // Explicit --source: use only that source
-        vec![src.clone()]
-    } else {
-        get_all_sources_from_config(user_config.as_ref())
+/// Determine which manifest source(s) to search: an explicit `--source`
+/// always wins and searches only that one; otherwise every source configured
+/// in config.toml (default + alternates) is searched in order.
+fn determine_manifest_sources(
+    source_override: Option<&str>,
+    target: &str,
+    user_config: Option<&config::UserConfig>,
+) -> Vec<String> {
+    let sources: Vec<String> = match source_override {
+        Some(src) => vec![src.to_string()],
+        None => get_all_sources_from_config(user_config),
     };
 
     if sources.len() > 1 {
         messages::verbose(&format!(
             "Searching {} manifest sources for target '{}'",
             sources.len(),
-            config.target
+            target
         ));
     }
 
-    // Check if target itself is a URL first, otherwise search sources
-    let (config_path, config_url, is_remote_git_source, resolved_source_path) =
-        if is_url(&config.target) {
-            match resolve_target_config(&config.target, &PathBuf::new()) {
-                Ok(path) => (path, Some(config.target.clone()), false, None),
-                Err(e) => {
-                    messages::error(&e.to_string());
-                    return;
-                }
-            }
-        } else {
-            match resolve_target_from_sources(
-                &config.target,
-                config.version.as_deref(),
-                &sources,
-                None, // Use tempfile with mem::forget for init
-            ) {
-                Ok(resolved) => {
-                    let version_info = if let Some(v) = &config.version {
-                        format!(" ({})", v)
-                    } else if resolved.is_git_source {
-                        " (latest)".to_string()
-                    } else {
-                        String::new()
-                    };
-                    let label = if sources.len() > 1 {
-                        format!(" ({} source)", source_label(resolved.source_index))
-                    } else if config.source.is_none()
-                        && user_config
-                            .as_ref()
-                            .and_then(|uc| uc.sources.default_source.as_ref())
-                            .is_some()
-                    {
-                        " (user config default_source)".to_string()
-                    } else {
-                        String::new()
-                    };
-                    messages::status(&format!(
-                        "Setting up for target '{}'{} using source: {}{}",
-                        config.target, version_info, resolved.source_path, label
-                    ));
-                    (
-                        resolved.config_path,
-                        None,
-                        resolved.is_git_source,
-                        Some(resolved.source_path),
-                    )
-                }
-                Err(e) => {
-                    messages::error(&e);
-                    return;
-                }
+    sources
+}
+
+/// Resolve `config.target` to an on-disk sdk.yml, either by treating it as a
+/// direct URL or by searching `sources` in order. Prints the "Setting up for
+/// target..." status line on success; prints the error and returns `Err(())`
+/// on failure.
+fn resolve_target_config_path(
+    config: &InitConfig<'_>,
+    sources: &[String],
+    user_config: Option<&config::UserConfig>,
+) -> Result<ResolvedTargetConfig, ()> {
+    if is_url(&config.target) {
+        return match resolve_target_config(&config.target, &PathBuf::new()) {
+            Ok(path) => Ok(ResolvedTargetConfig {
+                config_path: path,
+                config_url: Some(config.target.clone()),
+                is_remote_git_source: false,
+                resolved_source_path: None,
+            }),
+            Err(e) => {
+                messages::error(&e.to_string());
+                Err(())
             }
         };
+    }
 
+    match resolve_target_from_sources(
+        &config.target,
+        config.version.as_deref(),
+        sources,
+        None, // Use tempfile with mem::forget for init
+    ) {
+        Ok(resolved) => {
+            let version_info = if let Some(v) = &config.version {
+                format!(" ({})", v)
+            } else if resolved.is_git_source {
+                " (latest)".to_string()
+            } else {
+                String::new()
+            };
+            let label = if sources.len() > 1 {
+                format!(" ({} source)", source_label(resolved.source_index))
+            } else if config.source.is_none()
+                && user_config
+                    .and_then(|uc| uc.sources.default_source.as_ref())
+                    .is_some()
+            {
+                " (user config default_source)".to_string()
+            } else {
+                String::new()
+            };
+            messages::status(&format!(
+                "Setting up for target '{}'{} using source: {}{}",
+                config.target, version_info, resolved.source_path, label
+            ));
+            Ok(ResolvedTargetConfig {
+                config_path: resolved.config_path,
+                config_url: None,
+                is_remote_git_source: resolved.is_git_source,
+                resolved_source_path: Some(resolved.source_path),
+            })
+        }
+        Err(e) => {
+            messages::error(&e);
+            Err(())
+        }
+    }
+}
+
+/// Load a target's sdk.yml (and its full `extends:` chain, if any), validate
+/// cross-references, and apply user config overrides -- everything needed
+/// before the merged config can actually be used.
+fn load_and_prepare_sdk_config(
+    config_path: &Path,
+    target: &str,
+    sources: &[String],
+    user_config: Option<&config::UserConfig>,
+    verbose: bool,
+) -> Result<ExtendsResolution, ()> {
     messages::verbose(&format!(
         "Loading configuration from {}",
         config_path.display()
@@ -1110,28 +1146,27 @@ pub(crate) fn handle_init_command(config: InitConfig) {
 
     // Load and validate config, resolving extends:/overlay: against the
     // manifest source(s) if the target declares extends:
-    let extends_resolution =
-        match resolve_extends_chain_from_source(&config_path, &config.target, &sources) {
+    let mut extends_resolution =
+        match resolve_extends_chain_from_source(config_path, target, sources) {
             Ok(resolution) => resolution,
             Err(e) => {
                 messages::error(&format!("Failed to load config: {}", e));
-                return;
+                return Err(());
             }
         };
-    let mut sdk_config = extends_resolution.merged;
 
     // Validate that build_depends_on/git_depends_on/install depends_on all
     // resolve after merging the extends: chain (a no-op check when the
     // target doesn't use extends: at all).
-    if let Err(e) = overlay::validate_dependencies(&sdk_config) {
+    if let Err(e) = overlay::validate_dependencies(&extends_resolution.merged) {
         messages::error(&e);
-        return;
+        return Err(());
     }
 
     // Apply user config overrides if present
-    if let Some(ref uc) = user_config {
-        let override_count = uc.apply_to_sdk_config(&mut sdk_config, config.verbose);
-        if override_count > 0 && config.verbose {
+    if let Some(uc) = user_config {
+        let override_count = uc.apply_to_sdk_config(&mut extends_resolution.merged, verbose);
+        if override_count > 0 && verbose {
             messages::verbose(&format!(
                 "Applied {} override(s) from user config",
                 override_count
@@ -1139,8 +1174,18 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         }
     }
 
+    Ok(extends_resolution)
+}
+
+/// Resolve the mirror directory and expand `${{ VAR }}`/env-var references in
+/// the merged sdk_config in place (git URLs, then any other manifest fields).
+/// Returns the resolved mirror path.
+fn expand_sdk_config_vars(
+    sdk_config: &mut config::SdkConfig,
+    mirror_override: Option<&Path>,
+) -> PathBuf {
     // Resolve the mirror directory: --mirror flag > user config > built-in default.
-    let mirror_path = resolve_mirror(config.mirror.as_deref());
+    let mirror_path = resolve_mirror(mirror_override);
     messages::verbose(&format!("Mirror: {}", mirror_path.display()));
 
     // Expand environment variables in git repository URLs
@@ -1153,7 +1198,456 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     }
 
     // Expand manifest ${{ VAR }} variables in path/URL fields
-    expand_manifest_vars_in_config(&mut sdk_config);
+    expand_manifest_vars_in_config(sdk_config);
+
+    mirror_path
+}
+
+/// Ensure `workspace_path` exists and is ready to receive a fresh init:
+/// remove it first if `force` is set (moving out of it first if the current
+/// directory happens to be inside it), or fail if it's already an
+/// initialized workspace.
+fn prepare_workspace_directory(workspace_path: &Path, force: bool) -> Result<(), ()> {
+    // Check if workspace already exists and handle force flag
+    if workspace_path.exists() {
+        if force {
+            // Check if current working directory is inside the workspace being removed
+            // If so, change to a safe directory first to avoid issues with git operations
+            if let Ok(cwd) = env::current_dir() {
+                // Canonicalize paths to handle symlinks and relative paths
+                if let (Ok(canonical_cwd), Ok(canonical_workspace)) =
+                    (cwd.canonicalize(), workspace_path.canonicalize())
+                {
+                    if canonical_cwd.starts_with(&canonical_workspace) {
+                        // We're inside the workspace, change to parent directory
+                        if let Some(parent) = canonical_workspace.parent() {
+                            messages::verbose(&format!(
+                                "Changing directory from {} to {} before removing workspace",
+                                canonical_cwd.display(),
+                                parent.display()
+                            ));
+                            if let Err(e) = env::set_current_dir(parent) {
+                                messages::info(&format!(
+                                    "Failed to change directory before removing workspace: {}",
+                                    e
+                                ));
+                                messages::info(
+                                    "This may cause git operations to fail. Consider running from outside the workspace.",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Err(e) = fs::remove_dir_all(workspace_path) {
+                messages::error(&format!(
+                    "Error removing existing workspace directory: {}",
+                    e
+                ));
+                return Err(());
+            }
+            messages::success("Removed existing workspace directory");
+        } else {
+            let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
+            if marker_path.exists() {
+                messages::error(&format!(
+                    "Workspace already initialized at {}",
+                    workspace_path.display()
+                ));
+                messages::error("Use 'cim update' to update an existing workspace, or use --force to overwrite.");
+                return Err(());
+            }
+        }
+    }
+
+    messages::status(&format!(
+        "Initializing workspace at: {}",
+        workspace_path.display()
+    ));
+
+    // Create workspace directory
+    if let Err(e) = fs::create_dir_all(workspace_path) {
+        messages::error(&format!("Error creating workspace directory: {}", e));
+        return Err(());
+    }
+
+    Ok(())
+}
+
+/// Copy a target's own sdk.yml (and, for an `extends:` chain, every
+/// ancestor's file under `.cim/target-overlays/`) plus any other referenced
+/// YAML files into the freshly created workspace. Returns the workspace's own
+/// copy of sdk.yml (`dest_config_path`).
+fn populate_workspace_files(
+    workspace_path: &Path,
+    files_to_copy: &[TargetFilePair],
+    config_path: &Path,
+    config_url: Option<&str>,
+) -> Result<PathBuf, ()> {
+    // Copy config file(s) to workspace. For a plain (non-extends) target this
+    // is just sdk.yml, byte-for-byte, exactly as before. For an extends:
+    // target, every level of the chain is copied verbatim under its own
+    // name: sdk.yml (and os/python deps files) for the primary target at
+    // the workspace root, <target>-sdk.yml (and <target>-os/python-deps
+    // files) for each ancestor under the .cim/target-overlays/ subfolder --
+    // nothing is ever flattened.
+    for file_pair in files_to_copy {
+        let dest_dir = match file_pair.dest_subdir {
+            Some(subdir) => {
+                let dir = workspace_path.join(subdir);
+                if let Err(e) = fs::create_dir_all(&dir) {
+                    messages::error(&format!(
+                        "Error creating {} directory: {}",
+                        dir.display(),
+                        e
+                    ));
+                    return Err(());
+                }
+                dir
+            }
+            None => workspace_path.to_path_buf(),
+        };
+        let dest_path = dest_dir.join(&file_pair.dest_name);
+        if let Err(e) = fs::copy(&file_pair.source_path, &dest_path) {
+            messages::error(&format!(
+                "Error copying {} to workspace: {}",
+                file_pair.dest_name, e
+            ));
+            return Err(());
+        }
+    }
+    let dest_config_path = workspace_path.join(SDK_CONFIG_FILE);
+    messages::verbose("Copied configuration to workspace as sdk.yml");
+
+    // Copy other YAML files to workspace. Use the config_url if the config
+    // was loaded from a URL.
+    if let Err(e) = copy_yaml_files_to_workspace(workspace_path, config_path, config_url) {
+        messages::info(&format!(
+            "Failed to copy some YAML files to workspace: {}",
+            e
+        ));
+    }
+
+    Ok(dest_config_path)
+}
+
+/// Inputs needed to create a workspace's `.workspace` marker file, gathered
+/// here purely to keep `create_marker_and_get_skip_mirror`'s own signature
+/// from ballooning into a dozen positional parameters.
+struct MarkerParams<'a> {
+    workspace_path: &'a Path,
+    config_path: &'a Path,
+    mirror_path: &'a Path,
+    target: &'a str,
+    version: Option<&'a str>,
+    is_remote_git_source: bool,
+    resolved_source_path: Option<&'a str>,
+    match_pattern: Option<&'a str>,
+    include_group: Option<&'a str>,
+    exclude_group: Option<&'a str>,
+    no_mirror_flag: bool,
+    user_config: Option<&'a config::UserConfig>,
+}
+
+/// Compute whether mirror operations should be skipped (`--no-mirror` or the
+/// user config's `no_mirror`) and write the workspace's `.workspace` marker
+/// file recording it. Returns the computed `skip_mirror` for later use.
+fn create_marker_and_get_skip_mirror(params: MarkerParams<'_>) -> Result<bool, ()> {
+    // Determine if we should skip mirror (command line flag OR user config setting)
+    // This needs to be calculated before creating workspace marker
+    let skip_mirror = params.no_mirror_flag
+        || params
+            .user_config
+            .and_then(|uc| uc.workspace.no_mirror)
+            .unwrap_or(false);
+
+    // Create workspace marker file
+    // Always use target name as original identifier for both URL-based and local targets
+    if let Err(e) = create_workspace_marker(CreateWorkspaceMarkerParams {
+        workspace_path: params.workspace_path,
+        config_name: SDK_CONFIG_FILE,
+        original_config_path: params.config_path,
+        mirror_path: params.mirror_path,
+        original_identifier: Some(params.target),
+        target_version: params.version,
+        skip_mirror,
+        source_url: if params.is_remote_git_source {
+            params.resolved_source_path
+        } else {
+            None
+        },
+        match_pattern: params.match_pattern,
+        include_group: params.include_group,
+        exclude_group: params.exclude_group,
+    }) {
+        messages::error(&format!("Error creating workspace marker: {}", e));
+        return Err(());
+    }
+
+    Ok(skip_mirror)
+}
+
+/// Clone/update every configured repository into the mirror (unless skipped)
+/// and then into the workspace. Returns whether anything failed.
+fn sync_workspace_repos(
+    filtered_config: &FilteredSdkConfig,
+    workspace_path: &Path,
+    mirror_path: &Path,
+    no_mirror_flag: bool,
+    skip_mirror: bool,
+) -> bool {
+    if skip_mirror {
+        if no_mirror_flag {
+            messages::info("Skipping mirror operations (--no-mirror enabled)");
+        } else {
+            messages::info("Skipping mirror operations (no_mirror = true in user config)");
+        }
+        update_workspace_repos_with_result(filtered_config, workspace_path, true, None)
+    } else {
+        messages::verbose(&format!("Mirror: {}", mirror_path.display()));
+
+        // Update mirror repositories
+        update_mirror_repos(filtered_config, mirror_path);
+
+        // Update workspace repositories
+        update_workspace_repos_with_result(filtered_config, workspace_path, true, Some(mirror_path))
+    }
+}
+
+/// Process sdk.yml's `copy_files:` entries (downloads/local copies not tied
+/// to a git repo) after the git repos above are in place. Returns whether
+/// anything failed.
+fn process_workspace_copy_files(
+    sdk_config: &config::SdkConfig,
+    workspace_path: &Path,
+    config_path: &Path,
+    mirror_path: &Path,
+    is_remote_git_source: bool,
+) -> bool {
+    let Some(copy_files) = &sdk_config.copy_files else {
+        return false;
+    };
+    if copy_files.is_empty() {
+        return false;
+    }
+
+    messages::verbose(&format!(
+        "Processing {} copy_files entries",
+        copy_files.len()
+    ));
+    let config_source_dir = config_path.parent().unwrap_or(Path::new("."));
+    if let Err(e) = process_copy_files(
+        workspace_path,
+        config_source_dir,
+        copy_files,
+        mirror_path,
+        is_remote_git_source,
+    ) {
+        messages::info(&format!("Failed to process copy_files: {}", e));
+        return true;
+    }
+
+    false
+}
+
+/// Generate the workspace's Makefile (and VS Code tasks.json) and, if
+/// sdk.yml has any `install:` sections, run `make install-all` to complete
+/// `--install`/`--full`'s original behavior.
+fn generate_makefile_and_install_all(
+    sdk_config: &config::SdkConfig,
+    workspace_path: &Path,
+    match_regex: &Option<Regex>,
+    include_groups: &[String],
+    exclude_groups: &[String],
+    user_config: Option<&config::UserConfig>,
+) {
+    let makefile_path = workspace_path.join("Makefile");
+    let makefile_sdk_config =
+        filtered_sdk_config_for_makefile(sdk_config, match_regex, include_groups, exclude_groups);
+
+    // Check if there are install sections before trying to run make install-all
+    let has_install_sections = makefile_sdk_config.install.is_some()
+        && makefile_sdk_config
+            .install
+            .as_ref()
+            .map(|i| !i.is_empty())
+            .unwrap_or(false);
+
+    let dividers = !user_config
+        .and_then(|uc| uc.build.no_dividers)
+        .unwrap_or(false);
+    let makefile_content =
+        generate_makefile_content(&makefile_sdk_config, dividers, Some(workspace_path));
+    match std::fs::write(&makefile_path, makefile_content) {
+        Ok(_) => {
+            messages::verbose(&format!(
+                "Generated Makefile at {}",
+                makefile_path.display()
+            ));
+
+            // Generate VS Code tasks.json
+            if let Err(e) =
+                vscode_tasks_manager::generate_tasks_json(workspace_path, &makefile_path)
+            {
+                messages::verbose(&format!("Could not generate VS Code tasks.json: {}", e));
+            }
+
+            // Only run make install-all if there are install sections in sdk.yml
+            if has_install_sections {
+                messages::status("");
+                messages::status("Running install-all to complete SDK setup...");
+
+                let make_status = std::process::Command::new("make")
+                    .arg("install-all")
+                    .current_dir(workspace_path)
+                    .status();
+
+                match make_status {
+                    Ok(status) => {
+                        if status.success() {
+                            messages::status("");
+                            messages::success("All SDK components installed successfully");
+                        } else {
+                            messages::status("");
+                            messages::error("Warning: Some components failed to install");
+                            messages::status(&format!(
+                                "You can retry with: cd {} && make install-all",
+                                workspace_path.display()
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        messages::error(&format!("Warning: Failed to run make install-all: {}", e));
+                        messages::status(&format!("Make sure 'make' is installed, or run manually: cd {} && make install-all", workspace_path.display()));
+                    }
+                }
+            } else {
+                messages::status("");
+                messages::status("No install targets in sdk.yml, skipping install-all step");
+                messages::success("Workspace setup completed");
+            }
+        }
+        Err(e) => {
+            messages::error(&format!("Warning: Failed to write Makefile: {}", e));
+            messages::status("You can generate it later with 'cim makefile'");
+        }
+    }
+}
+
+/// Run every `--install`/`--full` step in order: OS deps (only for `--full`),
+/// toolchains, pip packages, then Makefile generation + `make install-all`.
+#[allow(clippy::too_many_arguments)]
+fn run_install_steps(
+    config: &InitConfig<'_>,
+    sdk_config: &config::SdkConfig,
+    workspace_path: &Path,
+    dest_config_path: &Path,
+    mirror_path: &Path,
+    match_regex: &Option<Regex>,
+    include_groups: &[String],
+    exclude_groups: &[String],
+    user_config: Option<&config::UserConfig>,
+) {
+    messages::status("");
+    if config.full {
+        messages::status("Setting up SDK components with --full...");
+
+        // Step 0: Install OS dependencies if --full is specified
+        if let Err(e) = install_os_deps_if_available(workspace_path, config.yes, config.no_sudo) {
+            messages::info(&format!(
+                "Note: OS dependencies installation encountered an issue: {}",
+                e
+            ));
+        }
+    } else {
+        messages::status("Setting up SDK components with --install...");
+    }
+
+    // Step 1: Install toolchains if available
+    if let Err(e) = install_toolchains_if_available(
+        workspace_path,
+        dest_config_path,
+        mirror_path,
+        config.symlink,
+        config.verbose,
+    ) {
+        messages::info(&format!(
+            "Note: Toolchain installation encountered an issue: {}",
+            e
+        ));
+    }
+
+    // Step 2: Install Python packages if available
+    if let Err(e) = install_pip_packages_if_available(
+        workspace_path,
+        dest_config_path,
+        mirror_path,
+        config.symlink,
+        match_regex,
+        include_groups,
+        exclude_groups,
+    ) {
+        messages::error(&format!("Failed to install Python packages: {}", e));
+        messages::error("Workspace creation failed");
+        std::process::exit(1);
+    }
+
+    // Step 3: Generate Makefile and run install-all (original --install behavior)
+    generate_makefile_and_install_all(
+        sdk_config,
+        workspace_path,
+        match_regex,
+        include_groups,
+        exclude_groups,
+        user_config,
+    );
+}
+
+/// Write `.envrc` and trust the workspace with direnv, if sdk.yml's
+/// `direnv:` section opts in. In symlink mode, install may create a `.venv`
+/// symlink, and `.envrc` should respect that canonical target path.
+fn setup_direnv_if_used(sdk_config: &config::SdkConfig, workspace_path: &Path, symlink: bool) {
+    if let Some(direnv_cfg) = sdk_config.direnv() {
+        if direnv_cfg.used {
+            if let Err(e) = setup_direnv(workspace_path, direnv_cfg, symlink) {
+                messages::info(&format!("Note: direnv setup encountered an issue: {}", e));
+            }
+        }
+    }
+}
+
+/// Initialize a new workspace
+pub(crate) fn handle_init_command(config: InitConfig) {
+    // Start background version check so it runs concurrently with the rest of init
+    let version_check = spawn_version_check();
+
+    // Set verbose mode for this command
+    messages::set_verbose(config.verbose);
+
+    let user_config = load_user_config_for_init();
+    let sources = determine_manifest_sources(
+        config.source.as_deref(),
+        &config.target,
+        user_config.as_ref(),
+    );
+
+    let Ok(resolved) = resolve_target_config_path(&config, &sources, user_config.as_ref()) else {
+        return;
+    };
+
+    let Ok(extends_resolution) = load_and_prepare_sdk_config(
+        &resolved.config_path,
+        &config.target,
+        &sources,
+        user_config.as_ref(),
+        config.verbose,
+    ) else {
+        return;
+    };
+    let mut sdk_config = extends_resolution.merged;
+
+    let mirror_path = expand_sdk_config_vars(&mut sdk_config, config.mirror.as_deref());
 
     // Compile regex pattern if provided
     let match_regex = if let Some(pattern) = config.match_pattern {
@@ -1188,145 +1682,35 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         user_config.as_ref(),
     );
 
-    // Check if workspace already exists and handle force flag
-    if workspace_path.exists() {
-        if config.force {
-            // Check if current working directory is inside the workspace being removed
-            // If so, change to a safe directory first to avoid issues with git operations
-            if let Ok(cwd) = env::current_dir() {
-                // Canonicalize paths to handle symlinks and relative paths
-                if let (Ok(canonical_cwd), Ok(canonical_workspace)) =
-                    (cwd.canonicalize(), workspace_path.canonicalize())
-                {
-                    if canonical_cwd.starts_with(&canonical_workspace) {
-                        // We're inside the workspace, change to parent directory
-                        if let Some(parent) = canonical_workspace.parent() {
-                            messages::verbose(&format!(
-                                "Changing directory from {} to {} before removing workspace",
-                                canonical_cwd.display(),
-                                parent.display()
-                            ));
-                            if let Err(e) = env::set_current_dir(parent) {
-                                messages::info(&format!(
-                                    "Failed to change directory before removing workspace: {}",
-                                    e
-                                ));
-                                messages::info(
-                                    "This may cause git operations to fail. Consider running from outside the workspace.",
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            if let Err(e) = fs::remove_dir_all(&workspace_path) {
-                messages::error(&format!(
-                    "Error removing existing workspace directory: {}",
-                    e
-                ));
-                return;
-            }
-            messages::success("Removed existing workspace directory");
-        } else {
-            let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
-            if marker_path.exists() {
-                messages::error(&format!(
-                    "Workspace already initialized at {}",
-                    workspace_path.display()
-                ));
-                messages::error("Use 'cim update' to update an existing workspace, or use --force to overwrite.");
-                return;
-            }
-        }
-    }
-
-    messages::status(&format!(
-        "Initializing workspace at: {}",
-        workspace_path.display()
-    ));
-
-    // Create workspace directory
-    if let Err(e) = fs::create_dir_all(&workspace_path) {
-        messages::error(&format!("Error creating workspace directory: {}", e));
+    if prepare_workspace_directory(&workspace_path, config.force).is_err() {
         return;
     }
 
-    // Copy config file(s) to workspace. For a plain (non-extends) target this
-    // is just sdk.yml, byte-for-byte, exactly as before. For an extends:
-    // target, every level of the chain is copied verbatim under its own
-    // name: sdk.yml (and os/python deps files) for the primary target at
-    // the workspace root, <target>-sdk.yml (and <target>-os/python-deps
-    // files) for each ancestor under the .cim/target-overlays/ subfolder --
-    // nothing is ever flattened.
-    for file_pair in &extends_resolution.files_to_copy {
-        let dest_dir = match file_pair.dest_subdir {
-            Some(subdir) => {
-                let dir = workspace_path.join(subdir);
-                if let Err(e) = fs::create_dir_all(&dir) {
-                    messages::error(&format!(
-                        "Error creating {} directory: {}",
-                        dir.display(),
-                        e
-                    ));
-                    return;
-                }
-                dir
-            }
-            None => workspace_path.clone(),
-        };
-        let dest_path = dest_dir.join(&file_pair.dest_name);
-        if let Err(e) = fs::copy(&file_pair.source_path, &dest_path) {
-            messages::error(&format!(
-                "Error copying {} to workspace: {}",
-                file_pair.dest_name, e
-            ));
-            return;
-        }
-    }
-    let dest_config_path = workspace_path.join(SDK_CONFIG_FILE);
-    messages::verbose("Copied configuration to workspace as sdk.yml");
+    let Ok(dest_config_path) = populate_workspace_files(
+        &workspace_path,
+        &extends_resolution.files_to_copy,
+        &resolved.config_path,
+        resolved.config_url.as_deref(),
+    ) else {
+        return;
+    };
 
-    // Determine if we should skip mirror (command line flag OR user config setting)
-    // This needs to be calculated before creating workspace marker
-    let skip_mirror = config.no_mirror
-        || user_config
-            .as_ref()
-            .and_then(|uc| uc.workspace.no_mirror)
-            .unwrap_or(false);
-
-    // Create workspace marker file
-    // Always use target name as original identifier for both URL-based and local targets
-    if let Err(e) = create_workspace_marker(CreateWorkspaceMarkerParams {
+    let Ok(skip_mirror) = create_marker_and_get_skip_mirror(MarkerParams {
         workspace_path: &workspace_path,
-        config_name: SDK_CONFIG_FILE,
-        original_config_path: &config_path,
+        config_path: &resolved.config_path,
         mirror_path: &mirror_path,
-        original_identifier: Some(&config.target),
-        target_version: config.version.as_deref(),
-        skip_mirror,
-        source_url: if is_remote_git_source {
-            resolved_source_path.as_deref()
-        } else {
-            None
-        },
+        target: &config.target,
+        version: config.version.as_deref(),
+        is_remote_git_source: resolved.is_remote_git_source,
+        resolved_source_path: resolved.resolved_source_path.as_deref(),
         match_pattern: config.match_pattern,
         include_group: config.include_group,
         exclude_group: config.exclude_group,
-    }) {
-        messages::error(&format!("Error creating workspace marker: {}", e));
+        no_mirror_flag: config.no_mirror,
+        user_config: user_config.as_ref(),
+    }) else {
         return;
-    }
-
-    // Copy other YAML files to workspace
-    // Use the config_url if the config was loaded from a URL
-    let base_url = config_url.as_deref();
-    if let Err(e) = copy_yaml_files_to_workspace(&workspace_path, &config_path, base_url) {
-        messages::info(&format!(
-            "Failed to copy some YAML files to workspace: {}",
-            e
-        ));
-    }
+    };
 
     // Create filtered config based on match pattern
     let filtered_config =
@@ -1336,49 +1720,22 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     messages::verbose(&format!("Workspace: {}", workspace_path.display()));
 
     // Now proceed with mirror and workspace setup
-    let any_failed = if skip_mirror {
-        if config.no_mirror {
-            messages::info("Skipping mirror operations (--no-mirror enabled)");
-        } else {
-            messages::info("Skipping mirror operations (no_mirror = true in user config)");
-        }
-        update_workspace_repos_with_result(&filtered_config, &workspace_path, true, None)
-    } else {
-        messages::verbose(&format!("Mirror: {}", mirror_path.display()));
-
-        // Update mirror repositories
-        update_mirror_repos(&filtered_config, &mirror_path);
-
-        // Update workspace repositories
-        update_workspace_repos_with_result(
-            &filtered_config,
-            &workspace_path,
-            true,
-            Some(&mirror_path),
-        )
-    };
+    let any_failed = sync_workspace_repos(
+        &filtered_config,
+        &workspace_path,
+        &mirror_path,
+        config.no_mirror,
+        skip_mirror,
+    );
 
     // Process copy_files after git repositories are cloned
-    let mut copy_files_failed = false;
-    if let Some(copy_files) = &sdk_config.copy_files {
-        if !copy_files.is_empty() {
-            messages::verbose(&format!(
-                "Processing {} copy_files entries",
-                copy_files.len()
-            ));
-            let config_source_dir = config_path.parent().unwrap_or(Path::new("."));
-            if let Err(e) = process_copy_files(
-                &workspace_path,
-                config_source_dir,
-                copy_files,
-                &mirror_path,
-                is_remote_git_source,
-            ) {
-                messages::info(&format!("Failed to process copy_files: {}", e));
-                copy_files_failed = true;
-            }
-        }
-    }
+    let copy_files_failed = process_workspace_copy_files(
+        &sdk_config,
+        &workspace_path,
+        &resolved.config_path,
+        &mirror_path,
+        resolved.is_remote_git_source,
+    );
 
     if any_failed || copy_files_failed {
         messages::error("Workspace initialization completed with errors!");
@@ -1389,169 +1746,40 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             messages::info("Some files failed to copy or download.");
         }
         std::process::exit(1);
-    } else {
-        messages::success(&format!(
-            "Workspace initialized successfully at: {}",
-            workspace_path.display()
-        ));
-        messages::verbose(&format!("Config: {}", dest_config_path.display()));
-        messages::verbose(&format!(
-            "To use the workspace: cd {}",
-            workspace_path.display()
-        ));
-
-        // Silently copy workspace path to clipboard for convenience
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            let _ = clipboard.set_text(workspace_path.display().to_string());
-        }
-
-        // Determine if we should run installation steps
-        // --full implies --install
-        let should_install = config.install || config.full;
-
-        // Run installation steps if --install or --full flag was provided
-        if should_install {
-            messages::status("");
-            if config.full {
-                messages::status("Setting up SDK components with --full...");
-
-                // Step 0: Install OS dependencies if --full is specified
-                if let Err(e) =
-                    install_os_deps_if_available(&workspace_path, config.yes, config.no_sudo)
-                {
-                    messages::info(&format!(
-                        "Note: OS dependencies installation encountered an issue: {}",
-                        e
-                    ));
-                }
-            } else {
-                messages::status("Setting up SDK components with --install...");
-            }
-
-            // Step 1: Install toolchains if available
-            if let Err(e) = install_toolchains_if_available(
-                &workspace_path,
-                &dest_config_path,
-                &mirror_path,
-                config.symlink,
-                config.verbose,
-            ) {
-                messages::info(&format!(
-                    "Note: Toolchain installation encountered an issue: {}",
-                    e
-                ));
-            }
-
-            // Step 2: Install Python packages if available
-            if let Err(e) = install_pip_packages_if_available(
-                &workspace_path,
-                &dest_config_path,
-                &mirror_path,
-                config.symlink,
-                &match_regex,
-                &include_groups,
-                &exclude_groups,
-            ) {
-                messages::error(&format!("Failed to install Python packages: {}", e));
-                messages::error("Workspace creation failed");
-                std::process::exit(1);
-            }
-
-            // Step 3: Generate Makefile and run install-all (original --install behavior)
-            // First generate the Makefile
-            let makefile_path = workspace_path.join("Makefile");
-            let makefile_sdk_config = filtered_sdk_config_for_makefile(
-                &sdk_config,
-                &match_regex,
-                &include_groups,
-                &exclude_groups,
-            );
-
-            // Check if there are install sections before trying to run make install-all
-            let has_install_sections = makefile_sdk_config.install.is_some()
-                && makefile_sdk_config
-                    .install
-                    .as_ref()
-                    .map(|i| !i.is_empty())
-                    .unwrap_or(false);
-
-            let dividers = !user_config
-                .as_ref()
-                .and_then(|uc| uc.build.no_dividers)
-                .unwrap_or(false);
-            let makefile_content =
-                generate_makefile_content(&makefile_sdk_config, dividers, Some(&workspace_path));
-            match std::fs::write(&makefile_path, makefile_content) {
-                Ok(_) => {
-                    messages::verbose(&format!(
-                        "Generated Makefile at {}",
-                        makefile_path.display()
-                    ));
-
-                    // Generate VS Code tasks.json
-                    if let Err(e) =
-                        vscode_tasks_manager::generate_tasks_json(&workspace_path, &makefile_path)
-                    {
-                        messages::verbose(&format!("Could not generate VS Code tasks.json: {}", e));
-                    }
-
-                    // Only run make install-all if there are install sections in sdk.yml
-                    if has_install_sections {
-                        messages::status("");
-                        messages::status("Running install-all to complete SDK setup...");
-
-                        let make_status = std::process::Command::new("make")
-                            .arg("install-all")
-                            .current_dir(&workspace_path)
-                            .status();
-
-                        match make_status {
-                            Ok(status) => {
-                                if status.success() {
-                                    messages::status("");
-                                    messages::success("All SDK components installed successfully");
-                                } else {
-                                    messages::status("");
-                                    messages::error("Warning: Some components failed to install");
-                                    messages::status(&format!(
-                                        "You can retry with: cd {} && make install-all",
-                                        workspace_path.display()
-                                    ));
-                                }
-                            }
-                            Err(e) => {
-                                messages::error(&format!(
-                                    "Warning: Failed to run make install-all: {}",
-                                    e
-                                ));
-                                messages::status(&format!("Make sure 'make' is installed, or run manually: cd {} && make install-all", workspace_path.display()));
-                            }
-                        }
-                    } else {
-                        messages::status("");
-                        messages::status(
-                            "No install targets in sdk.yml, skipping install-all step",
-                        );
-                        messages::success("Workspace setup completed");
-                    }
-                }
-                Err(e) => {
-                    messages::error(&format!("Warning: Failed to write Makefile: {}", e));
-                    messages::status("You can generate it later with 'cim makefile'");
-                }
-            }
-        }
-
-        // Set up direnv after install steps. In symlink mode, install may create .venv symlink,
-        // and .envrc should respect that canonical target path.
-        if let Some(direnv_cfg) = sdk_config.direnv() {
-            if direnv_cfg.used {
-                if let Err(e) = setup_direnv(&workspace_path, direnv_cfg, config.symlink) {
-                    messages::info(&format!("Note: direnv setup encountered an issue: {}", e));
-                }
-            }
-        }
     }
+
+    messages::success(&format!(
+        "Workspace initialized successfully at: {}",
+        workspace_path.display()
+    ));
+    messages::verbose(&format!("Config: {}", dest_config_path.display()));
+    messages::verbose(&format!(
+        "To use the workspace: cd {}",
+        workspace_path.display()
+    ));
+
+    // Silently copy workspace path to clipboard for convenience
+    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+        let _ = clipboard.set_text(workspace_path.display().to_string());
+    }
+
+    // Run installation steps if --install or --full flag was provided
+    // (--full implies --install)
+    if config.install || config.full {
+        run_install_steps(
+            &config,
+            &sdk_config,
+            &workspace_path,
+            &dest_config_path,
+            &mirror_path,
+            &match_regex,
+            &include_groups,
+            &exclude_groups,
+            user_config.as_ref(),
+        );
+    }
+
+    setup_direnv_if_used(&sdk_config, &workspace_path, config.symlink);
 
     // Print any available update notice after the main work is done
     crate::version::print_update_notice(version_check);
