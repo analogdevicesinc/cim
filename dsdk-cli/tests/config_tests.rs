@@ -705,7 +705,9 @@ fn test_config_template_generation() {
 
 #[test]
 fn test_bootstrap_config_defaults() {
-    use dsdk_cli::config::{default_bootstrap_phases, BootstrapConfig, UserConfig};
+    use dsdk_cli::config::{
+        default_bootstrap_jobs, default_bootstrap_phases, BootstrapConfig, UserConfig,
+    };
 
     // Absent [bootstrap] section -> all fields None; callers fall back to
     // default_bootstrap_phases() and `false` for force/symlink themselves.
@@ -713,6 +715,7 @@ fn test_bootstrap_config_defaults() {
     assert!(config.bootstrap.phases.is_none());
     assert!(config.bootstrap.force.is_none());
     assert!(config.bootstrap.symlink.is_none());
+    assert!(config.bootstrap.jobs.is_none());
 
     assert_eq!(
         default_bootstrap_phases(),
@@ -723,12 +726,15 @@ fn test_bootstrap_config_defaults() {
         ]
     );
 
+    // Runtime CPU query must never return 0 (would produce an invalid `-j0`).
+    assert!(default_bootstrap_jobs() >= 1);
+
     // Explicit empty phases list is distinct from "absent" -- it means "run nothing".
     let config: UserConfig = toml::from_str("[bootstrap]\nphases = []\n").unwrap();
     assert_eq!(config.bootstrap.phases, Some(vec![]));
 
     let config: UserConfig = toml::from_str(
-        "[bootstrap]\nphases = [\"envsetup\", \"build\"]\nforce = true\nsymlink = true\n",
+        "[bootstrap]\nphases = [\"envsetup\", \"build\"]\nforce = true\nsymlink = true\njobs = 8\n",
     )
     .unwrap();
     assert_eq!(
@@ -737,6 +743,7 @@ fn test_bootstrap_config_defaults() {
     );
     assert_eq!(config.bootstrap.force, Some(true));
     assert_eq!(config.bootstrap.symlink, Some(true));
+    assert_eq!(config.bootstrap.jobs, Some(8));
 
     // Unknown key under [bootstrap] must be rejected, matching every other section.
     let result: Result<UserConfig, _> = toml::from_str("[bootstrap]\ninstall = true\n");

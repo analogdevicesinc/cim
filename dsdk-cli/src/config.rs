@@ -375,6 +375,17 @@ pub fn default_bootstrap_phases() -> Vec<String> {
     ]
 }
 
+/// Parallel job count `cim bootstrap` passes to `make -j<N>` when
+/// `[bootstrap] jobs` is absent from config.toml entirely: the number of
+/// logical CPUs on the machine running the command, queried at runtime
+/// (never hardcoded at compile time). Falls back to 1 if the OS query
+/// fails.
+pub fn default_bootstrap_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
 pub trait SdkConfigCore {
     fn gits(&self) -> &Vec<GitConfig>;
     fn install(&self) -> &Option<Vec<InstallConfig>>;
@@ -1349,6 +1360,13 @@ pub struct BootstrapConfig {
     /// installed to the mirror with symlinks in the workspace). Default: false.
     #[serde(default)]
     pub symlink: Option<bool>,
+
+    /// Parallel job count passed as `-j<N>` to each `make sdk-<phase>`
+    /// invocation. Absent entirely -> the number of logical CPUs on this
+    /// machine, queried at runtime (see `default_bootstrap_jobs()`). A
+    /// value of 0 is treated the same as if the key were absent.
+    #[serde(default)]
+    pub jobs: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -1764,6 +1782,19 @@ impl UserConfig {
 # Examples:
 # force = true      # Remove an existing workspace directory before init
 # symlink = true     # Install toolchains/pip to mirror with symlinks
+
+# =============================================================================
+# Bootstrap Parallel Jobs
+# =============================================================================
+# Parallel job count passed as `-j<N>` to each `make sdk-<phase>` command
+# `cim bootstrap` runs. Absent entirely -> the number of logical CPUs on
+# this machine, queried at runtime (never hardcoded). Set explicitly to
+# override that default, e.g. to match a CI runner's allotted CPUs or to
+# limit resource usage.
+#
+# Examples:
+# jobs = 4      # Always build with 4 parallel jobs
+# jobs = 1      # Force serial builds
 "#
         .to_string()
     }
