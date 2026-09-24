@@ -28,10 +28,17 @@ fmt:
 	cargo fmt
 
 # Install cim CLI to $HOME/bin (depends on build)
+# Installed via a temp file + atomic rename rather than overwriting the
+# destination in place: some endpoint-security agents (e.g. corporate DLP/EDR
+# tools using the macOS Endpoint Security framework) cache an exec verdict
+# per-inode, and overwriting a file in place can leave a stale "block"
+# verdict attached to that inode even after the content changes, killing
+# every future run with SIGKILL. A rename always targets a fresh inode.
 install: build
 	@echo "Installing cim to $$HOME/bin..."
 	@mkdir -p $$HOME/bin
-	@cp target/release/cim $$HOME/bin/
+	@cp target/release/cim $$HOME/bin/cim.new
+	@mv -f $$HOME/bin/cim.new $$HOME/bin/cim
 	@echo "✓ cim installed to $$HOME/bin/cim"
 
 # Clean build artifacts
