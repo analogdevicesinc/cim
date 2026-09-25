@@ -16,8 +16,10 @@ use crate::init_cmd::{
 use dsdk_cli::config::{self, SdkConfigCore};
 use dsdk_cli::messages;
 use dsdk_cli::workspace::{get_all_sources_from_config, load_config_with_extends};
+use indicatif::HumanDuration;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// Configuration for the bootstrap command
 pub(crate) struct BootstrapConfig {
@@ -68,6 +70,11 @@ pub(crate) fn handle_bootstrap_command(cfg: BootstrapConfig) {
         .and_then(|uc| uc.bootstrap.symlink)
         .unwrap_or(false);
 
+    // The runtime timer covers everything from here to the final return:
+    // workspace init plus every build phase. Target/version selection above
+    // is interactive user think-time, not bootstrap work, so it's excluded.
+    let start = Instant::now();
+
     run_workspace_init(
         &cfg,
         &target,
@@ -82,6 +89,7 @@ pub(crate) fn handle_bootstrap_command(cfg: BootstrapConfig) {
     if phases.is_empty() {
         messages::status("");
         messages::success(&format!("Workspace ready at {}", workspace_path.display()));
+        report_bootstrap_duration(start);
         return;
     }
 
@@ -93,6 +101,7 @@ pub(crate) fn handle_bootstrap_command(cfg: BootstrapConfig) {
     messages::status("");
     messages::success(&format!("Bootstrap completed for target '{}'", target));
     messages::status(&format!("Workspace: {}", workspace_path.display()));
+    report_bootstrap_duration(start);
 }
 
 /// Load the user config, falling back to defaults (with a warning) on error.
@@ -276,6 +285,15 @@ fn run_bootstrap_phases(phases: &[String], jobs: usize, workspace_path: &Path) {
             }
         }
     }
+}
+
+/// Print the total bootstrap runtime (workspace init + build phases),
+/// excluding interactive target/version selection.
+fn report_bootstrap_duration(start: Instant) {
+    messages::status(&format!(
+        "Bootstrap runtime: {}",
+        HumanDuration(start.elapsed())
+    ));
 }
 
 /// Show a numbered list of every target across every configured manifest source and
