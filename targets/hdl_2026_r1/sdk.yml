@@ -1,0 +1,39 @@
+mirror: $HOME/tmp/mirror
+
+variables:
+  VIVADO: /opt/Xilinx/2025.1/Vivado
+  QUARTUS: /opt/intelFPGA_pro/23.4/quartus
+  LATTICE_RADIANT: /usr/local/radiant
+  MAKE_JOBS: -j$$(nproc)
+  HDL_PROJECT: fmcomms2
+  HDL_BOARD: zcu102
+  DIR_NAME: build
+  BUILD_BOOT_BIN: "false"
+  BOOT_BIN_UBOOT: download
+
+makefile_include:
+  - include hdl.mk
+
+copy_files:
+  - source: build-hdl.sh
+    dest: scripts/build-hdl.sh
+    cache: false
+  - source: hdl.mk
+    dest: hdl.mk
+    cache: false
+  - source: https://raw.githubusercontent.com/analogdevicesinc/wiki-scripts/main/zynq_boot_bin/build_boot_bin.sh
+    dest: scripts/build_boot_bin.sh
+    cache: true
+
+gits:
+  - name: hdl
+    url: https://github.com/analogdevicesinc/hdl.git
+    commit: hdl_2026_r1
+
+build:
+  - >-
+    bash -c 'if [ "${{ BUILD_BOOT_BIN }}" = "true" ]; then bash scripts/build-hdl.sh --project "${{ HDL_PROJECT }}" --board "${{ HDL_BOARD }}" --jobs "${{ MAKE_JOBS }}" --dir-name "${{ DIR_NAME }}" --boot-bin --boot-bin-uboot "${{ BOOT_BIN_UBOOT }}"; else bash scripts/build-hdl.sh --project "${{ HDL_PROJECT }}" --board "${{ HDL_BOARD }}" --jobs "${{ MAKE_JOBS }}" --dir-name "${{ DIR_NAME }}" --no-boot-bin; fi'
+
+clean:
+  - >-
+    bash -c 'hdl_project="${{ HDL_PROJECT }}"; hdl_board="${{ HDL_BOARD }}"; dir_name="${{ DIR_NAME }}"; proj_board_dir="hdl/projects/$$hdl_project/$$hdl_board"; if [ ! -d "$$proj_board_dir" ]; then echo "Project/board $$hdl_project/$$hdl_board does not exist"; exit 0; fi; mf="$$proj_board_dir/Makefile"; if grep -q "project-xilinx.mk" "$$mf"; then source "${{ VIVADO }}/settings64.sh" 2>/dev/null || true; elif grep -q "project-intel.mk" "$$mf"; then export PATH="${{ QUARTUS }}/bin:$$PATH"; elif grep -q "project-lattice.mk" "$$mf"; then export PATH="${{ LATTICE_RADIANT }}/bin/lin64:$$PATH"; fi; MAKEOVERRIDES= $(MAKE) -C "$$proj_board_dir" DIR_NAME="$$dir_name" clean'

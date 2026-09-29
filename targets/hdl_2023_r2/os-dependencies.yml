@@ -1,0 +1,13 @@
+common_deps: &common
+  - build-essential
+  - git
+  - make
+  - x11-utils
+
+linux-x86_64:
+  ubuntu-22.04:
+    command: "apt-get install"
+    packages: *common
+  ubuntu-24.04:
+    command: "apt-get install"
+    packages: *common
