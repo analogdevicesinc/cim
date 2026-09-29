@@ -39,7 +39,7 @@ Two composition features let manifests avoid duplication:
   - All `*.yml` files can be symlinked to files in the shared folder and other locations if needed.
 - Default location on disk is `$HOME/devel/cim-manifests`
 - Legacy location `$HOME/devel/sdk-manager-manifests` is also checked automatically for backward compatibility
-- Our remote location is at: `https://github.com/analogdevicesinc/cim-manifests`
+- Our remote location is at: `https://github.com/joabech/cim-manifests`
 - cim can point to any other location via the `cim init --source <path-or-url>` option.
 
 ## Workspace structure

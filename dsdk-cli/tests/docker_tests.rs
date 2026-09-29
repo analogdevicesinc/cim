@@ -37,13 +37,13 @@ fn test_generate_dockerfile_cim_init_command() {
     let config = DockerfileConfig {
         target: "optee-qemu-v8",
         version: Some("main"),
-        source: Some("https://github.com/analogdevicesinc/cim-manifests.git"),
+        source: Some("https://github.com/joabech/cim-manifests.git"),
         distro: "fedora:40",
         output_path: std::path::Path::new("Dockerfile"),
         force: false,
     };
     let out = generate_dockerfile(&config);
-    assert!(out.contains("cim init --target optee-qemu-v8 --version main --source https://github.com/analogdevicesinc/cim-manifests.git --full --no-sudo --yes --cert-validation=auto --symlink"));
+    assert!(out.contains("cim init --target optee-qemu-v8 --version main --source https://github.com/joabech/cim-manifests.git --full --no-sudo --yes --cert-validation=auto --symlink"));
 }
 
 #[test]

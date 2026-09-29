@@ -538,7 +538,7 @@ Examples:
   %(prog)s /path/to/workspace
   %(prog)s /path/to/.workspace
   %(prog)s ~.workspace --manifests ~/devel/cim-manifests
-  %(prog)s ~.workspace --manifests https://github.com/analogdevicesinc/cim-manifests
+  %(prog)s ~.workspace --manifests https://github.com/joabech/cim-manifests
   %(prog)s ~.workspace --json > report.json
         """
     )
