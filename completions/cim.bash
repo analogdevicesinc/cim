@@ -13,7 +13,7 @@
 # Bash completion for cim command
 #
 # Supports all commands and options:
-#   - list-targets: --source (-s), --target (-t), --format
+#   - list-targets: --source (-s), --target (-t), --format (-f), --verbose
 #   - init: --target (-t), --source (-s), --version (-v), --workspace (-w),
 #           --no-mirror, --mirror, --force, --match, --include-group,
 #           --exclude-group, --verbose, --install, --full, --symlink,
@@ -154,12 +154,12 @@ _cim_completions() {
                     _complete_targets
                     return 0
                     ;;
-                --format)
+                -f|--format)
                     COMPREPLY=( $(compgen -W "text json" -- "${cur}") )
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--source -s --target -t --format --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--source -s --target -t --format -f --verbose --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac

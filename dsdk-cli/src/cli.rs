@@ -112,32 +112,19 @@ pub struct Cli {
 pub enum Commands {
     /// List available targets and versions
     ListTargets {
-        /// Source location (git repository URL or local path, default: $HOME/devel/cim-manifests)
-        #[arg(
-            short,
-            long,
-            value_name = "URL|PATH",
-            help = "Git repository URL or local path to manifests"
-        )]
+        /// Manifest source: git URL or local path
+        ///
+        /// Defaults to $HOME/devel/cim-manifests.
+        #[arg(short, long, value_name = "URL|PATH")]
         source: Option<String>,
-        /// List versions for specific target
-        #[arg(
-            short,
-            long,
-            value_name = "TARGET_NAME",
-            help = "Show available versions for this target"
-        )]
+        /// List versions for this target
+        #[arg(short, long, value_name = "NAME")]
         target: Option<String>,
-        /// Show detailed output (credential attempts, git operations)
+        /// Show credential attempts and git operations
         #[arg(long)]
         verbose: bool,
-        /// Output format
-        #[arg(
-            long,
-            value_name = "FORMAT",
-            default_value = "text",
-            help = "Output format: text (default) or json"
-        )]
+        /// Output format: text or json
+        #[arg(short, long, value_name = "FORMAT", default_value = "text")]
         format: String,
     },
     /// Initialize a new workspace from a configuration file
