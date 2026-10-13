@@ -33,7 +33,7 @@ use makefile::handle_makefile_command;
 use release_cmd::handle_release_command;
 use update_cmd::{
     handle_config_command, handle_docker_command, handle_list_targets_command,
-    handle_update_command, ConfigOptions,
+    handle_update_command, ConfigOptions, UpdateOptions,
 };
 use utils_cmd::handle_utils_command;
 use version::{print_update_notice, print_version_info, spawn_version_check};
@@ -146,16 +146,16 @@ fn main() {
             verbose,
             cert_validation,
         } => {
-            handle_update_command(
-                *no_mirror,
-                mirror.clone(),
-                r#match.as_deref(),
-                include_group.as_deref(),
-                exclude_group.as_deref(),
-                *all,
-                *verbose,
-                cert_validation.as_deref(),
-            );
+            handle_update_command(UpdateOptions {
+                no_mirror: *no_mirror,
+                mirror_override: mirror.clone(),
+                match_pattern: r#match.as_deref(),
+                include_group: include_group.as_deref(),
+                exclude_group: exclude_group.as_deref(),
+                all: *all,
+                verbose: *verbose,
+                _cert_validation: cert_validation.as_deref(),
+            });
         }
         Commands::Makefile {
             no_dividers,
