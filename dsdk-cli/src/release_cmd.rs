@@ -27,29 +27,16 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Handle the release command
-pub(crate) fn handle_release_command(
-    tag: Option<&str>,
-    genconfig: bool,
-    include_patterns: &Vec<String>,
-    exclude_patterns: &Vec<String>,
-    dry_run: bool,
-) {
-    // Must be run from within a workspace
-    let (workspace_path, config_path) = match require_workspace_config() {
-        Ok(paths) => paths,
-        Err(e) => {
-            messages::error(&e);
-            return;
-        }
-    };
-
-    // Validate arguments
+/// Bail out unless exactly one of `--tag`/`--genconfig` (or both) was given.
+fn validate_release_args(tag: Option<&str>, genconfig: bool) -> Result<(), ()> {
     if tag.is_none() && !genconfig {
         messages::error("Must specify either --tag or --genconfig (or both)");
-        return;
+        return Err(());
     }
+    Ok(())
+}
 
+fn print_release_start_status(tag: Option<&str>, workspace_path: &Path, dry_run: bool) {
     if let Some(tag_str) = tag {
         messages::status(&format!(
             "Creating release {} in workspace: {}",
@@ -66,236 +53,262 @@ pub(crate) fn handle_release_command(
     if dry_run {
         messages::status("DRY RUN: No actual changes will be made");
     }
+}
 
-    let sdk_config = match load_config_with_user_overrides(&config_path, false) {
-        Ok(config) => config,
-        Err(e) => {
-            messages::error(&format!("Error loading config: {}", e));
-            return;
-        }
-    };
-
-    // If this workspace's sdk.yml declares extends:, the base target's own
-    // gits are already pinned via the explicit extends: version and are
-    // released independently, under the base target's own scheme. A
-    // derived target's release therefore only touches gits it actually
-    // owns: the ones it added directly in its own sdk.yml, or modified via
-    // its own overlay: key. Inherited, unmodified base gits are left
-    // completely untouched (not tagged, not frozen). This is a no-op
-    // (owned_names stays None) for the large majority of targets that
-    // don't use extends: at all.
-    let extends_scope = match load_extends_owned_entries(&config_path) {
-        Ok(scope) => scope,
-        Err(e) => {
-            messages::error(&e);
-            return;
-        }
-    };
-    let owned_names: Option<HashSet<String>> =
-        extends_scope.map(|(base_target, _raw_primary, owned)| {
-            messages::status(&format!(
-                "This target extends '{}': release only affects the {} git(s) \
+/// If this workspace's sdk.yml declares extends:, the base target's own
+/// gits are already pinned via the explicit extends: version and are
+/// released independently, under the base target's own scheme. A derived
+/// target's release therefore only touches gits it actually owns: the ones
+/// it added directly in its own sdk.yml, or modified via its own overlay:
+/// key. Inherited, unmodified base gits are left completely untouched (not
+/// tagged, not frozen). This is a no-op (returns `None`) for the large
+/// majority of targets that don't use extends: at all.
+fn resolve_release_owned_gits(config_path: &Path) -> Result<Option<HashSet<String>>, ()> {
+    let extends_scope = load_extends_owned_entries(config_path).map_err(|e| messages::error(&e))?;
+    Ok(extends_scope.map(|(base_target, _raw_primary, owned)| {
+        messages::status(&format!(
+            "This target extends '{}': release only affects the {} git(s) \
              owned by this target (added directly in its own sdk.yml, or \
              modified via its own overlay: key); inherited gits are released \
              independently by the base target.",
-                base_target,
-                owned.gits.len()
-            ));
-            owned.gits
-        });
+            base_target,
+            owned.gits.len()
+        ));
+        owned.gits
+    }))
+}
 
-    // Helper function to convert multiple patterns into a combined regex
-    let build_combined_regex = |patterns: &Vec<String>, pattern_type: &str| -> Option<Regex> {
-        if patterns.is_empty() {
-            return None;
-        }
+/// Convert multiple comma-separated glob-like patterns into a single
+/// combined alternation regex `(pattern1|pattern2|...)`. Returns `None` if
+/// `patterns` is empty/blank, or on regex compile error (error already
+/// printed).
+fn build_combined_regex(patterns: &[String], pattern_type: &str) -> Option<Regex> {
+    if patterns.is_empty() {
+        return None;
+    }
 
-        // Split comma-separated values and flatten
-        let all_patterns: Vec<&str> = patterns
-            .iter()
-            .flat_map(|p| p.split(','))
-            .map(|p| p.trim())
-            .filter(|p| !p.is_empty())
-            .collect();
+    // Split comma-separated values and flatten
+    let all_patterns: Vec<&str> = patterns
+        .iter()
+        .flat_map(|p| p.split(','))
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
 
-        if all_patterns.is_empty() {
-            return None;
-        }
+    if all_patterns.is_empty() {
+        return None;
+    }
 
-        // Build alternation pattern: (pattern1|pattern2|pattern3)
-        let combined_pattern = if all_patterns.len() == 1 {
-            all_patterns[0].to_string()
-        } else {
-            format!("({})", all_patterns.join("|"))
-        };
-
-        match Regex::new(&combined_pattern) {
-            Ok(regex) => Some(regex),
-            Err(e) => {
-                messages::error(&format!(
-                    "Invalid {} regex pattern '{}': {}",
-                    pattern_type, combined_pattern, e
-                ));
-                None
-            }
-        }
+    // Build alternation pattern: (pattern1|pattern2|pattern3)
+    let combined_pattern = if all_patterns.len() == 1 {
+        all_patterns[0].to_string()
+    } else {
+        format!("({})", all_patterns.join("|"))
     };
 
-    // Compile regex patterns if provided
+    match Regex::new(&combined_pattern) {
+        Ok(regex) => Some(regex),
+        Err(e) => {
+            messages::error(&format!(
+                "Invalid {} regex pattern '{}': {}",
+                pattern_type, combined_pattern, e
+            ));
+            None
+        }
+    }
+}
+
+/// Compile the `--include`/`--exclude` patterns into regexes. Fails if a
+/// non-empty pattern list didn't compile into a regex (error already
+/// printed by `build_combined_regex`).
+fn compile_release_regexes(
+    include_patterns: &[String],
+    exclude_patterns: &[String],
+) -> Result<(Option<Regex>, Option<Regex>), ()> {
     let include_regex = build_combined_regex(include_patterns, "include");
     let exclude_regex = build_combined_regex(exclude_patterns, "exclude");
 
-    // Return early if there were regex compilation errors
     if (!include_patterns.is_empty() && include_regex.is_none())
         || (!exclude_patterns.is_empty() && exclude_regex.is_none())
     {
-        return;
+        return Err(());
+    }
+    Ok((include_regex, exclude_regex))
+}
+
+#[derive(Default)]
+struct TagResults {
+    failed: Vec<String>,
+    skipped: Vec<String>,
+    tagged: Vec<String>,
+}
+
+struct TagFilter<'a> {
+    owned_names: &'a Option<HashSet<String>>,
+    include_regex: &'a Option<Regex>,
+    exclude_regex: &'a Option<Regex>,
+}
+
+/// Returns why a git entry should be skipped for tagging, if at all.
+fn release_skip_reason(name: &str, filter: &TagFilter) -> Option<&'static str> {
+    // If this target extends: a base, skip any git not owned by this
+    // target's own overlay: key (it's managed by the base target's
+    // independent release instead).
+    if let Some(owned) = filter.owned_names {
+        if !owned.contains(name) {
+            return Some("inherited from base target, not owned by this overlay");
+        }
     }
 
-    // Apply git tags (if tag is specified)
-    let mut failed_repos = Vec::new();
-    let mut skipped_repos = Vec::new();
-    let mut tagged_repos = Vec::new();
+    if let Some(regex) = filter.include_regex {
+        if !regex.is_match(name) {
+            return Some("not matching include pattern");
+        }
+    }
 
-    if let Some(tag_str) = tag {
-        if dry_run {
-            messages::status(&format!("\nWould apply tag '{}' to repositories:", tag_str));
-        } else {
-            messages::status(&format!("\nApplying tag '{}' to repositories...", tag_str));
+    if let Some(regex) = filter.exclude_regex {
+        if regex.is_match(name) {
+            return Some("excluded by pattern");
+        }
+    }
+
+    None
+}
+
+fn tag_exists_remotely(url: &str, tag_str: &str) -> Result<bool, String> {
+    let tag_ref = format!("refs/tags/{}", tag_str);
+    git_operations::ls_remote(url, false, true)
+        .map(|refs| refs.iter().any(|(_, r)| r == &tag_ref))
+        .map_err(|e| e.to_string())
+}
+
+fn apply_tag_to_repo(repo_path: &Path, name: &str, tag_str: &str, dry_run: bool) -> Result<(), ()> {
+    if dry_run {
+        messages::info(&format!("Would tag {} with {}", name, tag_str));
+        return Ok(());
+    }
+
+    match git_operations::create_tag(repo_path, tag_str) {
+        Ok(result) if result.is_success() => {
+            messages::success(&format!("Tagged {} with {}", name, tag_str));
+            Ok(())
+        }
+        Ok(result) => {
+            messages::error(&format!("Failed to tag {}: {}", name, result.stderr));
+            Err(())
+        }
+        Err(e) => {
+            messages::error(&format!("Error tagging {}: {}", name, e));
+            Err(())
+        }
+    }
+}
+
+fn tag_repos(
+    sdk_config: &config::SdkConfig,
+    workspace_path: &Path,
+    tag_str: &str,
+    filter: &TagFilter,
+    dry_run: bool,
+) -> TagResults {
+    if dry_run {
+        messages::status(&format!("\nWould apply tag '{}' to repositories:", tag_str));
+    } else {
+        messages::status(&format!("\nApplying tag '{}' to repositories...", tag_str));
+    }
+
+    let mut results = TagResults::default();
+
+    for git_cfg in &sdk_config.gits {
+        if let Some(reason) = release_skip_reason(&git_cfg.name, filter) {
+            messages::info(&format!("Skipping {} ({})", git_cfg.name, reason));
+            results.skipped.push(git_cfg.name.clone());
+            continue;
         }
 
-        for git_cfg in &sdk_config.gits {
-            // If this target extends: a base, skip any git not owned by
-            // this target's own overlay: key (it's managed by the base
-            // target's independent release instead).
-            if let Some(ref owned) = owned_names {
-                if !owned.contains(&git_cfg.name) {
-                    messages::info(&format!(
-                        "Skipping {} (inherited from base target, not owned by this overlay)",
-                        git_cfg.name
-                    ));
-                    skipped_repos.push(git_cfg.name.clone());
-                    continue;
-                }
-            }
+        let repo_path = workspace_path.join(&git_cfg.name);
+        if !repo_path.exists() {
+            messages::info(&format!(
+                "Warning: Repository {} does not exist in workspace",
+                git_cfg.name
+            ));
+            results.failed.push(git_cfg.name.clone());
+            continue;
+        }
 
-            // Check if this repository should be included (if include pattern is specified)
-            if let Some(ref regex) = include_regex {
-                if !regex.is_match(&git_cfg.name) {
-                    messages::info(&format!(
-                        "Skipping {} (not matching include pattern)",
-                        git_cfg.name
-                    ));
-                    skipped_repos.push(git_cfg.name.clone());
-                    continue;
-                }
-            }
-
-            // Check if this repository should be excluded
-            if let Some(ref regex) = exclude_regex {
-                if regex.is_match(&git_cfg.name) {
-                    messages::info(&format!("Skipping {} (excluded by pattern)", git_cfg.name));
-                    skipped_repos.push(git_cfg.name.clone());
-                    continue;
-                }
-            }
-
-            let repo_path = workspace_path.join(&git_cfg.name);
-
-            if !repo_path.exists() {
+        match tag_exists_remotely(&git_cfg.url, tag_str) {
+            Ok(true) => {
                 messages::info(&format!(
-                    "Warning: Repository {} does not exist in workspace",
-                    git_cfg.name
+                    "Warning: Tag '{}' already exists in {}",
+                    tag_str, git_cfg.name
                 ));
-                failed_repos.push(git_cfg.name.clone());
+                results.failed.push(git_cfg.name.clone());
                 continue;
             }
-
-            // Check if tag already exists
-            let tag_ref = format!("refs/tags/{}", tag_str);
-            match git_operations::ls_remote(&git_cfg.url, false, true) {
-                Ok(refs) => {
-                    if refs.iter().any(|(_, r)| r == &tag_ref) {
-                        messages::info(&format!(
-                            "Warning: Tag '{}' already exists in {}",
-                            tag_str, git_cfg.name
-                        ));
-                        failed_repos.push(git_cfg.name.clone());
-                        continue;
-                    }
-                }
-                Err(e) => {
-                    messages::error(&format!(
-                        "Error checking existing tags in {}: {}",
-                        git_cfg.name, e
-                    ));
-                    failed_repos.push(git_cfg.name.clone());
-                    continue;
-                }
-            }
-
-            if dry_run {
-                messages::info(&format!("Would tag {} with {}", git_cfg.name, tag_str));
-                tagged_repos.push(git_cfg.name.clone());
-            } else {
-                // Apply the tag
-                match git_operations::create_tag(&repo_path, tag_str) {
-                    Ok(result) if result.is_success() => {
-                        messages::success(&format!("Tagged {} with {}", git_cfg.name, tag_str));
-                        tagged_repos.push(git_cfg.name.clone());
-                    }
-                    Ok(result) => {
-                        messages::error(&format!(
-                            "Failed to tag {}: {}",
-                            git_cfg.name, result.stderr
-                        ));
-                        failed_repos.push(git_cfg.name.clone());
-                    }
-                    Err(e) => {
-                        messages::error(&format!("Error tagging {}: {}", git_cfg.name, e));
-                        failed_repos.push(git_cfg.name.clone());
-                    }
-                }
+            Ok(false) => {}
+            Err(e) => {
+                messages::error(&format!(
+                    "Error checking existing tags in {}: {}",
+                    git_cfg.name, e
+                ));
+                results.failed.push(git_cfg.name.clone());
+                continue;
             }
         }
-    }
 
-    // Generate config file if requested
-    if genconfig {
-        if dry_run {
-            messages::status("\nWould generate release configuration file");
+        if apply_tag_to_repo(&repo_path, &git_cfg.name, tag_str, dry_run).is_ok() {
+            results.tagged.push(git_cfg.name.clone());
         } else {
-            messages::status("\nGenerating release configuration file...");
-            // Freeze the primary sdk.yml's own gits: list, plus -- for an
-            // extends: target -- any inherited gits its own overlay: key
-            // modifies (nested overlay: gits: modify: entries). Both live in
-            // the same sdk.yml file now, so a single freeze pass over it
-            // (see freeze_gits_commits) handles both sections in one output
-            // file.
-            if let Err(e) = generate_release_config(
-                &config_path,
-                tag,
-                &include_regex,
-                &skipped_repos,
-                &tagged_repos,
-            ) {
-                messages::error(&format!("Error generating release config: {}", e));
-                return;
-            }
+            results.failed.push(git_cfg.name.clone());
         }
     }
 
-    // Report results
+    results
+}
+
+/// Freeze the primary sdk.yml's own gits: list, plus -- for an extends:
+/// target -- any inherited gits its own overlay: key modifies (nested
+/// overlay: gits: modify: entries). Both live in the same sdk.yml file now,
+/// so a single freeze pass over it (see `freeze_gits_commits`) handles both
+/// sections in one output file.
+fn maybe_generate_release_config(
+    genconfig: bool,
+    dry_run: bool,
+    config_path: &Path,
+    tag: Option<&str>,
+    include_regex: &Option<Regex>,
+    results: &TagResults,
+) -> Result<(), ()> {
+    if !genconfig {
+        return Ok(());
+    }
+
+    if dry_run {
+        messages::status("\nWould generate release configuration file");
+        return Ok(());
+    }
+
+    messages::status("\nGenerating release configuration file...");
+    generate_release_config(
+        config_path,
+        tag,
+        include_regex,
+        &results.skipped,
+        &results.tagged,
+    )
+    .map_err(|e| messages::error(&format!("Error generating release config: {}", e)))
+}
+
+fn print_release_summary(tag: Option<&str>, dry_run: bool, results: &TagResults) {
     messages::status("\nRelease summary:");
     if let Some(tag_str) = tag {
-        let successful_count = tagged_repos.len();
         messages::status(&format!(
             "  Successfully tagged: {} repositories",
-            successful_count
+            results.tagged.len()
         ));
-        if !dry_run && !tagged_repos.is_empty() {
+        if !dry_run && !results.tagged.is_empty() {
             messages::status(&format!("  Tagged repositories with '{}':", tag_str));
-            for repo in &tagged_repos {
+            for repo in &results.tagged {
                 messages::status(&format!("    - {}", repo));
             }
         }
@@ -303,24 +316,24 @@ pub(crate) fn handle_release_command(
         messages::status("  No tagging performed (genconfig only mode)");
     }
 
-    if !skipped_repos.is_empty() {
+    if !results.skipped.is_empty() {
         messages::status(&format!(
             "  Skipped (excluded): {} repositories",
-            skipped_repos.len()
+            results.skipped.len()
         ));
-        for repo in &skipped_repos {
+        for repo in &results.skipped {
             messages::status(&format!("    - {}", repo));
         }
     }
 
-    if !failed_repos.is_empty() {
-        messages::status(&format!("  Failed: {} repositories", failed_repos.len()));
-        for repo in &failed_repos {
+    if !results.failed.is_empty() {
+        messages::status(&format!("  Failed: {} repositories", results.failed.len()));
+        for repo in &results.failed {
             messages::status(&format!("    - {}", repo));
         }
     }
 
-    if failed_repos.is_empty() {
+    if results.failed.is_empty() {
         if let Some(tag_str) = tag {
             messages::success(&format!("Release {} completed successfully!", tag_str));
         } else {
@@ -331,6 +344,75 @@ pub(crate) fn handle_release_command(
     } else {
         messages::error("Release configuration generation completed with errors.");
     }
+}
+
+/// Handle the release command
+pub(crate) fn handle_release_command(
+    tag: Option<&str>,
+    genconfig: bool,
+    include_patterns: &[String],
+    exclude_patterns: &[String],
+    dry_run: bool,
+) {
+    // Must be run from within a workspace
+    let (workspace_path, config_path) = match require_workspace_config() {
+        Ok(paths) => paths,
+        Err(e) => {
+            messages::error(&e);
+            return;
+        }
+    };
+
+    if validate_release_args(tag, genconfig).is_err() {
+        return;
+    }
+
+    print_release_start_status(tag, &workspace_path, dry_run);
+
+    let sdk_config = match load_config_with_user_overrides(&config_path, false) {
+        Ok(config) => config,
+        Err(e) => {
+            messages::error(&format!("Error loading config: {}", e));
+            return;
+        }
+    };
+
+    let owned_names = match resolve_release_owned_gits(&config_path) {
+        Ok(names) => names,
+        Err(()) => return,
+    };
+
+    let (include_regex, exclude_regex) =
+        match compile_release_regexes(include_patterns, exclude_patterns) {
+            Ok(pair) => pair,
+            Err(()) => return,
+        };
+
+    let filter = TagFilter {
+        owned_names: &owned_names,
+        include_regex: &include_regex,
+        exclude_regex: &exclude_regex,
+    };
+
+    let results = match tag {
+        Some(tag_str) => tag_repos(&sdk_config, &workspace_path, tag_str, &filter, dry_run),
+        None => TagResults::default(),
+    };
+
+    if maybe_generate_release_config(
+        genconfig,
+        dry_run,
+        &config_path,
+        tag,
+        &include_regex,
+        &results,
+    )
+    .is_err()
+    {
+        return;
+    }
+
+    print_release_summary(tag, dry_run, &results);
 }
 
 /// Get the current commit hash from a repository
@@ -376,10 +458,12 @@ pub(crate) fn generate_release_config(
 
     let modified_content = freeze_gits_commits(
         &original_content,
-        workspace_path,
-        tag,
-        skipped_repos,
-        tagged_repos,
+        &FreezeContext {
+            workspace_path,
+            tag,
+            skipped_repos,
+            tagged_repos,
+        },
     );
 
     // Write the modified content to the output file
@@ -415,6 +499,66 @@ pub(crate) fn load_extends_owned_entries(
     Ok(Some((extends.target, raw_primary, owned)))
 }
 
+struct FreezeContext<'a> {
+    workspace_path: &'a Path,
+    tag: Option<&'a str>,
+    skipped_repos: &'a [String],
+    tagged_repos: &'a [String],
+}
+
+fn extract_git_name(trimmed: &str) -> String {
+    let name = trimmed.strip_prefix("- name:").unwrap().trim();
+    // Remove quotes if present (both single and double quotes)
+    name.trim_matches('"').trim_matches('\'').to_string()
+}
+
+/// Compute the frozen `commit:` value for one git entry: `tag` (if provided
+/// and the repo was actually tagged, or unconditionally when no include/
+/// exclude patterns were used), or otherwise the repository's current
+/// commit hash, falling back to `original_value` if that can't be read.
+fn frozen_commit_value(git_name: &str, original_value: &str, ctx: &FreezeContext) -> String {
+    let fallback = || {
+        get_current_commit_hash(&ctx.workspace_path.join(git_name))
+            .unwrap_or_else(|| original_value.to_string())
+    };
+
+    let Some(tag_str) = ctx.tag else {
+        // genconfig-only mode: always get current commit hash
+        return fallback();
+    };
+
+    if ctx.skipped_repos.is_empty() {
+        // Simple case: tag provided, no patterns → tag all repos (backward compatibility)
+        return tag_str.to_string();
+    }
+
+    // Pattern filtering case: use tag only if repo was actually tagged
+    if ctx.tagged_repos.iter().any(|r| r == git_name) {
+        tag_str.to_string()
+    } else {
+        fallback()
+    }
+}
+
+fn push_frozen_commit_line(
+    out: &mut String,
+    line: &str,
+    trimmed: &str,
+    indent: usize,
+    current_git_name: &Option<String>,
+    ctx: &FreezeContext,
+) {
+    if let Some(git_name) = current_git_name {
+        let original_value = trimmed.strip_prefix("commit:").unwrap_or("main").trim();
+        let commit_value = frozen_commit_value(git_name, original_value, ctx);
+        out.push_str(&format!("{}commit: {}", " ".repeat(indent), commit_value));
+    } else {
+        // No current git name, keep original
+        out.push_str(line);
+    }
+    out.push('\n');
+}
+
 /// Line-scan `content` for `gits:` section(s) and freeze each entry's
 /// `commit:` value: to `tag` (if provided and the repo was actually tagged,
 /// or unconditionally when no include/exclude patterns were used), or
@@ -426,13 +570,7 @@ pub(crate) fn load_extends_owned_entries(
 /// `extends:` target, the nested `overlay: gits: modify:` list further down
 /// the same sdk.yml -- a section ends at the first later non-blank line
 /// whose indentation is less than or equal to its own `gits:` line.
-fn freeze_gits_commits(
-    content: &str,
-    workspace_path: &Path,
-    tag: Option<&str>,
-    skipped_repos: &[String],
-    tagged_repos: &[String],
-) -> String {
+fn freeze_gits_commits(content: &str, ctx: &FreezeContext) -> String {
     let mut modified_content = String::new();
     let mut in_gits_section = false;
     let mut gits_indent = 0usize;
@@ -462,10 +600,7 @@ fn freeze_gits_commits(
         if in_gits_section {
             // Look for git repository names
             if trimmed.starts_with("- name:") {
-                let name = trimmed.strip_prefix("- name:").unwrap().trim();
-                // Remove quotes if present (both single and double quotes)
-                let clean_name = name.trim_matches('"').trim_matches('\'');
-                current_git_name = Some(clean_name.to_string());
+                current_git_name = Some(extract_git_name(trimmed));
                 modified_content.push_str(line);
                 modified_content.push('\n');
                 continue;
@@ -473,50 +608,14 @@ fn freeze_gits_commits(
 
             // Look for commit lines and replace based on new logic
             if trimmed.starts_with("commit:") {
-                if let Some(ref git_name) = current_git_name {
-                    let indent = line.len() - line.trim_start().len();
-                    let commit_value = if let Some(tag_str) = tag {
-                        if skipped_repos.is_empty() {
-                            // Simple case: tag provided, no patterns → tag all repos (backward compatibility)
-                            tag_str.to_string()
-                        } else {
-                            // Pattern filtering case: use tag only if repo was actually tagged
-                            if tagged_repos.contains(git_name) {
-                                tag_str.to_string()
-                            } else {
-                                // Get current commit hash for untagged repos
-                                get_current_commit_hash(&workspace_path.join(git_name))
-                                    .unwrap_or_else(|| {
-                                        trimmed
-                                            .strip_prefix("commit:")
-                                            .unwrap_or("main")
-                                            .trim()
-                                            .to_string()
-                                    })
-                            }
-                        }
-                    } else {
-                        // genconfig-only mode: always get current commit hash
-                        get_current_commit_hash(&workspace_path.join(git_name)).unwrap_or_else(
-                            || {
-                                trimmed
-                                    .strip_prefix("commit:")
-                                    .unwrap_or("main")
-                                    .trim()
-                                    .to_string()
-                            },
-                        )
-                    };
-                    modified_content.push_str(&format!(
-                        "{}commit: {}",
-                        " ".repeat(indent),
-                        commit_value
-                    ));
-                } else {
-                    // No current git name, keep original
-                    modified_content.push_str(line);
-                }
-                modified_content.push('\n');
+                push_frozen_commit_line(
+                    &mut modified_content,
+                    line,
+                    trimmed,
+                    indent,
+                    &current_git_name,
+                    ctx,
+                );
                 continue;
             }
         }
@@ -586,7 +685,126 @@ pub(crate) fn ensure_file_in_mirror(
     }
 }
 
-/// Update sdk.yml with computed SHA256 hash for a specific copy_files entry
+struct YamlHashTarget<'a> {
+    config_path: &'a Path,
+    entry_name: &'a str,
+    entry_type: &'a str,
+    new_hash: &'a str,
+}
+
+/// Scan `lines` for the entry matched by `entry_matcher`, returning its
+/// start index and (if present) the index of its `sha256:` field, found by
+/// scanning up to 15 lines ahead of the entry's start.
+fn find_yaml_entry(
+    lines: &[&str],
+    entry_matcher: impl Fn(&[&str], usize) -> bool,
+) -> Option<(usize, Option<usize>)> {
+    for idx in 0..lines.len() {
+        if entry_matcher(lines, idx) {
+            let sha_line_idx = lines
+                .iter()
+                .enumerate()
+                .take(std::cmp::min(idx + 15, lines.len()))
+                .skip(idx)
+                .find(|(_, sha_line)| sha_line.trim().starts_with("sha256:"))
+                .map(|(k, _)| k);
+            return Some((idx, sha_line_idx));
+        }
+    }
+    None
+}
+
+fn update_existing_sha_line(
+    lines: &[&str],
+    line_idx: usize,
+    target: &YamlHashTarget,
+    dry_run: bool,
+) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+    let current_hash_in_file = lines[line_idx]
+        .trim()
+        .strip_prefix("sha256:")
+        .map(|s| s.trim())
+        .unwrap_or("");
+
+    if current_hash_in_file == target.new_hash {
+        return Ok(Some(false));
+    }
+
+    if dry_run {
+        messages::status(&format!(
+            "Would update line {} from '{}' to 'sha256: {}'",
+            line_idx + 1,
+            lines[line_idx],
+            target.new_hash
+        ));
+    } else {
+        let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
+        let indent: String = updated_lines[line_idx]
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .collect();
+        updated_lines[line_idx] = format!("{}sha256: {}", indent, target.new_hash);
+        fs::write(target.config_path, updated_lines.join("\n"))?;
+        messages::status(&format!(
+            "Updated sha256 for {}: {}",
+            target.entry_name, target.new_hash
+        ));
+    }
+
+    Ok(Some(true))
+}
+
+fn insert_missing_sha_line(
+    lines: &[&str],
+    entry_start_idx: usize,
+    target: &YamlHashTarget,
+    dry_run: bool,
+) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+    let field_indent = if entry_start_idx + 1 < lines.len() {
+        lines[entry_start_idx + 1]
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .collect::<String>()
+    } else {
+        "    ".to_string()
+    };
+
+    let field_indent_len = field_indent.len();
+    let mut last_entry_line = entry_start_idx;
+    for (scan_idx, scan_line) in lines.iter().enumerate().skip(entry_start_idx + 1) {
+        if scan_line.trim().is_empty() {
+            break;
+        }
+        let scan_indent_len = scan_line.chars().take_while(|c| c.is_whitespace()).count();
+        if scan_indent_len >= field_indent_len {
+            last_entry_line = scan_idx;
+        } else {
+            break;
+        }
+    }
+
+    if dry_run {
+        messages::status(&format!(
+            "Would add sha256 for {}: {}",
+            target.entry_name, target.new_hash
+        ));
+    } else {
+        let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
+        let new_hash = target.new_hash;
+        updated_lines.insert(
+            last_entry_line + 1,
+            format!("{field_indent}sha256: {new_hash}"),
+        );
+        fs::write(target.config_path, updated_lines.join("\n"))?;
+        messages::status(&format!(
+            "Added sha256 for {}: {}",
+            target.entry_name, target.new_hash
+        ));
+    }
+
+    Ok(Some(true))
+}
+
 /// Update or insert a sha256 hash for a YAML entry in a config file.
 ///
 /// The `entry_matcher` closure receives (line_index, trimmed_line_content) for each line
@@ -594,129 +812,33 @@ pub(crate) fn ensure_file_in_mirror(
 /// It also receives a mutable reference to a range end so it can indicate where to
 /// start looking for the sha256 field.
 fn update_yaml_entry_hash(
-    config_path: &Path,
-    entry_name: &str,
-    entry_type: &str,
-    new_hash: &str,
+    target: &YamlHashTarget,
     dry_run: bool,
     add_missing: bool,
     entry_matcher: impl Fn(&[&str], usize) -> bool,
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
-    let mut content = fs::read_to_string(config_path)?;
-
+    let content = fs::read_to_string(target.config_path)?;
     let lines: Vec<&str> = content.lines().collect();
-    let mut found_entry = false;
-    let mut updated_line_idx = None;
-    let mut entry_start_idx: Option<usize> = None;
 
-    for (idx, _line) in lines.iter().enumerate() {
-        if !found_entry && entry_matcher(&lines, idx) {
-            found_entry = true;
-            entry_start_idx = Some(idx);
+    let Some((entry_start_idx, sha_line_idx)) = find_yaml_entry(&lines, entry_matcher) else {
+        return Err(format!(
+            "Could not find {} entry for: {}",
+            target.entry_type, target.entry_name
+        )
+        .into());
+    };
 
-            // Find sha256 line within this entry (scan up to 15 lines ahead)
-            for (k, sha_line) in lines
-                .iter()
-                .enumerate()
-                .take(std::cmp::min(idx + 15, lines.len()))
-                .skip(idx)
-            {
-                if sha_line.trim().starts_with("sha256:") {
-                    updated_line_idx = Some(k);
-                    break;
-                }
-            }
-        }
+    if let Some(line_idx) = sha_line_idx {
+        return update_existing_sha_line(&lines, line_idx, target, dry_run);
     }
 
-    if !found_entry {
-        return Err(format!("Could not find {} entry for: {}", entry_type, entry_name).into());
-    }
-
-    if let Some(line_idx) = updated_line_idx {
-        let current_line = lines[line_idx];
-        let current_hash_in_file = current_line
-            .trim()
-            .strip_prefix("sha256:")
-            .map(|s| s.trim())
-            .unwrap_or("");
-
-        if current_hash_in_file == new_hash {
-            return Ok(Some(false));
-        }
-
-        if dry_run {
-            messages::status(&format!(
-                "Would update line {} from '{}' to 'sha256: {}'",
-                line_idx + 1,
-                lines[line_idx],
-                new_hash
-            ));
-        } else {
-            let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
-            let current_line = &updated_lines[line_idx];
-            let indent: String = current_line
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect();
-            updated_lines[line_idx] = format!("{}sha256: {}", indent, new_hash);
-            content = updated_lines.join("\n");
-            fs::write(config_path, &content)?;
-            messages::status(&format!("Updated sha256 for {}: {}", entry_name, new_hash));
-        }
-
-        return Ok(Some(true));
-    }
-
-    // No sha256 field exists
     if add_missing {
-        let entry_start = entry_start_idx.unwrap_or(0);
-
-        let field_indent = if entry_start + 1 < lines.len() {
-            lines[entry_start + 1]
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>()
-        } else {
-            "    ".to_string()
-        };
-
-        let field_indent_len = field_indent.len();
-        let mut last_entry_line = entry_start;
-        for (scan_idx, scan_line) in lines.iter().enumerate().skip(entry_start + 1) {
-            if scan_line.trim().is_empty() {
-                break;
-            }
-            let scan_indent_len = scan_line.chars().take_while(|c| c.is_whitespace()).count();
-            if scan_indent_len >= field_indent_len {
-                last_entry_line = scan_idx;
-            } else {
-                break;
-            }
-        }
-
-        if dry_run {
-            messages::status(&format!(
-                "Would add sha256 for {}: {}",
-                entry_name, new_hash
-            ));
-        } else {
-            let mut updated_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
-            updated_lines.insert(
-                last_entry_line + 1,
-                format!("{field_indent}sha256: {new_hash}"),
-            );
-            content = updated_lines.join("\n");
-            fs::write(config_path, &content)?;
-            messages::status(&format!("Added sha256 for {}: {}", entry_name, new_hash));
-        }
-
-        return Ok(Some(true));
+        return insert_missing_sha_line(&lines, entry_start_idx, target, dry_run);
     }
 
     messages::info(&format!(
         "Skipping {}: no sha256 field in entry",
-        entry_name
+        target.entry_name
     ));
     Ok(None)
 }
@@ -728,41 +850,39 @@ pub(crate) fn update_sdk_yaml_hash(
     dry_run: bool,
     add_missing: bool,
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
-    update_yaml_entry_hash(
+    let target = YamlHashTarget {
         config_path,
-        dest_or_source,
-        "copy_files",
+        entry_name: dest_or_source,
+        entry_type: "copy_files",
         new_hash,
-        dry_run,
-        add_missing,
-        |lines, idx| {
-            let trimmed = lines[idx].trim();
-            if trimmed.starts_with("- source:")
-                || trimmed.starts_with("- url:")
-                || trimmed == "source:"
-                || trimmed == "url:"
+    };
+    update_yaml_entry_hash(&target, dry_run, add_missing, |lines, idx| {
+        let trimmed = lines[idx].trim();
+        if trimmed.starts_with("- source:")
+            || trimmed.starts_with("- url:")
+            || trimmed == "source:"
+            || trimmed == "url:"
+        {
+            // Check next few lines for matching dest or source,
+            // stopping at the next entry boundary to avoid matching a sibling entry.
+            for line in lines
+                .iter()
+                .take(std::cmp::min(idx + 5, lines.len()))
+                .skip(idx + 1)
             {
-                // Check next few lines for matching dest or source,
-                // stopping at the next entry boundary to avoid matching a sibling entry.
-                for line in lines
-                    .iter()
-                    .take(std::cmp::min(idx + 5, lines.len()))
-                    .skip(idx + 1)
+                let tl = line.trim();
+                if tl.starts_with("- source:") || tl.starts_with("- url:") {
+                    break;
+                }
+                if line.contains(&format!("dest: {}", dest_or_source))
+                    || (line.contains("source:") && line.contains(dest_or_source))
                 {
-                    let tl = line.trim();
-                    if tl.starts_with("- source:") || tl.starts_with("- url:") {
-                        break;
-                    }
-                    if line.contains(&format!("dest: {}", dest_or_source))
-                        || (line.contains("source:") && line.contains(dest_or_source))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
             }
-            false
-        },
-    )
+        }
+        false
+    })
 }
 
 fn update_sdk_yaml_toolchain_hash(
@@ -772,25 +892,249 @@ fn update_sdk_yaml_toolchain_hash(
     dry_run: bool,
     add_missing: bool,
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
-    update_yaml_entry_hash(
+    let target = YamlHashTarget {
         config_path,
-        toolchain_name,
-        "toolchain",
+        entry_name: toolchain_name,
+        entry_type: "toolchain",
         new_hash,
-        dry_run,
-        add_missing,
-        |lines, idx| {
-            let trimmed = lines[idx].trim();
-            if trimmed.starts_with("- name:") {
-                let entry_name = trimmed
-                    .strip_prefix("- name:")
-                    .map(|s| s.trim())
-                    .unwrap_or("");
-                return entry_name == toolchain_name;
-            }
-            false
+    };
+    update_yaml_entry_hash(&target, dry_run, add_missing, |lines, idx| {
+        let trimmed = lines[idx].trim();
+        if trimmed.starts_with("- name:") {
+            let entry_name = trimmed
+                .strip_prefix("- name:")
+                .map(|s| s.trim())
+                .unwrap_or("");
+            return entry_name == toolchain_name;
+        }
+        false
+    })
+}
+
+/// `require_workspace_config`, printing the error and returning early on failure.
+fn require_workspace_or_return() -> Result<(PathBuf, PathBuf), ()> {
+    require_workspace_config().map_err(|e| messages::error(&e))
+}
+
+fn load_sdk_config_or_return(config_path: &Path, verbose: bool) -> Result<config::SdkConfig, ()> {
+    load_config_with_user_overrides(config_path, verbose)
+        .map_err(|e| messages::error(&format!("Error loading config: {}", e)))
+}
+
+#[derive(Default)]
+struct HashCounts {
+    processed: usize,
+    updated: usize,
+    skipped: usize,
+}
+
+fn print_hash_command_summary(dry_run: bool, counts: &HashCounts) {
+    messages::status("\n=== Summary ===");
+    messages::status(&format!("Processed: {}", counts.processed));
+    if dry_run {
+        messages::status(&format!("Would update: {}", counts.updated));
+        messages::status(&format!("Would skip:   {}", counts.skipped));
+        messages::status("(Dry run mode - no changes were made)");
+    } else {
+        messages::status(&format!("Updated:   {}", counts.updated));
+        messages::status(&format!("Skipped:   {}", counts.skipped));
+    }
+}
+
+struct HashComparison<'a> {
+    current_hash: &'a str,
+    computed_hash: &'a str,
+    has_sha256_field: bool,
+    hash_changed: bool,
+}
+
+/// Print the dry-run status line for one entry and update `counts` exactly as
+/// the real (non-dry-run) update would have.
+fn report_dry_run_hash_status(
+    label: &str,
+    name: &str,
+    cmp: &HashComparison,
+    add_missing: bool,
+    counts: &mut HashCounts,
+) {
+    messages::status(&format!("{}: {}", label, name));
+    messages::verbose(&format!(
+        "  Current hash:  {}\n  New hash:      {}",
+        if cmp.current_hash.is_empty() {
+            "<none>"
+        } else {
+            cmp.current_hash
         },
-    )
+        cmp.computed_hash
+    ));
+
+    if cmp.has_sha256_field && !cmp.hash_changed {
+        messages::status("  Status: Hash unchanged (no update needed)");
+    } else if !cmp.has_sha256_field && !add_missing {
+        messages::status("  Status: No sha256 field in entry (would be skipped)");
+        counts.skipped += 1;
+    } else if !cmp.has_sha256_field && add_missing {
+        messages::status("  Status: sha256 field would be added");
+        counts.updated += 1;
+    } else {
+        messages::status("  Status: Hash would be updated");
+        counts.updated += 1;
+    }
+}
+
+/// If this workspace extends: a base, only copy_files entries owned by this
+/// target (added directly in its own sdk.yml, or modified via its own
+/// overlay: key) can be updated here -- the base target's own entries are
+/// managed independently in the base's own manifest.
+fn resolve_copy_files_owned_scope(config_path: &Path) -> Result<Option<HashSet<String>>, ()> {
+    let extends_scope = load_extends_owned_entries(config_path).map_err(|e| messages::error(&e))?;
+    Ok(extends_scope.map(|(base_target, _, owned)| {
+        messages::status(&format!(
+            "This target extends '{}': only the {} copy_files entry(ies) owned by \
+             this target can be updated here.",
+            base_target,
+            owned.copy_files.len()
+        ));
+        owned.copy_files
+    }))
+}
+
+struct CopyFilesHashContext<'a> {
+    owned_dests: &'a Option<HashSet<String>>,
+    file_filter: Option<&'a str>,
+    config_source_dir: &'a Path,
+    mirror_path: &'a Path,
+    config_path: &'a Path,
+    dry_run: bool,
+    add_missing: bool,
+    verbose: bool,
+}
+
+fn process_copy_file_hash(
+    copy_file: &config::CopyFileConfig,
+    ctx: &CopyFilesHashContext,
+    counts: &mut HashCounts,
+) {
+    // Skip entries inherited from the base target: they aren't owned
+    // by this target, so there's nowhere here to write an updated hash
+    // back to.
+    if let Some(owned) = ctx.owned_dests {
+        if !owned.contains(&copy_file.dest) {
+            messages::info(&format!(
+                "Skipping {} (inherited from base target, not owned by this overlay)",
+                copy_file.dest
+            ));
+            return;
+        }
+    }
+
+    // Check if this file matches the filter (if provided)
+    if let Some(filter) = ctx.file_filter {
+        let matches_dest = copy_file.dest.contains(filter);
+        let matches_source = copy_file.source.contains(filter);
+        if !matches_dest && !matches_source {
+            return;
+        }
+    }
+
+    counts.processed += 1;
+
+    messages::status(&format!(
+        "Processing: {} -> {}",
+        copy_file.source, copy_file.dest
+    ));
+
+    // Compute the current hash (if sha256 exists)
+    let current_hash = copy_file.sha256.clone().unwrap_or_else(|| {
+        messages::verbose("No existing hash found");
+        String::new()
+    });
+
+    // Glob/wildcard sources cannot be hashed — skip with an informational message.
+    if copy_file.source.contains('*')
+        || copy_file.source.contains('?')
+        || copy_file.source.contains('[')
+    {
+        messages::info(&format!(
+            "Skipping wildcard source '{}': glob patterns cannot be hashed",
+            copy_file.source
+        ));
+        counts.skipped += 1;
+        return;
+    }
+
+    // Ensure file is available (download if needed)
+    let file_path = match ensure_file_in_mirror(copy_file, ctx.config_source_dir, ctx.mirror_path) {
+        Ok(path) => path,
+        Err(e) => {
+            messages::error(&format!("Error processing {}: {}", copy_file.dest, e));
+            counts.skipped += 1;
+            return;
+        }
+    };
+
+    // Compute SHA256 hash
+    let computed_hash = match compute_file_sha256(&file_path) {
+        Ok(hash) => hash,
+        Err(e) => {
+            messages::error(&format!(
+                "Failed to compute hash for {}: {}",
+                copy_file.dest, e
+            ));
+            counts.skipped += 1;
+            return;
+        }
+    };
+
+    // Check if hash changed
+    let hash_changed = current_hash != computed_hash && !current_hash.is_empty();
+    let has_sha256_field = !current_hash.is_empty();
+
+    if ctx.dry_run {
+        let cmp = HashComparison {
+            current_hash: &current_hash,
+            computed_hash: &computed_hash,
+            has_sha256_field,
+            hash_changed,
+        };
+        report_dry_run_hash_status("File", &copy_file.dest, &cmp, ctx.add_missing, counts);
+    } else {
+        // Update sdk.yml with the new hash
+        match update_sdk_yaml_hash(
+            ctx.config_path,
+            &copy_file.dest,
+            &computed_hash,
+            ctx.dry_run,
+            ctx.add_missing,
+        ) {
+            Ok(Some(true)) => {
+                // Successfully updated
+                counts.updated += 1;
+            }
+            Ok(None) => {
+                // No sha256 field exists, count as skipped
+                counts.skipped += 1;
+            }
+            Ok(Some(false)) => {
+                // Hash unchanged, no update needed
+            }
+            Err(e) => {
+                messages::error(&format!(
+                    "Failed to update sdk.yml for {}: {}",
+                    copy_file.dest, e
+                ));
+                counts.skipped += 1;
+            }
+        }
+    }
+
+    if ctx.verbose {
+        messages::verbose(&format!(
+            "Computed hash: {}\nFile size: {} bytes",
+            computed_hash,
+            fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
+        ));
+    }
 }
 
 /// Handle the copy-files-hash command
@@ -804,20 +1148,14 @@ pub(crate) fn handle_copy_files_hash_command(
     messages::set_verbose(verbose);
 
     // Must be run from within a workspace
-    let (workspace_path, config_path) = match require_workspace_config() {
+    let (workspace_path, config_path) = match require_workspace_or_return() {
         Ok(paths) => paths,
-        Err(e) => {
-            messages::error(&e);
-            return;
-        }
+        Err(()) => return,
     };
 
-    let mut sdk_config = match load_config_with_user_overrides(&config_path, verbose) {
+    let mut sdk_config = match load_sdk_config_or_return(&config_path, verbose) {
         Ok(config) => config,
-        Err(e) => {
-            messages::error(&format!("Error loading config: {}", e));
-            return;
-        }
+        Err(()) => return,
     };
 
     // Expand manifest ${{ VAR }} variables
@@ -834,25 +1172,10 @@ pub(crate) fn handle_copy_files_hash_command(
         return;
     }
 
-    // If this workspace extends: a base, only copy_files entries owned by
-    // this target (added directly in its own sdk.yml, or modified via its
-    // own overlay: key) can be updated here -- the base target's own entries
-    // are managed independently in the base's own manifest.
-    let extends_scope = match load_extends_owned_entries(&config_path) {
+    let owned_dests = match resolve_copy_files_owned_scope(&config_path) {
         Ok(scope) => scope,
-        Err(e) => {
-            messages::error(&e);
-            return;
-        }
+        Err(()) => return,
     };
-    if let Some((base_target, _, owned)) = &extends_scope {
-        messages::status(&format!(
-            "This target extends '{}': only the {} copy_files entry(ies) owned by \
-             this target can be updated here.",
-            base_target,
-            owned.copy_files.len()
-        ));
-    }
 
     // Resolve mirror from user config / built-in default.
     let mirror_path = resolve_mirror(None);
@@ -868,164 +1191,25 @@ pub(crate) fn handle_copy_files_hash_command(
     messages::status("Computing SHA256 hashes for copy_files entries...");
     messages::verbose(&format!("Mirror path: {}", mirror_path.display()));
 
-    let mut processed_count = 0;
-    let mut updated_count = 0;
-    let mut skipped_count = 0;
+    let ctx = CopyFilesHashContext {
+        owned_dests: &owned_dests,
+        file_filter,
+        config_source_dir: &config_source_dir,
+        mirror_path: &mirror_path,
+        config_path: &config_path,
+        dry_run,
+        add_missing,
+        verbose,
+    };
 
+    let mut counts = HashCounts::default();
     for copy_file in copy_files {
-        // Skip entries inherited from the base target: they aren't owned
-        // by this target, so there's nowhere here to write an updated hash
-        // back to.
-        if let Some((_, _, owned)) = &extends_scope {
-            if !owned.copy_files.contains(&copy_file.dest) {
-                messages::info(&format!(
-                    "Skipping {} (inherited from base target, not owned by this overlay)",
-                    copy_file.dest
-                ));
-                continue;
-            }
-        }
-        let write_target_path = config_path.clone();
-
-        // Check if this file matches the filter (if provided)
-        if let Some(filter) = file_filter {
-            let matches_dest = copy_file.dest.contains(filter);
-            let matches_source = copy_file.source.contains(filter);
-
-            if !matches_dest && !matches_source {
-                continue;
-            }
-        }
-
-        processed_count += 1;
-
-        messages::status(&format!(
-            "Processing: {} -> {}",
-            copy_file.source, copy_file.dest
-        ));
-
-        // Compute the current hash (if sha256 exists)
-        let current_hash = copy_file.sha256.clone().unwrap_or_else(|| {
-            messages::verbose("No existing hash found");
-            String::new()
-        });
-
-        // Glob/wildcard sources cannot be hashed — skip with an informational message.
-        if copy_file.source.contains('*')
-            || copy_file.source.contains('?')
-            || copy_file.source.contains('[')
-        {
-            messages::info(&format!(
-                "Skipping wildcard source '{}': glob patterns cannot be hashed",
-                copy_file.source
-            ));
-            skipped_count += 1;
-            continue;
-        }
-
-        // Ensure file is available (download if needed)
-        let file_path = match ensure_file_in_mirror(copy_file, &config_source_dir, &mirror_path) {
-            Ok(path) => path,
-            Err(e) => {
-                messages::error(&format!("Error processing {}: {}", copy_file.dest, e));
-                skipped_count += 1;
-                continue; // Continue with next file instead of failing entire command
-            }
-        };
-
-        // Compute SHA256 hash
-        let computed_hash = match compute_file_sha256(&file_path) {
-            Ok(hash) => hash,
-            Err(e) => {
-                messages::error(&format!(
-                    "Failed to compute hash for {}: {}",
-                    copy_file.dest, e
-                ));
-                skipped_count += 1;
-                continue; // Continue with next file instead of failing entire command
-            }
-        };
-
-        // Check if hash changed
-        let hash_changed = current_hash != computed_hash && !current_hash.is_empty();
-        let has_sha256_field = !current_hash.is_empty();
-
-        if dry_run {
-            messages::status(&format!("File: {}", copy_file.dest));
-            messages::verbose(&format!(
-                "  Current hash:  {}\n  New hash:      {}",
-                if current_hash.is_empty() {
-                    "<none>"
-                } else {
-                    &current_hash
-                },
-                computed_hash
-            ));
-
-            if has_sha256_field && !hash_changed {
-                messages::status("  Status: Hash unchanged (no update needed)");
-            } else if !has_sha256_field && !add_missing {
-                messages::status("  Status: No sha256 field in entry (would be skipped)");
-                skipped_count += 1;
-            } else if !has_sha256_field && add_missing {
-                messages::status("  Status: sha256 field would be added");
-                updated_count += 1;
-            } else {
-                messages::status("  Status: Hash would be updated");
-                updated_count += 1;
-            }
-        } else {
-            // Update sdk.yml with the new hash
-            match update_sdk_yaml_hash(
-                &write_target_path,
-                &copy_file.dest,
-                &computed_hash,
-                dry_run,
-                add_missing,
-            ) {
-                Ok(Some(true)) => {
-                    // Successfully updated
-                    updated_count += 1;
-                }
-                Ok(None) => {
-                    // No sha256 field exists, count as skipped
-                    skipped_count += 1;
-                }
-                Ok(Some(false)) => {
-                    // Hash unchanged, no update needed
-                }
-                Err(e) => {
-                    messages::error(&format!(
-                        "Failed to update sdk.yml for {}: {}",
-                        copy_file.dest, e
-                    ));
-                    skipped_count += 1;
-                }
-            }
-        }
-
-        if verbose {
-            messages::verbose(&format!(
-                "Computed hash: {}\nFile size: {} bytes",
-                computed_hash,
-                fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
-            ));
-        }
+        process_copy_file_hash(copy_file, &ctx, &mut counts);
     }
 
-    // Print summary
-    messages::status("\n=== Summary ===");
-    messages::status(&format!("Processed: {}", processed_count));
-    if dry_run {
-        messages::status(&format!("Would update: {}", updated_count));
-        messages::status(&format!("Would skip:   {}", skipped_count));
-        messages::status("(Dry run mode - no changes were made)");
-    } else {
-        messages::status(&format!("Updated:   {}", updated_count));
-        messages::status(&format!("Skipped:   {}", skipped_count));
-    }
+    print_hash_command_summary(dry_run, &counts);
 
-    if processed_count == 0 {
+    if counts.processed == 0 {
         messages::info("No files matched the filter or no copy_files entries found");
     }
 }
@@ -1033,6 +1217,130 @@ pub(crate) fn handle_copy_files_hash_command(
 /// Update sdk.yml with computed SHA256 hash for a specific toolchain entry
 ///
 /// Matches entries under the `toolchains:` section by the `name:` field.
+/// If this workspace extends: a base, only toolchain entries owned by this
+/// target (added directly in its own sdk.yml, or modified via its own
+/// overlay: key) can be updated here -- the base target's own entries are
+/// managed independently in the base's own manifest.
+fn resolve_toolchains_owned_scope(config_path: &Path) -> Result<Option<HashSet<String>>, ()> {
+    let extends_scope = load_extends_owned_entries(config_path).map_err(|e| messages::error(&e))?;
+    Ok(extends_scope.map(|(base_target, _, owned)| {
+        messages::status(&format!(
+            "This target extends '{}': only the {} toolchain(s) owned by this \
+             target can be updated here.",
+            base_target,
+            owned.toolchains.len()
+        ));
+        owned.toolchains
+    }))
+}
+
+struct ToolchainHashContext<'a> {
+    owned_names: &'a Option<HashSet<String>>,
+    file_filter: Option<&'a str>,
+    mirror_path: &'a Path,
+    config_path: &'a Path,
+    dry_run: bool,
+    add_missing: bool,
+    verbose: bool,
+}
+
+fn process_toolchain_hash(
+    toolchain: &config::ToolchainConfig,
+    ctx: &ToolchainHashContext,
+    counts: &mut HashCounts,
+) {
+    let name = toolchain.get_name();
+
+    // Skip entries inherited from the base target: they aren't owned
+    // by this target, so there's nowhere here to write an updated hash
+    // back to.
+    if let Some(owned) = ctx.owned_names {
+        if !owned.contains(&name) {
+            messages::info(&format!(
+                "Skipping {} (inherited from base target, not owned by this overlay)",
+                name
+            ));
+            return;
+        }
+    }
+
+    // Apply filter if provided
+    if let Some(filter) = ctx.file_filter {
+        if !name.contains(filter) && !toolchain.url.contains(filter) {
+            return;
+        }
+    }
+
+    counts.processed += 1;
+    messages::status(&format!("Processing: {}", name));
+
+    // Only compute hashes for archives that already exist in the mirror.
+    // Downloading is the job of "cim install toolchains".
+    let archive_path = ctx.mirror_path.join(&name);
+    if !archive_path.exists() || fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0) == 0 {
+        messages::info(&format!(
+            "Archive not found in mirror: {}\n  Run 'cim install toolchains' to download it.",
+            name
+        ));
+        counts.skipped += 1;
+        return;
+    }
+
+    // Compute SHA256 hash
+    let computed_hash = match compute_file_sha256(&archive_path) {
+        Ok(hash) => hash,
+        Err(e) => {
+            messages::error(&format!("Failed to compute hash for {}: {}", name, e));
+            counts.skipped += 1;
+            return;
+        }
+    };
+
+    let current_hash = toolchain.sha256.clone().unwrap_or_default();
+    let has_sha256_field = toolchain.sha256.is_some();
+    let hash_changed = !current_hash.is_empty() && current_hash != computed_hash;
+
+    if ctx.dry_run {
+        let cmp = HashComparison {
+            current_hash: &current_hash,
+            computed_hash: &computed_hash,
+            has_sha256_field,
+            hash_changed,
+        };
+        report_dry_run_hash_status("Toolchain", &name, &cmp, ctx.add_missing, counts);
+    } else {
+        match update_sdk_yaml_toolchain_hash(
+            ctx.config_path,
+            &name,
+            &computed_hash,
+            ctx.dry_run,
+            ctx.add_missing,
+        ) {
+            Ok(Some(true)) => {
+                counts.updated += 1;
+            }
+            Ok(None) => {
+                counts.skipped += 1;
+            }
+            Ok(Some(false)) => {
+                // Hash unchanged
+            }
+            Err(e) => {
+                messages::error(&format!("Failed to update sdk.yml for {}: {}", name, e));
+                counts.skipped += 1;
+            }
+        }
+    }
+
+    if ctx.verbose {
+        messages::verbose(&format!(
+            "Computed hash: {}\nFile size: {} bytes",
+            computed_hash,
+            fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0)
+        ));
+    }
+}
+
 /// Handle the hash-toolchains command
 pub(crate) fn handle_toolchains_hash_command(
     file_filter: Option<&str>,
@@ -1042,20 +1350,14 @@ pub(crate) fn handle_toolchains_hash_command(
 ) {
     messages::set_verbose(verbose);
 
-    let (_workspace_path, config_path) = match require_workspace_config() {
+    let (_workspace_path, config_path) = match require_workspace_or_return() {
         Ok(paths) => paths,
-        Err(e) => {
-            messages::error(&e);
-            return;
-        }
+        Err(()) => return,
     };
 
-    let sdk_config = match load_config_with_user_overrides(&config_path, verbose) {
+    let sdk_config = match load_sdk_config_or_return(&config_path, verbose) {
         Ok(config) => config,
-        Err(e) => {
-            messages::error(&format!("Error loading config: {}", e));
-            return;
-        }
+        Err(()) => return,
     };
 
     let Some(toolchains) = &sdk_config.toolchains else {
@@ -1068,25 +1370,10 @@ pub(crate) fn handle_toolchains_hash_command(
         return;
     }
 
-    // If this workspace extends: a base, only toolchain entries owned by
-    // this target (added directly in its own sdk.yml, or modified via its
-    // own overlay: key) can be updated here -- the base target's own entries
-    // are managed independently in the base's own manifest.
-    let extends_scope = match load_extends_owned_entries(&config_path) {
+    let owned_names = match resolve_toolchains_owned_scope(&config_path) {
         Ok(scope) => scope,
-        Err(e) => {
-            messages::error(&e);
-            return;
-        }
+        Err(()) => return,
     };
-    if let Some((base_target, _, owned)) = &extends_scope {
-        messages::status(&format!(
-            "This target extends '{}': only the {} toolchain(s) owned by this \
-             target can be updated here.",
-            base_target,
-            owned.toolchains.len()
-        ));
-    }
 
     let mirror_path = resolve_mirror(None);
 
@@ -1107,136 +1394,269 @@ pub(crate) fn handle_toolchains_hash_command(
 
     messages::status("Computing SHA256 hashes for toolchain entries...");
 
-    let mut processed_count = 0;
-    let mut updated_count = 0;
-    let mut skipped_count = 0;
+    let ctx = ToolchainHashContext {
+        owned_names: &owned_names,
+        file_filter,
+        mirror_path: &mirror_path,
+        config_path: &config_path,
+        dry_run,
+        add_missing,
+        verbose,
+    };
 
+    let mut counts = HashCounts::default();
     for toolchain in &applicable {
-        let name = toolchain.get_name();
-
-        // Skip entries inherited from the base target: they aren't owned
-        // by this target, so there's nowhere here to write an updated hash
-        // back to.
-        if let Some((_, _, owned)) = &extends_scope {
-            if !owned.toolchains.contains(&name) {
-                messages::info(&format!(
-                    "Skipping {} (inherited from base target, not owned by this overlay)",
-                    name
-                ));
-                continue;
-            }
-        }
-        let write_target_path = config_path.clone();
-
-        // Apply filter if provided
-        if let Some(filter) = file_filter {
-            if !name.contains(filter) && !toolchain.url.contains(filter) {
-                continue;
-            }
-        }
-
-        processed_count += 1;
-        messages::status(&format!("Processing: {}", name));
-
-        // Only compute hashes for archives that already exist in the mirror.
-        // Downloading is the job of "cim install toolchains".
-        let archive_path = mirror_path.join(&name);
-        if !archive_path.exists() || fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0) == 0
-        {
-            messages::info(&format!(
-                "Archive not found in mirror: {}\n  Run 'cim install toolchains' to download it.",
-                name
-            ));
-            skipped_count += 1;
-            continue;
-        }
-
-        // Compute SHA256 hash
-        let computed_hash = match compute_file_sha256(&archive_path) {
-            Ok(hash) => hash,
-            Err(e) => {
-                messages::error(&format!("Failed to compute hash for {}: {}", name, e));
-                skipped_count += 1;
-                continue;
-            }
-        };
-
-        let current_hash = toolchain.sha256.clone().unwrap_or_default();
-        let has_sha256_field = toolchain.sha256.is_some();
-        let hash_changed = !current_hash.is_empty() && current_hash != computed_hash;
-
-        if dry_run {
-            messages::status(&format!("Toolchain: {}", name));
-            messages::verbose(&format!(
-                "  Current hash:  {}\n  New hash:      {}",
-                if current_hash.is_empty() {
-                    "<none>"
-                } else {
-                    &current_hash
-                },
-                computed_hash
-            ));
-
-            if has_sha256_field && !hash_changed {
-                messages::status("  Status: Hash unchanged (no update needed)");
-            } else if !has_sha256_field && !add_missing {
-                messages::status("  Status: No sha256 field in entry (would be skipped)");
-                skipped_count += 1;
-            } else if !has_sha256_field && add_missing {
-                messages::status("  Status: sha256 field would be added");
-                updated_count += 1;
-            } else {
-                messages::status("  Status: Hash would be updated");
-                updated_count += 1;
-            }
-        } else {
-            let tc_name = &name;
-            match update_sdk_yaml_toolchain_hash(
-                &write_target_path,
-                tc_name,
-                &computed_hash,
-                dry_run,
-                add_missing,
-            ) {
-                Ok(Some(true)) => {
-                    updated_count += 1;
-                }
-                Ok(None) => {
-                    skipped_count += 1;
-                }
-                Ok(Some(false)) => {
-                    // Hash unchanged
-                }
-                Err(e) => {
-                    messages::error(&format!("Failed to update sdk.yml for {}: {}", name, e));
-                    skipped_count += 1;
-                }
-            }
-        }
-
-        if verbose {
-            messages::verbose(&format!(
-                "Computed hash: {}\nFile size: {} bytes",
-                computed_hash,
-                fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0)
-            ));
-        }
+        process_toolchain_hash(toolchain, &ctx, &mut counts);
     }
 
-    // Print summary
+    print_hash_command_summary(dry_run, &counts);
+
+    if counts.processed == 0 {
+        messages::info("No toolchains matched the filter or no toolchain entries found");
+    }
+}
+
+#[derive(Default)]
+struct SyncCounts {
+    synced: usize,
+    skipped: usize,
+    failed: usize,
+}
+
+fn print_sync_summary(dry_run: bool, counts: &SyncCounts) {
     messages::status("\n=== Summary ===");
-    messages::status(&format!("Processed: {}", processed_count));
     if dry_run {
-        messages::status(&format!("Would update: {}", updated_count));
-        messages::status(&format!("Would skip:   {}", skipped_count));
+        messages::status(&format!("Would sync: {}", counts.synced));
         messages::status("(Dry run mode - no changes were made)");
     } else {
-        messages::status(&format!("Updated:   {}", updated_count));
-        messages::status(&format!("Skipped:   {}", skipped_count));
+        messages::status(&format!("Synced:  {}", counts.synced));
+        messages::status(&format!("Skipped: {}", counts.skipped));
+        messages::status(&format!("Failed:  {}", counts.failed));
+    }
+}
+
+fn filter_copy_files(
+    copy_files: &[config::CopyFileConfig],
+    file_filter: Option<&str>,
+) -> Vec<config::CopyFileConfig> {
+    if let Some(filter) = file_filter {
+        copy_files
+            .iter()
+            .filter(|cf| cf.dest.contains(filter) || cf.source.contains(filter))
+            .cloned()
+            .collect()
+    } else {
+        copy_files.to_vec()
+    }
+}
+
+struct SyncFilesContext<'a> {
+    workspace_path: &'a Path,
+    mirror_path: &'a Path,
+    config_source_dir: &'a Path,
+    mode_str: &'a str,
+    dry_run: bool,
+    force: bool,
+}
+
+fn report_dry_run_url_sync(
+    copy_file: &config::CopyFileConfig,
+    dest_path: &Path,
+    use_cache: bool,
+    use_symlink: bool,
+    expected_sha256: &Option<String>,
+    mirror_path: &Path,
+) {
+    messages::status(&format!("  Would download to: {}", dest_path.display()));
+    if use_cache {
+        messages::status(&format!(
+            "  Cache: enabled (mirror: {})",
+            mirror_path.display()
+        ));
+    }
+    if use_symlink {
+        messages::status("  Symlink: true");
+    }
+    if expected_sha256.is_some() {
+        messages::status("  SHA256 verification: enabled");
+    }
+    match copy_file.resolved_headers() {
+        Ok(h) if !h.is_empty() => {
+            let names: Vec<&str> = h.iter().map(|(n, _)| n.as_str()).collect();
+            messages::status(&format!("  Header(s): {}", names.join(", ")));
+        }
+        Ok(_) => {}
+        Err(e) => messages::status(&format!("  Header(s): would fail -- {}", e)),
+    }
+    match copy_file.resolved_basic_auth() {
+        Ok(Some(_)) => messages::status("  Basic auth: enabled (credentials redacted)"),
+        Ok(None) => {}
+        Err(e) => messages::status(&format!("  Basic auth: would fail -- {}", e)),
+    }
+}
+
+fn process_url_copy_file(
+    copy_file: &config::CopyFileConfig,
+    ctx: &SyncFilesContext,
+    processed_urls: &mut HashSet<String>,
+    counts: &mut SyncCounts,
+) {
+    // Skip duplicate URLs
+    if !processed_urls.insert(copy_file.source.clone()) {
+        messages::verbose(&format!("Skipping duplicate URL: {}", copy_file.source));
+        return;
     }
 
-    if processed_count == 0 {
-        messages::info("No toolchains matched the filter or no toolchain entries found");
+    let expanded_dest = expand_env_vars(&copy_file.dest);
+    let dest_path = ctx.workspace_path.join(&expanded_dest);
+    let use_cache = copy_file.cache.unwrap_or(false);
+    let use_symlink = copy_file.symlink.unwrap_or(false) && use_cache;
+    let expected_sha256 = copy_file.sha256.clone();
+
+    messages::status(&format!(
+        "{}Processing: {} -> {}",
+        ctx.mode_str, copy_file.source, copy_file.dest
+    ));
+
+    if ctx.dry_run {
+        report_dry_run_url_sync(
+            copy_file,
+            &dest_path,
+            use_cache,
+            use_symlink,
+            &expected_sha256,
+            ctx.mirror_path,
+        );
+        counts.synced += 1;
+        return;
+    }
+
+    // Check if file exists and --force is not set
+    if dest_path.exists() && !ctx.force {
+        messages::info(&format!(
+            "  Skipping: {} already exists (use --force to overwrite)",
+            copy_file.dest
+        ));
+        counts.skipped += 1;
+        return;
+    }
+
+    // Download the file
+    let headers = match copy_file.resolved_headers() {
+        Ok(h) => h,
+        Err(e) => {
+            messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
+            counts.failed += 1;
+            return;
+        }
+    };
+    let basic_auth = match copy_file.resolved_basic_auth() {
+        Ok(a) => a,
+        Err(e) => {
+            messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
+            counts.failed += 1;
+            return;
+        }
+    };
+
+    // Expand $VAR/${VAR} in the source URL, matching process_copy_files
+    // so cache-path hashing stays consistent across both code paths.
+    let expanded_url = expand_env_vars(&copy_file.source);
+    match download_file_with_cache(DownloadConfig {
+        url: &expanded_url,
+        dest_path: &dest_path,
+        mirror_path: ctx.mirror_path,
+        use_cache,
+        expected_sha256: expected_sha256.as_deref(),
+        post_data: copy_file.post_data.as_deref(),
+        headers: &headers,
+        basic_auth: basic_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+        multi_progress: None,
+        use_symlink,
+    }) {
+        Ok(_) => {
+            messages::success(&format!("  Synced: {}", copy_file.dest));
+            counts.synced += 1;
+        }
+        Err(e) => {
+            messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
+            counts.failed += 1;
+        }
+    }
+}
+
+fn process_local_copy_file(
+    copy_file: &config::CopyFileConfig,
+    ctx: &SyncFilesContext,
+    counts: &mut SyncCounts,
+) {
+    let expanded_source = expand_env_vars(&copy_file.source);
+    let source_path = if Path::new(&expanded_source).is_absolute() {
+        PathBuf::from(&expanded_source)
+    } else {
+        ctx.config_source_dir.join(&expanded_source)
+    };
+
+    let expanded_dest = expand_env_vars(&copy_file.dest);
+    let dest_path = ctx.workspace_path.join(&expanded_dest);
+
+    messages::status(&format!(
+        "{}Processing: {} -> {}",
+        ctx.mode_str, copy_file.source, copy_file.dest
+    ));
+
+    if !source_path.exists() {
+        messages::error(&format!(
+            "  Source file does not exist: {}",
+            source_path.display()
+        ));
+        counts.failed += 1;
+        return;
+    }
+
+    if ctx.dry_run {
+        messages::status(&format!("  Would copy to: {}", dest_path.display()));
+        counts.synced += 1;
+        return;
+    }
+
+    // Check if destination exists and --force is not set
+    if dest_path.exists() && !ctx.force {
+        messages::info(&format!(
+            "  Skipping: {} already exists (use --force to overwrite)",
+            copy_file.dest
+        ));
+        counts.skipped += 1;
+        return;
+    }
+
+    // Handle directories
+    if source_path.is_dir() {
+        match copy_dir_recursive(&source_path, &dest_path) {
+            Ok(_) => {
+                messages::success(&format!("  Synced directory: {}", copy_file.dest));
+                counts.synced += 1;
+            }
+            Err(e) => {
+                messages::error(&format!(
+                    "  Failed to sync directory {}: {}",
+                    copy_file.dest, e
+                ));
+                counts.failed += 1;
+            }
+        }
+    } else {
+        // Single file copy
+        match copy_single_file(&source_path, &dest_path, &copy_file.source, &copy_file.dest) {
+            Ok(_) => {
+                messages::success(&format!("  Synced: {}", copy_file.dest));
+                counts.synced += 1;
+            }
+            Err(e) => {
+                messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
+                counts.failed += 1;
+            }
+        }
     }
 }
 
@@ -1247,29 +1667,20 @@ pub(crate) fn handle_sync_files_hash_command(
     verbose: bool,
     force: bool,
 ) {
-    use std::collections::HashSet;
-
     // Set verbose mode for this command
     messages::set_verbose(verbose);
 
-    let (workspace_path, config_path) = match require_workspace_config() {
+    let (workspace_path, config_path) = match require_workspace_or_return() {
         Ok(paths) => paths,
-        Err(e) => {
-            messages::error(&e);
-            return;
-        }
+        Err(()) => return,
     };
 
-    let mut sdk_config = match load_config_with_user_overrides(&config_path, verbose) {
+    let mut sdk_config = match load_sdk_config_or_return(&config_path, verbose) {
         Ok(config) => config,
-        Err(e) => {
-            messages::error(&format!("Error loading config: {}", e));
-            return;
-        }
+        Err(()) => return,
     };
 
     // Expand manifest ${{ VAR }} variables in copy_files source and dest
-    // Expand manifest ${{ VAR }} variables
     expand_manifest_vars_in_config(&mut sdk_config);
 
     // Get copy_files configuration
@@ -1295,15 +1706,7 @@ pub(crate) fn handle_sync_files_hash_command(
     // _temp_clone_dir must stay alive for the duration of the function
 
     // Filter files if a specific filter is provided
-    let files_to_process: Vec<_> = if let Some(filter) = file_filter {
-        copy_files
-            .iter()
-            .filter(|cf| cf.dest.contains(filter) || cf.source.contains(filter))
-            .cloned()
-            .collect()
-    } else {
-        copy_files.clone()
-    };
+    let files_to_process = filter_copy_files(copy_files, file_filter);
 
     if files_to_process.is_empty() {
         messages::info("No files matched the filter");
@@ -1317,203 +1720,35 @@ pub(crate) fn handle_sync_files_hash_command(
         files_to_process.len()
     ));
 
-    let mut synced_count = 0;
-    let mut skipped_count = 0;
-    let mut failed_count = 0;
-    let mut processed_urls = HashSet::new();
-
     // Separate URL downloads from local file operations
     let (url_files, local_files): (Vec<_>, Vec<_>) =
         files_to_process.iter().partition(|cf| is_url(&cf.source));
 
+    let ctx = SyncFilesContext {
+        workspace_path: &workspace_path,
+        mirror_path: &mirror_path,
+        config_source_dir: &config_source_dir,
+        mode_str,
+        dry_run,
+        force,
+    };
+
+    let mut counts = SyncCounts::default();
+    let mut processed_urls = HashSet::new();
+
     // Process URL downloads
     for copy_file in &url_files {
-        // Skip duplicate URLs
-        if !processed_urls.insert(copy_file.source.clone()) {
-            messages::verbose(&format!("Skipping duplicate URL: {}", copy_file.source));
-            continue;
-        }
-
-        let expanded_dest = expand_env_vars(&copy_file.dest);
-        let dest_path = workspace_path.join(&expanded_dest);
-        let use_cache = copy_file.cache.unwrap_or(false);
-        let use_symlink = copy_file.symlink.unwrap_or(false) && use_cache;
-        let expected_sha256 = copy_file.sha256.clone();
-
-        messages::status(&format!(
-            "{}Processing: {} -> {}",
-            mode_str, copy_file.source, copy_file.dest
-        ));
-
-        if dry_run {
-            messages::status(&format!("  Would download to: {}", dest_path.display()));
-            if use_cache {
-                messages::status(&format!(
-                    "  Cache: enabled (mirror: {})",
-                    mirror_path.display()
-                ));
-            }
-            if use_symlink {
-                messages::status("  Symlink: true");
-            }
-            if expected_sha256.is_some() {
-                messages::status("  SHA256 verification: enabled");
-            }
-            match copy_file.resolved_headers() {
-                Ok(h) if !h.is_empty() => {
-                    let names: Vec<&str> = h.iter().map(|(n, _)| n.as_str()).collect();
-                    messages::status(&format!("  Header(s): {}", names.join(", ")));
-                }
-                Ok(_) => {}
-                Err(e) => messages::status(&format!("  Header(s): would fail -- {}", e)),
-            }
-            match copy_file.resolved_basic_auth() {
-                Ok(Some(_)) => messages::status("  Basic auth: enabled (credentials redacted)"),
-                Ok(None) => {}
-                Err(e) => messages::status(&format!("  Basic auth: would fail -- {}", e)),
-            }
-            synced_count += 1;
-            continue;
-        }
-
-        // Check if file exists and --force is not set
-        if dest_path.exists() && !force {
-            messages::info(&format!(
-                "  Skipping: {} already exists (use --force to overwrite)",
-                copy_file.dest
-            ));
-            skipped_count += 1;
-            continue;
-        }
-
-        // Download the file
-        let headers = match copy_file.resolved_headers() {
-            Ok(h) => h,
-            Err(e) => {
-                messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
-                failed_count += 1;
-                continue;
-            }
-        };
-        let basic_auth = match copy_file.resolved_basic_auth() {
-            Ok(a) => a,
-            Err(e) => {
-                messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
-                failed_count += 1;
-                continue;
-            }
-        };
-
-        // Expand $VAR/${VAR} in the source URL, matching process_copy_files
-        // so cache-path hashing stays consistent across both code paths.
-        let expanded_url = expand_env_vars(&copy_file.source);
-        match download_file_with_cache(DownloadConfig {
-            url: &expanded_url,
-            dest_path: &dest_path,
-            mirror_path: &mirror_path,
-            use_cache,
-            expected_sha256: expected_sha256.as_deref(),
-            post_data: copy_file.post_data.as_deref(),
-            headers: &headers,
-            basic_auth: basic_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
-            multi_progress: None,
-            use_symlink,
-        }) {
-            Ok(_) => {
-                messages::success(&format!("  Synced: {}", copy_file.dest));
-                synced_count += 1;
-            }
-            Err(e) => {
-                messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
-                failed_count += 1;
-            }
-        }
+        process_url_copy_file(copy_file, &ctx, &mut processed_urls, &mut counts);
     }
 
     // Process local files
     for copy_file in &local_files {
-        let expanded_source = expand_env_vars(&copy_file.source);
-        let source_path = if Path::new(&expanded_source).is_absolute() {
-            PathBuf::from(&expanded_source)
-        } else {
-            config_source_dir.join(&expanded_source)
-        };
-
-        let expanded_dest = expand_env_vars(&copy_file.dest);
-        let dest_path = workspace_path.join(&expanded_dest);
-
-        messages::status(&format!(
-            "{}Processing: {} -> {}",
-            mode_str, copy_file.source, copy_file.dest
-        ));
-
-        if !source_path.exists() {
-            messages::error(&format!(
-                "  Source file does not exist: {}",
-                source_path.display()
-            ));
-            failed_count += 1;
-            continue;
-        }
-
-        if dry_run {
-            messages::status(&format!("  Would copy to: {}", dest_path.display()));
-            synced_count += 1;
-            continue;
-        }
-
-        // Check if destination exists and --force is not set
-        if dest_path.exists() && !force {
-            messages::info(&format!(
-                "  Skipping: {} already exists (use --force to overwrite)",
-                copy_file.dest
-            ));
-            skipped_count += 1;
-            continue;
-        }
-
-        // Handle directories
-        if source_path.is_dir() {
-            match copy_dir_recursive(&source_path, &dest_path) {
-                Ok(_) => {
-                    messages::success(&format!("  Synced directory: {}", copy_file.dest));
-                    synced_count += 1;
-                }
-                Err(e) => {
-                    messages::error(&format!(
-                        "  Failed to sync directory {}: {}",
-                        copy_file.dest, e
-                    ));
-                    failed_count += 1;
-                }
-            }
-        } else {
-            // Single file copy
-            match copy_single_file(&source_path, &dest_path, &copy_file.source, &copy_file.dest) {
-                Ok(_) => {
-                    messages::success(&format!("  Synced: {}", copy_file.dest));
-                    synced_count += 1;
-                }
-                Err(e) => {
-                    messages::error(&format!("  Failed to sync {}: {}", copy_file.dest, e));
-                    failed_count += 1;
-                }
-            }
-        }
+        process_local_copy_file(copy_file, &ctx, &mut counts);
     }
 
-    // Print summary
-    messages::status("\n=== Summary ===");
-    if dry_run {
-        messages::status(&format!("Would sync: {}", synced_count));
-        messages::status("(Dry run mode - no changes were made)");
-    } else {
-        messages::status(&format!("Synced:  {}", synced_count));
-        messages::status(&format!("Skipped: {}", skipped_count));
-        messages::status(&format!("Failed:  {}", failed_count));
-    }
+    print_sync_summary(dry_run, &counts);
 
-    if failed_count > 0 {
+    if counts.failed > 0 {
         std::process::exit(1);
     }
 }
