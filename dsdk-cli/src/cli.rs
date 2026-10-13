@@ -557,7 +557,45 @@ pub enum UtilsCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
+    use clap::{Command, CommandFactory, Parser};
+
+    fn visit(cmd: &Command, f: &mut dyn FnMut(&Command)) {
+        f(cmd);
+        for sub in cmd.get_subcommands() {
+            visit(sub, f);
+        }
+    }
+
+    #[test]
+    fn test_every_option_has_short_form_except_verbose() {
+        let mut missing = Vec::new();
+        visit(&Cli::command(), &mut |cmd| {
+            for arg in cmd.get_arguments() {
+                if !arg.is_positional() && arg.get_short().is_none() && arg.get_id() != "verbose" {
+                    missing.push(format!("{} --{}", cmd.get_name(), arg.get_id()));
+                }
+            }
+        });
+        assert!(
+            missing.is_empty(),
+            "options without short form: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn test_short_help_does_not_wrap_at_80_columns() {
+        let mut wrapped = Vec::new();
+        visit(&Cli::command(), &mut |cmd| {
+            let help = cmd.clone().term_width(80).render_help().to_string();
+            for line in help.lines() {
+                let indent = line.len() - line.trim_start().len();
+                if indent >= 14 && !line.trim().is_empty() {
+                    wrapped.push(format!("{}: {}", cmd.get_name(), line.trim()));
+                }
+            }
+        });
+        assert!(wrapped.is_empty(), "wrapped help lines: {wrapped:#?}");
+    }
 
     #[test]
     fn test_new_cli_structure_compatibility() {
