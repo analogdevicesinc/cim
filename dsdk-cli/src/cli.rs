@@ -250,30 +250,26 @@ pub enum Commands {
     },
     /// Create release tags and configuration
     Release {
-        /// Release tag to apply (e.g., v1.0.0)
-        #[arg(short, long, help = "Release tag to apply to repositories")]
+        /// Release tag to apply, e.g. v1.0.0
+        #[arg(short, long)]
         tag: Option<String>,
         /// Generate a release configuration file
-        #[arg(long, help = "Generate release configuration file")]
+        #[arg(short, long)]
         genconfig: bool,
-        /// Include only repositories matching the given regex patterns
-        #[arg(
-            long,
-            help = "Include repositories matching regex patterns.\n\
-                           Supports comma-separated values: --include 'adi.*,core.*'\n\
-                           Or multiple flags: --include adi.* --include core.*"
-        )]
+        /// Only repositories matching this regex
+        ///
+        /// Comma-separated or repeated: --include 'adi.*,core.*' or
+        /// --include 'adi.*' --include 'core.*'.
+        #[arg(short, long, value_name = "REGEX")]
         include: Vec<String>,
-        /// Exclude repositories matching the given regex patterns
-        #[arg(
-            long,
-            help = "Exclude repositories matching regex patterns.\n\
-                           Supports comma-separated values: --exclude 'drivers,CMSIS_6'\n\
-                           Or multiple flags: --exclude drivers --exclude CMSIS_6"
-        )]
+        /// Skip repositories matching this regex
+        ///
+        /// Comma-separated or repeated: --exclude 'drivers,CMSIS_6' or
+        /// --exclude drivers --exclude CMSIS_6.
+        #[arg(short, long, value_name = "REGEX")]
         exclude: Vec<String>,
-        /// Show what would be done without executing
-        #[arg(long, help = "Show what would be done without making any changes")]
+        /// Show what would be done without changes
+        #[arg(short = 'n', long)]
         dry_run: bool,
     },
 

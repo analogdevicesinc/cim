@@ -41,7 +41,8 @@
 #   - docs serve: --port (-p), --host (-H)
 #   - docker create: --target (-t), --source (-s), --version (-v), --distro (-d),
 #                    --output (-o), --force (-f)
-#   - release: --tag (-t), --genconfig, --include, --exclude, --dry-run
+#   - release: --tag (-t), --genconfig (-g), --include (-i), --exclude (-e),
+#              --dry-run (-n)
 #   - config: --list (-l), --get (-g), --path (-p), --template (-t), --create (-c),
 #             --force (-f), --edit (-e), --validate (-v)
 #   - utils hash-copy-files: --dry-run, --verbose (-v), --add-missing
@@ -514,13 +515,13 @@ _cim_completions() {
                     # Tag values are user-defined, no completion
                     return 0
                     ;;
-                --include|--exclude)
+                -i|--include|-e|--exclude)
                     # Common regex patterns for include/exclude
                     COMPREPLY=( $(compgen -W "\"optee.*\" \"test.*\" \".*-test\" \".*_test\" \"adi.*\" \"core.*\"" -- "${cur}") )
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--tag -t --genconfig --include --exclude --dry-run --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--tag -t --genconfig -g --include -i --exclude -e --dry-run -n --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac
