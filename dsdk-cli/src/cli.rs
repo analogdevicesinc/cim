@@ -321,49 +321,39 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum DocsCommand {
-    /// Create unified documentation by aggregating all repository docs
+    /// Aggregate all repository docs into one tree
     Create {
-        /// Force recreation of documentation even if it exists
-        #[arg(short, long, help = "Force recreation of existing documentation")]
+        /// Recreate documentation even if it exists
+        #[arg(short, long)]
         force: bool,
-        /// Theme to use for documentation
-        #[arg(long, default_value = "sphinx_rtd_theme", help = "Sphinx theme to use")]
+        /// Sphinx theme
+        #[arg(short, long, default_value = "sphinx_rtd_theme")]
         theme: String,
-        /// Use symbolic links instead of copying files (Linux/macOS only)
-        #[arg(
-            long,
-            help = "Create symbolic links instead of copying documentation files"
-        )]
+        /// Symlink files instead of copying (Linux/macOS)
+        #[arg(short = 'l', long)]
         symlink: bool,
-        /// Enable verbose output
-        #[arg(long, help = "Show detailed search information")]
+        /// Show detailed search information
+        #[arg(long)]
         verbose: bool,
-        /// Certificate validation mode for downloads (strict, relaxed, auto)
-        #[arg(
-            long,
-            value_name = "MODE",
-            help = "Certificate validation: strict (default), relaxed (insecure), auto"
-        )]
+        /// Certificate validation mode
+        ///
+        /// One of: strict (default), relaxed (insecure), auto.
+        #[arg(short = 'c', long, value_name = "MODE")]
         cert_validation: Option<String>,
     },
     /// Build the unified documentation
     Build {
-        /// Output format (html, pdf, epub)
-        #[arg(short, long, default_value = "html", help = "Output format")]
+        /// Output format: html, pdf or epub
+        #[arg(short, long, default_value = "html")]
         format: String,
     },
     /// Serve documentation locally with live reload
     Serve {
         /// Port to serve on
-        #[arg(
-            short,
-            long,
-            default_value = "8000",
-            help = "Port to serve documentation"
-        )]
+        #[arg(short, long, default_value = "8000")]
         port: u16,
         /// Host to bind to
-        #[arg(long, default_value = "localhost", help = "Host to bind to")]
+        #[arg(short = 'H', long, default_value = "localhost")]
         host: String,
     },
 }

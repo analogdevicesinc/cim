@@ -35,9 +35,10 @@
 #   - install toolchains: --force (-f), --symlink (-l), --verbose,
 #                         --cert-validation (-c)
 #   - install tools: name, --list (-l), --all (-a), --force (-f)
-#   - docs create: --force (-f), --theme, --symlink, --verbose, --cert-validation
+#   - docs create: --force (-f), --theme (-t), --symlink (-l), --verbose,
+#                  --cert-validation (-c)
 #   - docs build: --format (-f)
-#   - docs serve: --port (-p), --host
+#   - docs serve: --port (-p), --host (-H)
 #   - docker create: --target (-t), --source (-s), --version (-v), --distro (-d),
 #                    --output (-o), --force (-f)
 #   - release: --tag (-t), --genconfig, --include, --exclude, --dry-run
@@ -417,23 +418,23 @@ _cim_completions() {
         docs)
             if [ $COMP_CWORD -eq 2 ]; then
                 # Docs subcommands
-                COMPREPLY=( $(compgen -W "create build serve --help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "create build serve --help -h" -- "${cur}") )
                 return 0
             elif [ $COMP_CWORD -gt 2 ]; then
                 # Handle docs subcommand completion
                 case "${COMP_WORDS[2]}" in
                     create)
                         case "${prev}" in
-                            --theme)
+                            -t|--theme)
                                 COMPREPLY=( $(compgen -W "sphinx_rtd_theme alabaster classic nature pyramid bootstrap" -- "${cur}") )
                                 return 0
                                 ;;
-                            --cert-validation)
+                            -c|--cert-validation)
                                 COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
                                 return 0
                                 ;;
                             *)
-                                COMPREPLY=( $(compgen -W "--force -f --theme --symlink --verbose --cert-validation --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--force -f --theme -t --symlink -l --verbose --cert-validation -c --help -h" -- "${cur}") )
                                 return 0
                                 ;;
                         esac
@@ -445,19 +446,19 @@ _cim_completions() {
                                 return 0
                                 ;;
                             *)
-                                COMPREPLY=( $(compgen -W "--format -f --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--format -f --help -h" -- "${cur}") )
                                 return 0
                                 ;;
                         esac
                         ;;
                     serve)
                         case "${prev}" in
-                            -p|--port|--host)
+                            -p|--port|-H|--host)
                                 # No completion for port/host values
                                 return 0
                                 ;;
                             *)
-                                COMPREPLY=( $(compgen -W "--port -p --host --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--port -p --host -H --help -h" -- "${cur}") )
                                 return 0
                                 ;;
                         esac
