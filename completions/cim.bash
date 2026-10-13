@@ -45,9 +45,9 @@
 #              --dry-run (-n)
 #   - config: --list (-l), --get (-g), --path (-p), --template (-t), --create (-c),
 #             --force (-f), --edit (-e), --validate (-v)
-#   - utils hash-copy-files: --dry-run, --verbose (-v), --add-missing
-#   - utils hash-toolchains: --dry-run, --verbose (-v), --add-missing
-#   - utils sync-copy-files: --dry-run, --verbose (-v), --force (-f)
+#   - utils hash-copy-files: --dry-run (-n), --verbose, --add-missing (-a)
+#   - utils hash-toolchains: --dry-run (-n), --verbose, --add-missing (-a)
+#   - utils sync-copy-files: --dry-run (-n), --verbose, --force (-f)
 #   - utils update: (no options)
 
 _cim_completions() {
@@ -544,7 +544,7 @@ _cim_completions() {
         utils)
             if [ $COMP_CWORD -eq 2 ]; then
                 # Utils subcommands
-                COMPREPLY=( $(compgen -W "hash-copy-files hash-toolchains sync-copy-files update --help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "hash-copy-files hash-toolchains sync-copy-files update --help -h" -- "${cur}") )
                 return 0
             elif [ $COMP_CWORD -gt 2 ]; then
                 # Handle utils subcommand completion
@@ -552,7 +552,7 @@ _cim_completions() {
                     hash-copy-files)
                         case "${prev}" in
                             *)
-                                COMPREPLY=( $(compgen -W "--dry-run --verbose -v --add-missing --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--dry-run -n --verbose --add-missing -a --help -h" -- "${cur}") )
                                 return 0
                                 ;;
                         esac
@@ -560,7 +560,7 @@ _cim_completions() {
                     hash-toolchains)
                         case "${prev}" in
                             *)
-                                COMPREPLY=( $(compgen -W "--dry-run --verbose -v --add-missing --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--dry-run -n --verbose --add-missing -a --help -h" -- "${cur}") )
                                 return 0
                                 ;;
                         esac
@@ -568,13 +568,13 @@ _cim_completions() {
                     sync-copy-files)
                         case "${prev}" in
                             *)
-                                COMPREPLY=( $(compgen -W "--dry-run --verbose -v --force -f --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--dry-run -n --verbose --force -f --help -h" -- "${cur}") )
                                 return 0
                                 ;;
                         esac
                         ;;
                     update)
-                        COMPREPLY=( $(compgen -W "--help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--help -h" -- "${cur}") )
                         return 0
                         ;;
                 esac

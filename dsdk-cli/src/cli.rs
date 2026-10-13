@@ -310,7 +310,7 @@ pub enum Commands {
         validate: bool,
     },
 
-    /// Utility commands for workspace maintenance
+    /// Workspace maintenance utilities
     Utils {
         #[command(subcommand)]
         utils_command: UtilsCommand,
@@ -493,64 +493,64 @@ pub enum InstallCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum UtilsCommand {
-    /// Compute and update SHA256 hashes for copy_files entries
+    /// Update SHA256 hashes of copy_files entries
     HashCopyFiles {
-        /// Only compute hash for specific file (by dest path or source URL)
-        #[arg(
-            value_name = "FILE",
-            help = "Specific file to update hash for (optional)"
-        )]
+        /// File to update (dest path or source URL)
+        ///
+        /// Updates all entries when omitted.
+        #[arg(value_name = "FILE")]
         file: Option<String>,
-        /// Show what would be changed without modifying sdk.yml
-        #[arg(long, help = "Show proposed changes without updating files")]
+        /// Show proposed changes without updating files
+        #[arg(short = 'n', long)]
         dry_run: bool,
-        /// Enable verbose output
-        #[arg(short, long, help = "Show detailed progress information")]
+        /// Show detailed progress information
+        #[arg(long)]
         verbose: bool,
-        /// Automatically add missing sha256 fields instead of skipping entries
-        #[arg(
-            long,
-            help = "Add sha256 field to entries that are missing it, then compute and set the hash"
-        )]
+        /// Add missing sha256 fields instead of skipping
+        ///
+        /// Entries without a sha256 field get one, then the hash is
+        /// computed and set.
+        #[arg(short, long)]
         add_missing: bool,
     },
-    /// Compute and update SHA256 hashes for toolchain entries
+    /// Update SHA256 hashes of toolchain entries
     HashToolchains {
-        /// Only compute hash for specific toolchain (by name or URL)
-        #[arg(
-            value_name = "TOOLCHAIN",
-            help = "Specific toolchain to update hash for (optional)"
-        )]
+        /// Toolchain to update (name or URL)
+        ///
+        /// Updates all entries when omitted.
+        #[arg(value_name = "TOOLCHAIN")]
         file: Option<String>,
-        /// Show what would be changed without modifying sdk.yml
-        #[arg(long, help = "Show proposed changes without updating files")]
+        /// Show proposed changes without updating files
+        #[arg(short = 'n', long)]
         dry_run: bool,
-        /// Enable verbose output
-        #[arg(short, long, help = "Show detailed progress information")]
+        /// Show detailed progress information
+        #[arg(long)]
         verbose: bool,
-        /// Automatically add missing sha256 fields instead of skipping entries
-        #[arg(
-            long,
-            help = "Add sha256 field to entries that are missing it, then compute and set the hash"
-        )]
+        /// Add missing sha256 fields instead of skipping
+        ///
+        /// Entries without a sha256 field get one, then the hash is
+        /// computed and set.
+        #[arg(short, long)]
         add_missing: bool,
     },
-    /// Re-run copy_files operation to sync files to workspace
+    /// Re-sync copy_files entries into the workspace
     SyncCopyFiles {
-        /// Only sync specific file (by dest path or source URL)
-        #[arg(value_name = "FILE", help = "Specific file to sync (optional)")]
+        /// File to sync (dest path or source URL)
+        ///
+        /// Syncs all entries when omitted.
+        #[arg(value_name = "FILE")]
         file: Option<String>,
-        /// Show what would be copied without modifying workspace
-        #[arg(long, help = "Show proposed changes without copying files")]
+        /// Show proposed changes without copying files
+        #[arg(short = 'n', long)]
         dry_run: bool,
-        /// Enable verbose output
-        #[arg(short, long, help = "Show detailed progress information")]
+        /// Show detailed progress information
+        #[arg(long)]
         verbose: bool,
-        /// Force overwrite existing files
-        #[arg(short, long, help = "Overwrite existing files")]
+        /// Overwrite existing files
+        #[arg(short, long)]
         force: bool,
     },
-    /// Update cim to the latest release from GitHub
+    /// Update cim to the latest release
     Update,
 }
 
