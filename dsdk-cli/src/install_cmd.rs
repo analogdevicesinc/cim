@@ -45,12 +45,7 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
 
     match install_command {
         InstallCommand::OsDeps { yes, no_sudo } => {
-            // Process every os-dependencies.yml-family file in the workspace:
-            // the primary target's own file, plus one per extends: ancestor.
-            if !install_os_deps_from_workspace(&workspace_path, *yes, *no_sudo) {
-                messages::error("os-dependencies.yml not found in workspace.");
-                messages::error("This file is copied automatically during 'cim init'.");
-            }
+            handle_install_os_deps(&workspace_path, *yes, *no_sudo)
         }
         InstallCommand::Pip {
             force,
@@ -61,280 +56,431 @@ pub(crate) fn handle_install_command(install_command: &InstallCommand) {
             exclude_group,
             cert_validation,
             repair,
-        } => {
-            if *repair {
-                let mirror_path = resolve_mirror(None);
-                if let Err(e) = handle_pip_repair(
-                    &workspace_path,
-                    &mirror_path,
-                    sdk_config.direnv(),
-                    cert_validation.as_deref(),
-                ) {
-                    messages::error(&format!(
-                        "Failed to repair shared virtual environment: {}",
-                        e
-                    ));
-                    std::process::exit(1);
-                }
-                return;
-            }
-
-            let python_deps_files =
-                dsdk_cli::workspace::discover_dependency_files(&workspace_path, PYTHON_DEPS_FILE);
-
-            // Show available profiles if user requested the list
-            if *list_profiles {
-                if python_deps_files.is_empty() {
-                    messages::error("python-dependencies.yml not found in workspace.");
-                } else {
-                    for path in &python_deps_files {
-                        messages::status(&format!("--- {} ---", path.display()));
-                        list_available_profiles(path);
-                    }
-                }
-                return;
-            }
-
-            // Determine group selection: CLI flags take precedence over the
-            // group selection stored in the workspace marker by
-            // `cim init`/`cim update`, so per-repo Python deps aren't
-            // installed for repos that were excluded and never cloned.
-            let (effective_include, effective_exclude): (Option<String>, Option<String>) =
-                if include_group.is_some() || exclude_group.is_some() {
-                    (include_group.clone(), exclude_group.clone())
-                } else {
-                    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
-                    if marker_path.exists() {
-                        match std::fs::read_to_string(&marker_path) {
-                            Ok(content) => {
-                                let marker = noyalib::from_str::<WorkspaceMarker>(&content).ok();
-                                (
-                                    marker.as_ref().and_then(|m| m.include_groups.clone()),
-                                    marker.as_ref().and_then(|m| m.exclude_groups.clone()),
-                                )
-                            }
-                            Err(_) => (None, None),
-                        }
-                    } else {
-                        (None, None)
-                    }
-                };
-            let include_groups = effective_include
-                .as_deref()
-                .map(parse_group_list)
-                .unwrap_or_default();
-            let exclude_groups = effective_exclude
-                .as_deref()
-                .map(parse_group_list)
-                .unwrap_or_default();
-            let filtered_gits =
-                filter_git_configs_by_group(&sdk_config.gits, &include_groups, &exclude_groups);
-
-            // Announce non-default flags once up front instead of letting every
-            // venv (git-level and workspace-level) repeat the same detail.
-            match (*force, *symlink) {
-                (true, true) => messages::status("Reinstalling venvs (--force --symlink)"),
-                (true, false) => messages::status("Reinstalling venvs (--force)"),
-                (false, true) => messages::status("Using shared mirror venv (--symlink)"),
-                (false, false) => {}
-            }
-
-            // Per-repo Python deps declared in sdk.yml gits: entries are installed
-            // into isolated venvs at .cim/<git>/.venv, independent of the shared
-            // workspace venv populated from python-dependencies.yml profiles.
-            let git_python_deps_count = filtered_gits
-                .iter()
-                .filter(|g| g.python_deps.is_some())
-                .count();
-            for git in &filtered_gits {
-                if let Some(reqs) = &git.python_deps {
-                    if let Err(e) = install_git_python_deps(
-                        &workspace_path,
-                        &git.name,
-                        reqs,
-                        *force,
-                        cert_validation.as_deref(),
-                    ) {
-                        messages::error(&format!(
-                            "Failed to install Python deps for '{}': {}",
-                            git.name, e
-                        ));
-                        std::process::exit(1);
-                    }
-                }
-            }
-
-            // Shared workspace venv from every python-dependencies.yml-family
-            // file (docs, lint, and other workspace-wide cim tooling).
-            match install_pip_from_workspace(
-                &workspace_path,
-                *force,
-                *symlink,
-                profile.as_deref(),
-                &resolve_mirror(None),
-                sdk_config.direnv(),
-                cert_validation.as_deref(),
-            ) {
-                Ok(true) => {
-                    messages::success(&format!(
-                        "Python dependencies installed: {} git venv(s), workspace venv OK",
-                        git_python_deps_count
-                    ));
-                }
-                Ok(false) if !filtered_gits.iter().any(|g| g.python_deps.is_some()) => {
-                    // Nothing to do from either source: report the missing profiles file.
-                    messages::error("python-dependencies.yml not found in workspace.");
-                    messages::error("This file is copied automatically during 'cim init'.");
-                }
-                Ok(false) => {
-                    messages::success(&format!(
-                        "Python dependencies installed: {} git venv(s) (no workspace-wide python-dependencies.yml found)",
-                        git_python_deps_count
-                    ));
-                }
-                Err(e) => {
-                    messages::error(&format!("Failed to install Python packages: {}", e));
-                    std::process::exit(1);
-                }
-            }
-        }
+        } => handle_install_pip(
+            &workspace_path,
+            &sdk_config,
+            PipInstallArgs {
+                force: *force,
+                symlink: *symlink,
+                profile: profile.as_deref(),
+                list_profiles: *list_profiles,
+                include_group: include_group.as_deref(),
+                exclude_group: exclude_group.as_deref(),
+                cert_validation: cert_validation.as_deref(),
+                repair: *repair,
+            },
+        ),
         InstallCommand::Toolchains {
             force,
             symlink,
             verbose,
             cert_validation,
-        } => {
-            // Set verbose mode for messages module
-            dsdk_cli::messages::set_verbose(*verbose);
-
-            // Resolve mirror from user config / built-in default.
-            // Create toolchain manager and install toolchains
-            let toolchain_manager = toolchain_manager::ToolchainManager::new(
-                workspace_path.clone(),
-                resolve_mirror(None),
-            );
-
-            if let Err(e) = toolchain_manager.install_toolchains(
-                sdk_config.toolchains.as_ref(),
-                *force,
-                *symlink,
-                cert_validation.as_deref(),
-            ) {
-                messages::error(&format!("Error installing toolchains: {}", e));
-                std::process::exit(1);
-            }
-        }
+        } => handle_install_toolchains(
+            &workspace_path,
+            &sdk_config,
+            *force,
+            *symlink,
+            *verbose,
+            cert_validation.as_deref(),
+        ),
         InstallCommand::Tools {
             name,
             list,
             all,
             force,
-        } => {
-            // Use sdk_config that already has user overrides applied
-            // Check if install section exists
-            if sdk_config.install.is_none() || sdk_config.install.as_ref().unwrap().is_empty() {
-                messages::error("No install section found in sdk.yml");
-                messages::info("The install section defines components that can be installed.");
-                return;
+        } => handle_install_tools(
+            &workspace_path,
+            &sdk_config,
+            name.as_deref(),
+            *list,
+            *all,
+            *force,
+        ),
+    }
+}
+
+/// Process every os-dependencies.yml-family file in the workspace: the
+/// primary target's own file, plus one per extends: ancestor.
+fn handle_install_os_deps(workspace_path: &Path, yes: bool, no_sudo: bool) {
+    if !install_os_deps_from_workspace(workspace_path, yes, no_sudo) {
+        messages::error("os-dependencies.yml not found in workspace.");
+        messages::error("This file is copied automatically during 'cim init'.");
+    }
+}
+
+/// CLI options for `cim install pip`, grouped to keep `handle_install_pip`
+/// and its helpers from needing a long list of positional parameters.
+struct PipInstallArgs<'a> {
+    force: bool,
+    symlink: bool,
+    profile: Option<&'a str>,
+    list_profiles: bool,
+    include_group: Option<&'a str>,
+    exclude_group: Option<&'a str>,
+    cert_validation: Option<&'a str>,
+    repair: bool,
+}
+
+fn handle_install_pip(workspace_path: &Path, sdk_config: &config::SdkConfig, args: PipInstallArgs) {
+    if args.repair {
+        run_pip_repair(workspace_path, sdk_config, args.cert_validation);
+        return;
+    }
+
+    let python_deps_files =
+        dsdk_cli::workspace::discover_dependency_files(workspace_path, PYTHON_DEPS_FILE);
+
+    if args.list_profiles {
+        show_pip_profiles(&python_deps_files);
+        return;
+    }
+
+    let (include_groups, exclude_groups) =
+        resolve_pip_group_selection(workspace_path, args.include_group, args.exclude_group);
+    let filtered_gits =
+        filter_git_configs_by_group(&sdk_config.gits, &include_groups, &exclude_groups);
+
+    // Announce non-default flags once up front instead of letting every
+    // venv (git-level and workspace-level) repeat the same detail.
+    announce_pip_flags(args.force, args.symlink);
+
+    // Per-repo Python deps declared in sdk.yml gits: entries are installed
+    // into isolated venvs at .cim/<git>/.venv, independent of the shared
+    // workspace venv populated from python-dependencies.yml profiles.
+    let git_python_deps_count = install_python_deps_for_gits(
+        workspace_path,
+        &filtered_gits,
+        args.force,
+        args.cert_validation,
+    );
+
+    // Shared workspace venv from every python-dependencies.yml-family
+    // file (docs, lint, and other workspace-wide cim tooling).
+    finish_pip_workspace_install(
+        workspace_path,
+        sdk_config,
+        &args,
+        &filtered_gits,
+        git_python_deps_count,
+    );
+}
+
+fn run_pip_repair(
+    workspace_path: &Path,
+    sdk_config: &config::SdkConfig,
+    cert_validation: Option<&str>,
+) {
+    let mirror_path = resolve_mirror(None);
+    if let Err(e) = handle_pip_repair(
+        workspace_path,
+        &mirror_path,
+        sdk_config.direnv(),
+        cert_validation,
+    ) {
+        messages::error(&format!(
+            "Failed to repair shared virtual environment: {}",
+            e
+        ));
+        std::process::exit(1);
+    }
+}
+
+fn show_pip_profiles(python_deps_files: &[PathBuf]) {
+    if python_deps_files.is_empty() {
+        messages::error("python-dependencies.yml not found in workspace.");
+        return;
+    }
+    for path in python_deps_files {
+        messages::status(&format!("--- {} ---", path.display()));
+        list_available_profiles(path);
+    }
+}
+
+/// Resolve the include/exclude group selection for `cim install pip`: CLI
+/// flags take precedence over the group selection stored in the workspace
+/// marker by `cim init`/`cim update`, so per-repo Python deps aren't
+/// installed for repos that were excluded and never cloned.
+fn resolve_pip_group_selection(
+    workspace_path: &Path,
+    include_group: Option<&str>,
+    exclude_group: Option<&str>,
+) -> (Vec<String>, Vec<String>) {
+    let (effective_include, effective_exclude): (Option<String>, Option<String>) =
+        if include_group.is_some() || exclude_group.is_some() {
+            (
+                include_group.map(String::from),
+                exclude_group.map(String::from),
+            )
+        } else {
+            read_workspace_marker_groups(workspace_path)
+        };
+    (
+        effective_include
+            .as_deref()
+            .map(parse_group_list)
+            .unwrap_or_default(),
+        effective_exclude
+            .as_deref()
+            .map(parse_group_list)
+            .unwrap_or_default(),
+    )
+}
+
+fn read_workspace_marker_groups(workspace_path: &Path) -> (Option<String>, Option<String>) {
+    let marker_path = workspace_path.join(WORKSPACE_MARKER_FILE);
+    if !marker_path.exists() {
+        return (None, None);
+    }
+    match std::fs::read_to_string(&marker_path) {
+        Ok(content) => {
+            let marker = noyalib::from_str::<WorkspaceMarker>(&content).ok();
+            (
+                marker.as_ref().and_then(|m| m.include_groups.clone()),
+                marker.as_ref().and_then(|m| m.exclude_groups.clone()),
+            )
+        }
+        Err(_) => (None, None),
+    }
+}
+
+fn announce_pip_flags(force: bool, symlink: bool) {
+    match (force, symlink) {
+        (true, true) => messages::status("Reinstalling venvs (--force --symlink)"),
+        (true, false) => messages::status("Reinstalling venvs (--force)"),
+        (false, true) => messages::status("Using shared mirror venv (--symlink)"),
+        (false, false) => {}
+    }
+}
+
+/// Install each git's own isolated venv from its `python_deps` requirements.
+/// Returns how many gits declared `python_deps` at all, for the later
+/// success-message wording.
+fn install_python_deps_for_gits(
+    workspace_path: &Path,
+    filtered_gits: &[config::GitConfig],
+    force: bool,
+    cert_validation: Option<&str>,
+) -> usize {
+    let git_python_deps_count = filtered_gits
+        .iter()
+        .filter(|g| g.python_deps.is_some())
+        .count();
+    for git in filtered_gits {
+        if let Some(reqs) = &git.python_deps {
+            if let Err(e) =
+                install_git_python_deps(workspace_path, &git.name, reqs, force, cert_validation)
+            {
+                messages::error(&format!(
+                    "Failed to install Python deps for '{}': {}",
+                    git.name, e
+                ));
+                std::process::exit(1);
             }
+        }
+    }
+    git_python_deps_count
+}
 
-            let install_configs = sdk_config.install.as_ref().unwrap();
+fn finish_pip_workspace_install(
+    workspace_path: &Path,
+    sdk_config: &config::SdkConfig,
+    args: &PipInstallArgs,
+    filtered_gits: &[config::GitConfig],
+    git_python_deps_count: usize,
+) {
+    match install_pip_from_workspace(
+        workspace_path,
+        &PipInstallOptions {
+            force: args.force,
+            symlink: args.symlink,
+            profile_override: args.profile,
+            mirror_path: &resolve_mirror(None),
+            direnv_cfg: sdk_config.direnv(),
+            cert_validation: args.cert_validation,
+        },
+    ) {
+        Ok(true) => {
+            messages::success(&format!(
+                "Python dependencies installed: {} git venv(s), workspace venv OK",
+                git_python_deps_count
+            ));
+        }
+        Ok(false) if !filtered_gits.iter().any(|g| g.python_deps.is_some()) => {
+            // Nothing to do from either source: report the missing profiles file.
+            messages::error("python-dependencies.yml not found in workspace.");
+            messages::error("This file is copied automatically during 'cim init'.");
+        }
+        Ok(false) => {
+            messages::success(&format!(
+                "Python dependencies installed: {} git venv(s) (no workspace-wide python-dependencies.yml found)",
+                git_python_deps_count
+            ));
+        }
+        Err(e) => {
+            messages::error(&format!("Failed to install Python packages: {}", e));
+            std::process::exit(1);
+        }
+    }
+}
 
-            // Handle --list flag
-            if *list {
-                messages::status("Available install targets:");
-                for install_cfg in install_configs {
-                    let sentinel_info = if let Some(sentinel) = install_cfg.sentinel_path() {
-                        format!(" (sentinel: {})", sentinel)
-                    } else {
-                        String::new()
-                    };
-                    let deps_info = if let Some(ref deps) = install_cfg.depends_on {
-                        if !deps.is_empty() {
-                            format!(" [depends on: {}]", deps.join(", "))
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
-                    messages::status(&format!(
-                        "  install-{}{}{}",
-                        install_cfg.name, sentinel_info, deps_info
-                    ));
-                }
-                messages::status("");
-                messages::status("Use --all to install all components.");
-                messages::status("");
-                messages::status("Run with: cim install tools <name>");
-                return;
-            }
+fn handle_install_toolchains(
+    workspace_path: &Path,
+    sdk_config: &config::SdkConfig,
+    force: bool,
+    symlink: bool,
+    verbose: bool,
+    cert_validation: Option<&str>,
+) {
+    // Set verbose mode for messages module
+    dsdk_cli::messages::set_verbose(verbose);
 
-            // Determine which target to run
-            let target_name = if *all {
-                "install-all".to_string()
-            } else if let Some(component_name) = name {
-                format!("install-{}", component_name)
+    // Resolve mirror from user config / built-in default.
+    // Create toolchain manager and install toolchains
+    let toolchain_manager = toolchain_manager::ToolchainManager::new(
+        workspace_path.to_path_buf(),
+        resolve_mirror(None),
+    );
+
+    if let Err(e) = toolchain_manager.install_toolchains(
+        sdk_config.toolchains.as_ref(),
+        force,
+        symlink,
+        cert_validation,
+    ) {
+        messages::error(&format!("Error installing toolchains: {}", e));
+        std::process::exit(1);
+    }
+}
+
+fn handle_install_tools(
+    workspace_path: &Path,
+    sdk_config: &config::SdkConfig,
+    name: Option<&str>,
+    list: bool,
+    all: bool,
+    force: bool,
+) {
+    // Use sdk_config that already has user overrides applied
+    let Some(install_configs) = sdk_config.install.as_ref().filter(|cfgs| !cfgs.is_empty()) else {
+        messages::error("No install section found in sdk.yml");
+        messages::info("The install section defines components that can be installed.");
+        return;
+    };
+
+    if list {
+        show_install_targets(install_configs);
+        return;
+    }
+
+    let Some(target_name) = resolve_install_target_name(name, all) else {
+        messages::error("Either provide a component name or use --all or --list");
+        return;
+    };
+
+    if force && !all {
+        remove_install_sentinel(workspace_path, install_configs, name);
+    }
+
+    run_install_make_target(workspace_path, &target_name);
+}
+
+fn show_install_targets(install_configs: &[config::InstallConfig]) {
+    messages::status("Available install targets:");
+    for install_cfg in install_configs {
+        let sentinel_info = if let Some(sentinel) = install_cfg.sentinel_path() {
+            format!(" (sentinel: {})", sentinel)
+        } else {
+            String::new()
+        };
+        let deps_info = if let Some(ref deps) = install_cfg.depends_on {
+            if !deps.is_empty() {
+                format!(" [depends on: {}]", deps.join(", "))
             } else {
-                messages::error("Either provide a component name or use --all or --list");
-                return;
-            };
-
-            // If force is set, remove sentinel file
-            if *force && !*all {
-                if let Some(component_name) = name {
-                    if let Some(install_cfg) = install_configs
-                        .iter()
-                        .find(|cfg| cfg.name == *component_name)
-                    {
-                        if let Some(sentinel) = install_cfg.sentinel_path() {
-                            let sentinel_path = workspace_path.join(sentinel);
-                            if sentinel_path.exists() {
-                                if let Err(e) = std::fs::remove_file(&sentinel_path) {
-                                    messages::info(&format!(
-                                        "Warning: Failed to remove sentinel file {}: {}",
-                                        sentinel_path.display(),
-                                        e
-                                    ));
-                                } else {
-                                    messages::info(&format!(
-                                        "Removed sentinel file: {}",
-                                        sentinel_path.display()
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
+                String::new()
             }
+        } else {
+            String::new()
+        };
+        messages::status(&format!(
+            "  install-{}{}{}",
+            install_cfg.name, sentinel_info, deps_info
+        ));
+    }
+    messages::status("");
+    messages::status("Use --all to install all components.");
+    messages::status("");
+    messages::status("Run with: cim install tools <name>");
+}
 
-            // Check if Makefile exists
-            let makefile_path = workspace_path.join("Makefile");
-            if !makefile_path.exists() {
-                messages::error("Makefile not found in workspace.");
-                messages::info("Run 'cim makefile' first to generate the Makefile.");
-                return;
+/// Determine which `make install-<target>` target to run, if any.
+fn resolve_install_target_name(name: Option<&str>, all: bool) -> Option<String> {
+    if all {
+        Some("install-all".to_string())
+    } else {
+        name.map(|n| format!("install-{}", n))
+    }
+}
+
+/// Remove a component's sentinel file so `--force` triggers a real reinstall.
+fn remove_install_sentinel(
+    workspace_path: &Path,
+    install_configs: &[config::InstallConfig],
+    name: Option<&str>,
+) {
+    let Some(component_name) = name else {
+        return;
+    };
+    let Some(install_cfg) = install_configs
+        .iter()
+        .find(|cfg| cfg.name == component_name)
+    else {
+        return;
+    };
+    let Some(sentinel) = install_cfg.sentinel_path() else {
+        return;
+    };
+    let sentinel_path = workspace_path.join(sentinel);
+    if !sentinel_path.exists() {
+        return;
+    }
+    if let Err(e) = std::fs::remove_file(&sentinel_path) {
+        messages::info(&format!(
+            "Warning: Failed to remove sentinel file {}: {}",
+            sentinel_path.display(),
+            e
+        ));
+    } else {
+        messages::info(&format!(
+            "Removed sentinel file: {}",
+            sentinel_path.display()
+        ));
+    }
+}
+
+fn run_install_make_target(workspace_path: &Path, target_name: &str) {
+    let makefile_path = workspace_path.join("Makefile");
+    if !makefile_path.exists() {
+        messages::error("Makefile not found in workspace.");
+        messages::info("Run 'cim makefile' first to generate the Makefile.");
+        return;
+    }
+
+    messages::status(&format!("Running: make {}", target_name));
+    let make_status = std::process::Command::new("make")
+        .arg(target_name)
+        .current_dir(workspace_path)
+        .status();
+
+    match make_status {
+        Ok(status) => {
+            if !status.success() {
+                std::process::exit(status.code().unwrap_or(1));
             }
-
-            // Run make command
-            messages::status(&format!("Running: make {}", target_name));
-            let make_status = std::process::Command::new("make")
-                .arg(&target_name)
-                .current_dir(&workspace_path)
-                .status();
-
-            match make_status {
-                Ok(status) => {
-                    if !status.success() {
-                        std::process::exit(status.code().unwrap_or(1));
-                    }
-                }
-                Err(e) => {
-                    messages::error(&format!("Failed to run make: {}", e));
-                    messages::info("Make sure 'make' is installed on your system.");
-                    std::process::exit(1);
-                }
-            }
+        }
+        Err(e) => {
+            messages::error(&format!("Failed to run make: {}", e));
+            messages::info("Make sure 'make' is installed on your system.");
+            std::process::exit(1);
         }
     }
 }
@@ -881,74 +1027,91 @@ impl PythonBackend {
             .and_then(Path::parent); // the venv root itself
         match self {
             PythonBackend::Uv { .. } => {
-                let mut command = std::process::Command::new("uv");
-                command.args(["pip", "install", "--system-certs", "--refresh"]);
-                match venv_dir {
-                    Some(venv_dir) => {
-                        command.env("VIRTUAL_ENV", venv_dir);
-                    }
-                    // Should never happen (venv_python always has bin/../ as
-                    // parent), but fall back to --python rather than letting
-                    // uv guess with no target at all.
-                    None => {
-                        command.arg("--python").arg(venv_python);
-                    }
-                }
-                if mode == "relaxed" || mode == "auto" {
-                    for host in Self::PYPI_HOSTS {
-                        command.arg("--allow-insecure-host").arg(host);
-                    }
-                }
-                messages::verbose(&format!(
-                    "Running: VIRTUAL_ENV={} uv pip install --system-certs --refresh {}",
-                    venv_dir
-                        .map(|d| d.display().to_string())
-                        .unwrap_or_default(),
-                    install_args.join(" ")
-                ));
-                command
-                    .args(install_args)
-                    .current_dir(cwd)
-                    .status()
-                    .map_err(|e| -> Box<dyn std::error::Error> {
-                        format!(
-                            "Could not finish setting up Python packages: failed to execute uv: {}",
-                            e
-                        )
-                        .into()
-                    })
+                pip_install_uv(venv_python, install_args, cwd, mode, venv_dir)
             }
-            PythonBackend::Pip => {
-                messages::verbose(&format!(
-                    "Running: {} -m pip install {}",
-                    venv_python.display(),
-                    install_args.join(" ")
-                ));
-                let mut command = std::process::Command::new(venv_python);
-                if let Some(venv_dir) = venv_dir {
-                    command.env("VIRTUAL_ENV", venv_dir);
-                }
-                command
-                    .args(["-m", "pip", "install"])
-                    .arg("--trusted-host")
-                    .arg(Self::PYPI_HOSTS[0])
-                    .arg("--trusted-host")
-                    .arg(Self::PYPI_HOSTS[1])
-                    .arg("--trusted-host")
-                    .arg(Self::PYPI_HOSTS[2])
-                    .args(install_args)
-                    .current_dir(cwd)
-                    .status()
-                    .map_err(|e| -> Box<dyn std::error::Error> {
-                        format!(
-                            "Could not finish setting up Python packages: failed to execute pip: {}",
-                            e
-                        )
-                        .into()
-                    })
-            }
+            PythonBackend::Pip => pip_install_pip(venv_python, install_args, cwd, venv_dir),
         }
     }
+}
+
+fn pip_install_uv(
+    venv_python: &Path,
+    install_args: &[String],
+    cwd: &Path,
+    mode: &str,
+    venv_dir: Option<&Path>,
+) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+    let mut command = std::process::Command::new("uv");
+    command.args(["pip", "install", "--system-certs", "--refresh"]);
+    match venv_dir {
+        Some(venv_dir) => {
+            command.env("VIRTUAL_ENV", venv_dir);
+        }
+        // Should never happen (venv_python always has bin/../ as parent),
+        // but fall back to --python rather than letting uv guess with no
+        // target at all.
+        None => {
+            command.arg("--python").arg(venv_python);
+        }
+    }
+    if mode == "relaxed" || mode == "auto" {
+        for host in PythonBackend::PYPI_HOSTS {
+            command.arg("--allow-insecure-host").arg(host);
+        }
+    }
+    messages::verbose(&format!(
+        "Running: VIRTUAL_ENV={} uv pip install --system-certs --refresh {}",
+        venv_dir
+            .map(|d| d.display().to_string())
+            .unwrap_or_default(),
+        install_args.join(" ")
+    ));
+    command
+        .args(install_args)
+        .current_dir(cwd)
+        .status()
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            format!(
+                "Could not finish setting up Python packages: failed to execute uv: {}",
+                e
+            )
+            .into()
+        })
+}
+
+fn pip_install_pip(
+    venv_python: &Path,
+    install_args: &[String],
+    cwd: &Path,
+    venv_dir: Option<&Path>,
+) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+    messages::verbose(&format!(
+        "Running: {} -m pip install {}",
+        venv_python.display(),
+        install_args.join(" ")
+    ));
+    let mut command = std::process::Command::new(venv_python);
+    if let Some(venv_dir) = venv_dir {
+        command.env("VIRTUAL_ENV", venv_dir);
+    }
+    command
+        .args(["-m", "pip", "install"])
+        .arg("--trusted-host")
+        .arg(PythonBackend::PYPI_HOSTS[0])
+        .arg("--trusted-host")
+        .arg(PythonBackend::PYPI_HOSTS[1])
+        .arg("--trusted-host")
+        .arg(PythonBackend::PYPI_HOSTS[2])
+        .args(install_args)
+        .current_dir(cwd)
+        .status()
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            format!(
+                "Could not finish setting up Python packages: failed to execute pip: {}",
+                e
+            )
+            .into()
+        })
 }
 
 /// Create a Python venv at the given directory (the venv directory itself,
@@ -1426,19 +1589,25 @@ pub(crate) fn list_available_profiles(python_deps_path: &Path) {
     }
 }
 
+/// Shared options for installing Python packages into a workspace's (or
+/// the mirror's) virtual environment, grouped to keep
+/// `install_pip_from_workspace`/`install_python_packages_from_file` from
+/// each needing a long list of positional parameters.
+pub(crate) struct PipInstallOptions<'a> {
+    pub(crate) force: bool,
+    pub(crate) symlink: bool,
+    pub(crate) profile_override: Option<&'a str>,
+    pub(crate) mirror_path: &'a Path,
+    pub(crate) direnv_cfg: Option<&'a config::DirenvConfig>,
+    pub(crate) cert_validation: Option<&'a str>,
+}
+
 /// Install Python packages from python-dependencies.yml file
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn install_python_packages_from_file(
     python_deps_path: &Path,
-    force: bool,
-    symlink: bool,
-    profile_override: Option<&str>,
     workspace_path: &Path,
-    mirror_path: &Path,
-    direnv_cfg: Option<&config::DirenvConfig>,
-    cert_validation: Option<&str>,
+    opts: &PipInstallOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Load Python dependencies configuration first
     let python_deps = match config::load_python_dependencies(python_deps_path) {
         Ok(deps) => deps,
         Err(e) => {
@@ -1446,51 +1615,92 @@ pub(crate) fn install_python_packages_from_file(
         }
     };
 
-    // Determine which profiles to use: command-line override or default from config
-    // Support comma-separated profiles like "dev,docs"
-    let profile_names: Vec<&str> = if let Some(override_str) = profile_override {
+    let profile_names = resolve_profile_names(&python_deps, opts.profile_override);
+    validate_profiles(&python_deps, &profile_names)?;
+
+    create_workspace_venv(
+        workspace_path,
+        opts.mirror_path,
+        opts.direnv_cfg,
+        opts.force,
+        opts.symlink,
+    )?;
+    announce_profiles_in_use(&profile_names);
+
+    let (packages, requirements) = collect_profile_packages(&python_deps, &profile_names);
+
+    install_collected_python_deps(
+        &packages,
+        &requirements,
+        &profile_names,
+        workspace_path,
+        opts.direnv_cfg,
+        opts.cert_validation,
+    )
+}
+
+/// Determine which profiles to use: command-line override or the config's
+/// own default. Supports comma-separated overrides like "dev,docs".
+fn resolve_profile_names<'a>(
+    python_deps: &'a config::PythonDependencies,
+    profile_override: Option<&'a str>,
+) -> Vec<&'a str> {
+    if let Some(override_str) = profile_override {
         override_str.split(',').map(|s| s.trim()).collect()
     } else {
         vec![python_deps.default.as_str()]
-    };
+    }
+}
 
-    // Validate profiles before doing any side effects
-    let mut invalid_profiles = Vec::new();
-    for profile_name in &profile_names {
-        if !python_deps.profiles.contains_key(*profile_name) {
-            invalid_profiles.push(*profile_name);
-        }
+/// Validate profiles before doing any side effects.
+fn validate_profiles(
+    python_deps: &config::PythonDependencies,
+    profile_names: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let invalid_profiles: Vec<&str> = profile_names
+        .iter()
+        .filter(|name| !python_deps.profiles.contains_key(**name))
+        .copied()
+        .collect();
+
+    if invalid_profiles.is_empty() {
+        return Ok(());
     }
 
-    // Report any invalid profiles and exit early
-    if !invalid_profiles.is_empty() {
-        return Err(format!(
-            "Profile(s) not found in python-dependencies.yml: {}. Available profiles: {}",
-            invalid_profiles.join(", "),
-            python_deps
-                .profiles
-                .keys()
-                .map(|k| k.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-        .into());
-    }
+    Err(format!(
+        "Profile(s) not found in python-dependencies.yml: {}. Available profiles: {}",
+        invalid_profiles.join(", "),
+        python_deps
+            .profiles
+            .keys()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .into())
+}
 
-    // Create VenvManager for virtual environment operations, honoring a
-    // custom `direnv.venv_path` if the manifest sets one.
+/// Create (or reuse) the workspace's virtual environment, honoring a
+/// custom `direnv.venv_path` if the manifest sets one.
+fn create_workspace_venv(
+    workspace_path: &Path,
+    mirror_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
+    force: bool,
+    symlink: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut venv_manager =
         VenvManager::new(workspace_path.to_path_buf(), mirror_path.to_path_buf());
     if let Some(cfg) = direnv_cfg {
         venv_manager = venv_manager.with_venv_dir_name(cfg.venv_path_or_default().to_string());
     }
 
-    // Create virtual environment (direct or symlink mode)
-    if let Err(e) = venv_manager.create_venv(force, symlink) {
-        return Err(format!("Error creating virtual environment: {}", e).into());
-    }
+    venv_manager
+        .create_venv(force, symlink)
+        .map_err(|e| format!("Error creating virtual environment: {}", e).into())
+}
 
-    // Display which profiles are being used
+fn announce_profiles_in_use(profile_names: &[&str]) {
     if profile_names.len() == 1 {
         messages::verbose(&format!("Using Python profile: {}", profile_names[0]));
     } else {
@@ -1499,13 +1709,19 @@ pub(crate) fn install_python_packages_from_file(
             profile_names.join(", ")
         ));
     }
+}
 
-    // Collect unique packages and requirements files from all specified profiles
+/// Collect the unique packages and requirements files across all given
+/// profiles, logging what each profile contributes.
+fn collect_profile_packages(
+    python_deps: &config::PythonDependencies,
+    profile_names: &[&str],
+) -> (Vec<String>, Vec<String>) {
     use std::collections::HashSet;
     let mut all_packages = HashSet::new();
     let mut requirements: Vec<String> = Vec::new();
 
-    for profile_name in &profile_names {
+    for profile_name in profile_names {
         if let Some(profile) = python_deps.profiles.get(*profile_name) {
             for package in &profile.packages {
                 all_packages.insert(package.clone());
@@ -1526,10 +1742,21 @@ pub(crate) fn install_python_packages_from_file(
         }
     }
 
-    // Convert HashSet to sorted Vec for consistent output
     let mut packages: Vec<String> = all_packages.into_iter().collect();
     packages.sort();
+    (packages, requirements)
+}
 
+/// Install the packages/requirements collected from the active profile(s),
+/// reporting when there's nothing to do instead of running pip at all.
+fn install_collected_python_deps(
+    packages: &[String],
+    requirements: &[String],
+    profile_names: &[&str],
+    workspace_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
+    cert_validation: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if packages.is_empty() && requirements.is_empty() {
         if profile_names.len() == 1 {
             messages::info(&format!(
@@ -1551,7 +1778,7 @@ pub(crate) fn install_python_packages_from_file(
             packages.len(),
             profile_names.len()
         ));
-        install_pip_packages(&packages, Some(workspace_path), direnv_cfg, cert_validation)?;
+        install_pip_packages(packages, Some(workspace_path), direnv_cfg, cert_validation)?;
     }
 
     if !requirements.is_empty() {
@@ -1560,7 +1787,7 @@ pub(crate) fn install_python_packages_from_file(
             requirements.len(),
             profile_names.len()
         ));
-        install_pip_requirements(&requirements, workspace_path, direnv_cfg, cert_validation)?;
+        install_pip_requirements(requirements, workspace_path, direnv_cfg, cert_validation)?;
     }
 
     Ok(())
@@ -1621,12 +1848,7 @@ pub(crate) fn install_os_deps_from_workspace(
 /// Returns `true` if at least one file was found and processed.
 pub(crate) fn install_pip_from_workspace(
     workspace_path: &Path,
-    force: bool,
-    symlink: bool,
-    profile_override: Option<&str>,
-    mirror_path: &Path,
-    direnv_cfg: Option<&config::DirenvConfig>,
-    cert_validation: Option<&str>,
+    opts: &PipInstallOptions,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let files = dsdk_cli::workspace::discover_dependency_files(workspace_path, PYTHON_DEPS_FILE);
     if files.is_empty() {
@@ -1638,16 +1860,7 @@ pub(crate) fn install_pip_from_workspace(
             "Installing Python packages from {}",
             path.display()
         ));
-        install_python_packages_from_file(
-            path,
-            force,
-            symlink,
-            profile_override,
-            workspace_path,
-            mirror_path,
-            direnv_cfg,
-            cert_validation,
-        )?;
+        install_python_packages_from_file(path, workspace_path, opts)?;
     }
     Ok(true)
 }
@@ -1686,23 +1899,55 @@ fn handle_pip_repair(
         return Ok(());
     }
 
-    match repair_venv_in_place(&mirror_venv_path) {
+    if try_in_place_pip_repair(&mirror_venv_path) {
+        return Ok(());
+    }
+
+    rebuild_mirror_venv_from_scratch(
+        workspace_path,
+        mirror_path,
+        &mirror_venv_path,
+        direnv_cfg,
+        cert_validation,
+    )
+}
+
+/// Attempt `repair_venv_in_place`; reports the outcome and returns whether
+/// the venv is now healthy (so the caller can skip the destructive rebuild).
+fn try_in_place_pip_repair(mirror_venv_path: &Path) -> bool {
+    match repair_venv_in_place(mirror_venv_path) {
         Ok(true) => {
             messages::success(&format!(
                 "Repaired shared virtual environment at {} in place; no packages were touched.",
                 mirror_venv_path.display()
             ));
-            return Ok(());
+            true
         }
-        Ok(false) => messages::info(
-            "In-place repair could not fix the interpreter; rebuilding the virtual environment from scratch...",
-        ),
-        Err(e) => messages::info(&format!(
-            "In-place repair attempt failed ({}); rebuilding the virtual environment from scratch...",
-            e
-        )),
+        Ok(false) => {
+            messages::info(
+                "In-place repair could not fix the interpreter; rebuilding the virtual environment from scratch...",
+            );
+            false
+        }
+        Err(e) => {
+            messages::info(&format!(
+                "In-place repair attempt failed ({}); rebuilding the virtual environment from scratch...",
+                e
+            ));
+            false
+        }
     }
+}
 
+/// Last-resort destructive path for `cim install pip --repair`: reinstall
+/// this workspace's own Python packages into a fresh mirror venv.
+fn rebuild_mirror_venv_from_scratch(
+    workspace_path: &Path,
+    mirror_path: &Path,
+    mirror_venv_path: &Path,
+    direnv_cfg: Option<&config::DirenvConfig>,
+    cert_validation: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     messages::info(
         "Rebuilding the shared virtual environment from scratch. Only this workspace's Python \
          packages will be reinstalled -- other workspaces using this mirror must re-run their \
@@ -1711,27 +1956,29 @@ fn handle_pip_repair(
 
     let reinstalled_from_workspace = install_pip_from_workspace(
         workspace_path,
-        true, // force: this is the destructive last-resort path
-        true, // symlink: repair only concerns the shared mirror venv
-        None,
-        mirror_path,
-        direnv_cfg,
-        cert_validation,
+        &PipInstallOptions {
+            force: true,   // this is the destructive last-resort path
+            symlink: true, // repair only concerns the shared mirror venv
+            profile_override: None,
+            mirror_path,
+            direnv_cfg,
+            cert_validation,
+        },
     )?;
 
     if !reinstalled_from_workspace {
         // No python-dependencies.yml in this workspace to reinstall from --
         // still make sure the mirror venv shell itself exists for whoever
         // installs into it next.
-        let _lock = crate::venv_lock::MirrorLock::acquire(&mirror_venv_path)?;
-        if !dsdk_cli::workspace::venv_is_deeply_functional(&mirror_venv_path) {
+        let _lock = crate::venv_lock::MirrorLock::acquire(mirror_venv_path)?;
+        if !dsdk_cli::workspace::venv_is_deeply_functional(mirror_venv_path) {
             if mirror_venv_path.exists() {
-                std::fs::remove_dir_all(&mirror_venv_path)?;
+                std::fs::remove_dir_all(mirror_venv_path)?;
             }
             if let Some(parent) = mirror_venv_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            run_python_venv_creation(&mirror_venv_path)?;
+            run_python_venv_creation(mirror_venv_path)?;
         }
     }
 
@@ -1749,191 +1996,255 @@ pub(crate) fn install_prerequisites(
 ) {
     let (os_key, distro_name, detected_version) = detect_os_and_distro();
 
-    // Try architecture-specific key first (e.g., "linux-aarch64"), then fall back to generic "linux"
-    let os_config = os_deps.os_configs.get(&os_key).or_else(|| {
+    let Some(os_config) = resolve_os_config(os_deps, &os_key) else {
+        report_missing_os_config(os_deps, &os_key);
+        return;
+    };
+
+    let Some((distro_config, found_legacy_format)) =
+        resolve_distro_config(os_config, &distro_name, &detected_version)
+    else {
+        report_missing_distro_config(os_config, &os_key, &distro_name, &detected_version);
+        return;
+    };
+
+    if found_legacy_format {
+        messages::info(&format!(
+            "Old os-dependencies.yml format detected for '{}'. Consider migrating to '{}-{}' format.",
+            distro_name, distro_name, detected_version
+        ));
+    }
+
+    // Linux package managers (apt-get, dnf, yum, etc.) typically need sudo;
+    // macOS brew should NOT use sudo.
+    let needs_sudo = !no_sudo && os_key.starts_with("linux");
+
+    let mut packages = distro_config.package_manager.resolved_packages();
+    packages.sort();
+    announce_install_plan(
+        &os_key,
+        &distro_name,
+        &detected_version,
+        distro_config,
+        &packages,
+        needs_sudo,
+    );
+
+    if !confirm_os_deps_install(skip_prompt) {
+        return;
+    }
+
+    // Determine the package manager's non-interactive flag, if any, so
+    // `--yes` also suppresses the package manager's own prompt.
+    let non_interactive_flag = if skip_prompt {
+        non_interactive_flag(&distro_config.package_manager.command)
+    } else {
+        None
+    };
+
+    let Some((program, all_args)) =
+        build_install_command(distro_config, needs_sudo, non_interactive_flag, &packages)
+    else {
+        messages::error("No installation command found");
+        return;
+    };
+
+    messages::status(&format!("\nRunning: {} {}", program, all_args.join(" ")));
+    run_os_deps_install_command(&program, &all_args, needs_sudo);
+}
+
+/// Look up the OS's config entry, falling back from an arch-specific key
+/// (e.g. "linux-aarch64") to the generic "linux" one.
+fn resolve_os_config<'a>(
+    os_deps: &'a config::OsDependencies,
+    os_key: &str,
+) -> Option<&'a config::OsConfig> {
+    os_deps.os_configs.get(os_key).or_else(|| {
         if os_key.starts_with("linux-") {
             os_deps.os_configs.get("linux")
         } else {
             None
         }
-    });
+    })
+}
 
-    if let Some(os_config) = os_config {
-        // Try to find matching distro configuration
-        // Priority: 1) Exact match with version (distro-version), 2) Bare distro name (legacy)
-        let distro_key_with_version = format!("{}-{}", distro_name, detected_version);
-        let mut found_legacy_format = false;
+fn report_missing_os_config(os_deps: &config::OsDependencies, os_key: &str) {
+    messages::error(&format!("No configuration found for OS: {}", os_key));
+    let available_os: Vec<String> = os_deps.os_configs.keys().cloned().collect();
+    messages::status(&format!(
+        "Available OS configurations: {}",
+        available_os.join(", ")
+    ));
+}
 
-        let distro_config = os_config.distros.get(&distro_key_with_version).or_else(|| {
-            // TODO: Remove backward compatibility after migration period
-            // Fall back to bare distro name for legacy format
-            if let Some(config) = os_config.distros.get(&distro_name) {
-                found_legacy_format = true;
-                Some(config)
-            } else {
-                None
-            }
-        });
+/// Look up the distro's config entry. Priority: 1) exact match with version
+/// (distro-version), 2) bare distro name (legacy). Returns whether the
+/// legacy (bare-name) format was the one that matched.
+// TODO: Remove backward compatibility for the bare-name format after migration period.
+fn resolve_distro_config<'a>(
+    os_config: &'a config::OsConfig,
+    distro_name: &str,
+    detected_version: &str,
+) -> Option<(&'a config::DistroConfig, bool)> {
+    let distro_key_with_version = format!("{}-{}", distro_name, detected_version);
+    if let Some(config) = os_config.distros.get(&distro_key_with_version) {
+        return Some((config, false));
+    }
+    os_config
+        .distros
+        .get(distro_name)
+        .map(|config| (config, true))
+}
 
-        if let Some(distro_config) = distro_config {
-            // Show deprecation warning for old format
-            if found_legacy_format {
-                messages::info(&format!(
-                    "Old os-dependencies.yml format detected for '{}'. Consider migrating to '{}-{}' format.",
-                    distro_name, distro_name, detected_version
-                ));
-            }
+fn report_missing_distro_config(
+    os_config: &config::OsConfig,
+    os_key: &str,
+    distro_name: &str,
+    detected_version: &str,
+) {
+    messages::error(&format!(
+        "No configuration found for distribution: {} (version {})",
+        distro_name, detected_version
+    ));
 
-            // Determine if sudo is needed
-            // Linux package managers (apt-get, dnf, yum, etc.) typically need sudo
-            // macOS brew should NOT use sudo
-            let needs_sudo = !no_sudo && os_key.starts_with("linux");
+    let mut available_distros: Vec<String> = os_config.distros.keys().cloned().collect();
+    available_distros.sort();
+    messages::status(&format!(
+        "Available distributions for {}: {}",
+        os_key,
+        available_distros.join(", ")
+    ));
 
-            // Display target information
-            messages::status(&format!(
-                "Installing packages for {}, {} {} using {}",
-                os_key, distro_name, detected_version, distro_config.package_manager.command
-            ));
+    messages::info(&format!(
+        "Hint: Add '{}-{}' to your os-dependencies.yml to support this OS version.",
+        distro_name, detected_version
+    ));
+}
 
-            // Display packages to be installed (sorted alphabetically)
-            let mut packages = distro_config.package_manager.resolved_packages();
-            packages.sort();
-            messages::status("\nPackages to be installed:");
-            for package in &packages {
-                messages::status(&format!("  - {}", package));
-            }
+fn announce_install_plan(
+    os_key: &str,
+    distro_name: &str,
+    detected_version: &str,
+    distro_config: &config::DistroConfig,
+    packages: &[String],
+    needs_sudo: bool,
+) {
+    messages::status(&format!(
+        "Installing packages for {}, {} {} using {}",
+        os_key, distro_name, detected_version, distro_config.package_manager.command
+    ));
 
-            // Display sudo information
-            if needs_sudo {
-                messages::status(&format!(
-                    "\n{} This command requires sudo privileges to install system packages.",
-                    messages::INFO
-                ));
-                messages::status("  You may be prompted for your password.");
-            }
+    messages::status("\nPackages to be installed:");
+    for package in packages {
+        messages::status(&format!("  - {}", package));
+    }
 
-            // Confirmation prompt (skip if --yes flag is used)
-            if !skip_prompt {
-                messages::status(
-                    "\nDo you want to proceed with the installation of the above packages on",
-                );
-                print!("your HOST OS? [y/N]: ");
-                use std::io::Write;
-                io::stdout().flush().unwrap();
-
-                let mut input = String::new();
-                match io::stdin().read_line(&mut input) {
-                    Ok(_) => {
-                        let input = input.trim().to_lowercase();
-                        if input != "y" && input != "yes" {
-                            messages::status("Installation cancelled.");
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        messages::error(&format!("Failed to read input: {}", e));
-                        return;
-                    }
-                }
-            } else {
-                messages::status("\nProceeding with installation (--yes flag specified)...");
-            }
-
-            // Determine the package manager's non-interactive flag, if any,
-            // so `--yes` also suppresses the package manager's own prompt.
-            let non_interactive_flag = if skip_prompt {
-                non_interactive_flag(&distro_config.package_manager.command)
-            } else {
-                None
-            };
-
-            // Build the full command with sudo if needed
-            let mut cmd_parts: Vec<String> = Vec::new();
-
-            // Add sudo as the first command if needed
-            let (program, initial_args): (&str, Vec<String>) = if needs_sudo {
-                cmd_parts.push("sudo".to_string());
-                cmd_parts.extend(
-                    distro_config
-                        .package_manager
-                        .command
-                        .split_whitespace()
-                        .map(String::from),
-                );
-                ("sudo", cmd_parts[1..].to_vec())
-            } else {
-                cmd_parts.extend(
-                    distro_config
-                        .package_manager
-                        .command
-                        .split_whitespace()
-                        .map(String::from),
-                );
-                (cmd_parts[0].as_str(), cmd_parts[1..].to_vec())
-            };
-
-            // Add packages to install
-            let mut all_args = initial_args;
-            if let Some(flag) = non_interactive_flag {
-                all_args.push(flag.to_string());
-            }
-            all_args.extend(packages.iter().cloned());
-
-            if cmd_parts.is_empty() {
-                messages::error("No installation command found");
-                return;
-            }
-
-            messages::status(&format!("\nRunning: {} {}", program, all_args.join(" ")));
-
-            match std::process::Command::new(program).args(&all_args).status() {
-                Ok(status) if status.success() => {
-                    messages::success("Successfully installed OS dependencies");
-                }
-                Ok(status) => {
-                    messages::error(&format!("Installation failed with exit code: {}", status));
-                    if needs_sudo && status.code() == Some(1) {
-                        messages::info("Hint: If you see 'permission denied' errors, ensure you have sudo privileges.");
-                        messages::info("      You can skip sudo with --no-sudo if running as root or with special apt configuration.");
-                    }
-                }
-                Err(e) => {
-                    messages::error(&format!("Failed to execute installation command: {}", e));
-                    if needs_sudo {
-                        messages::info("Hint: Make sure 'sudo' is installed and you have permission to use it.");
-                    }
-                }
-            }
-        } else {
-            // No matching distro configuration found
-            messages::error(&format!(
-                "No configuration found for distribution: {} (version {})",
-                distro_name, detected_version
-            ));
-
-            // List available configurations to help user
-            let mut available_distros: Vec<String> = os_config.distros.keys().cloned().collect();
-            available_distros.sort();
-
-            messages::status(&format!(
-                "Available distributions for {}: {}",
-                os_key,
-                available_distros.join(", ")
-            ));
-
-            // Provide helpful hint about expected key format
-            messages::info(&format!(
-                "Hint: Add '{}-{}' to your os-dependencies.yml to support this OS version.",
-                distro_name, detected_version
-            ));
-        }
-    } else {
-        messages::error(&format!("No configuration found for OS: {}", os_key));
-        let available_os: Vec<String> = os_deps.os_configs.keys().cloned().collect();
+    if needs_sudo {
         messages::status(&format!(
-            "Available OS configurations: {}",
-            available_os.join(", ")
+            "\n{} This command requires sudo privileges to install system packages.",
+            messages::INFO
         ));
+        messages::status("  You may be prompted for your password.");
+    }
+}
+
+/// Prompt for confirmation unless `skip_prompt` (`--yes`) was given. Returns
+/// whether the installation should proceed.
+fn confirm_os_deps_install(skip_prompt: bool) -> bool {
+    if skip_prompt {
+        messages::status("\nProceeding with installation (--yes flag specified)...");
+        return true;
+    }
+
+    messages::status("\nDo you want to proceed with the installation of the above packages on");
+    print!("your HOST OS? [y/N]: ");
+    use std::io::Write;
+    io::stdout().flush().unwrap();
+
+    let mut input = String::new();
+    match io::stdin().read_line(&mut input) {
+        Ok(_) => {
+            let input = input.trim().to_lowercase();
+            if input != "y" && input != "yes" {
+                messages::status("Installation cancelled.");
+                return false;
+            }
+            true
+        }
+        Err(e) => {
+            messages::error(&format!("Failed to read input: {}", e));
+            false
+        }
+    }
+}
+
+/// Build the package manager invocation, prefixing it with `sudo` if needed
+/// and appending the non-interactive flag (if any) and the package list.
+/// Returns `None` if the configured command is empty.
+fn build_install_command(
+    distro_config: &config::DistroConfig,
+    needs_sudo: bool,
+    non_interactive_flag: Option<&'static str>,
+    packages: &[String],
+) -> Option<(String, Vec<String>)> {
+    let mut cmd_parts: Vec<String> = Vec::new();
+
+    let (program, initial_args): (&str, Vec<String>) = if needs_sudo {
+        cmd_parts.push("sudo".to_string());
+        cmd_parts.extend(
+            distro_config
+                .package_manager
+                .command
+                .split_whitespace()
+                .map(String::from),
+        );
+        ("sudo", cmd_parts[1..].to_vec())
+    } else {
+        cmd_parts.extend(
+            distro_config
+                .package_manager
+                .command
+                .split_whitespace()
+                .map(String::from),
+        );
+        (cmd_parts[0].as_str(), cmd_parts[1..].to_vec())
+    };
+
+    let mut all_args = initial_args;
+    if let Some(flag) = non_interactive_flag {
+        all_args.push(flag.to_string());
+    }
+    all_args.extend(packages.iter().cloned());
+
+    if cmd_parts.is_empty() {
+        return None;
+    }
+
+    Some((program.to_string(), all_args))
+}
+
+fn run_os_deps_install_command(program: &str, all_args: &[String], needs_sudo: bool) {
+    match std::process::Command::new(program).args(all_args).status() {
+        Ok(status) if status.success() => {
+            messages::success("Successfully installed OS dependencies");
+        }
+        Ok(status) => {
+            messages::error(&format!("Installation failed with exit code: {}", status));
+            if needs_sudo && status.code() == Some(1) {
+                messages::info(
+                    "Hint: If you see 'permission denied' errors, ensure you have sudo privileges.",
+                );
+                messages::info("      You can skip sudo with --no-sudo if running as root or with special apt configuration.");
+            }
+        }
+        Err(e) => {
+            messages::error(&format!("Failed to execute installation command: {}", e));
+            if needs_sudo {
+                messages::info(
+                    "Hint: Make sure 'sudo' is installed and you have permission to use it.",
+                );
+            }
+        }
     }
 }
 

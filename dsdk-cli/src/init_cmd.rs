@@ -881,12 +881,14 @@ pub(crate) fn install_pip_packages_if_available(
     messages::status("");
     match crate::install_cmd::install_pip_from_workspace(
         workspace_path,
-        false, // force = false
-        symlink,
-        None, // profile = None (use each file's own default)
-        mirror_path,
-        sdk_config.direnv(),
-        None, // cert_validation = None (not exposed via `cim init` yet)
+        &crate::install_cmd::PipInstallOptions {
+            force: false,
+            symlink,
+            profile_override: None, // use each file's own default
+            mirror_path,
+            direnv_cfg: sdk_config.direnv(),
+            cert_validation: None, // not exposed via `cim init` yet
+        },
     ) {
         Ok(true) => {
             messages::success("Python packages installation completed");
