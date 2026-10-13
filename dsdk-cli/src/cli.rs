@@ -18,69 +18,52 @@ use std::path::PathBuf;
 /// adding or changing a flag here automatically applies to both.
 #[derive(Args, Debug)]
 pub struct WorkspaceSelectionArgs {
-    /// Source location (git repository URL or local path, default: $HOME/devel/cim-manifests)
-    #[arg(
-        short,
-        long,
-        value_name = "URL|PATH",
-        help = "Git repository URL or local path to manifests"
-    )]
+    /// Manifest source: git URL or local path
+    ///
+    /// Defaults to $HOME/devel/cim-manifests.
+    #[arg(short, long, value_name = "URL|PATH")]
     pub source: Option<String>,
-    /// Target version (branch or tag name); when omitted, uses the target's default version
-    #[arg(
-        short,
-        long,
-        value_name = "VERSION",
-        help = "Target version (branch/tag name)"
-    )]
+    /// Target version (branch or tag)
+    ///
+    /// When omitted, the target's default version is used.
+    #[arg(short, long, value_name = "VERSION")]
     pub version: Option<String>,
-    /// Workspace directory path (default: $HOME/dsdk-workspace)
-    #[arg(
-        short,
-        long,
-        value_name = "DIR",
-        help = "Directory where to create the workspace"
-    )]
+    /// Workspace directory
+    ///
+    /// Defaults to $HOME/dsdk-<target>.
+    #[arg(short, long, value_name = "DIR")]
     pub workspace: Option<PathBuf>,
-    /// Skip mirror operations and clone directly from remote URLs
-    #[arg(long, help = "Skip mirror, clone directly from remote repos")]
+    /// Skip the mirror and use remote URLs
+    #[arg(short = 'N', long)]
     pub no_mirror: bool,
-    /// Override the mirror cache directory for this invocation
-    #[arg(
-        long,
-        value_name = "DIR",
-        help = "Mirror cache directory (overrides config file and default)"
-    )]
+    /// Mirror cache directory
+    ///
+    /// Overrides the config file and the default location.
+    #[arg(short, long, value_name = "DIR")]
     pub mirror: Option<PathBuf>,
-    /// Only initialize repositories matching the given regex pattern
-    #[arg(long, help = "Only clone repositories matching this regex pattern")]
+    /// Only repositories matching this regex
+    #[arg(short = 'p', long, value_name = "REGEX")]
     pub r#match: Option<String>,
-    /// Only initialize repositories belonging to the given group(s)
-    #[arg(
-        long,
-        value_name = "NAMES",
-        help = "Only clone repositories in these comma-separated group(s)"
-    )]
+    /// Only repositories in these groups
+    ///
+    /// Comma-separated group names.
+    #[arg(short = 'g', long, value_name = "NAMES")]
     pub include_group: Option<String>,
-    /// Exclude repositories belonging to the given group(s)
-    #[arg(
-        long,
-        value_name = "NAMES",
-        help = "Exclude repositories in these comma-separated group(s)"
-    )]
+    /// Skip repositories in these groups
+    ///
+    /// Comma-separated group names.
+    #[arg(short = 'G', long, value_name = "NAMES")]
     pub exclude_group: Option<String>,
-    /// Enable verbose output
-    #[arg(long, help = "Show detailed progress information")]
+    /// Show detailed progress information
+    #[arg(long)]
     pub verbose: bool,
     /// Skip all confirmation prompts
-    #[arg(short = 'y', long = "yes", help = "Skip all confirmation prompts")]
+    #[arg(short, long)]
     pub yes: bool,
-    /// Certificate validation mode for downloads (strict, relaxed, auto)
-    #[arg(
-        long,
-        value_name = "MODE",
-        help = "Certificate validation: strict (default), relaxed (insecure), auto"
-    )]
+    /// Certificate validation mode
+    ///
+    /// One of: strict (default), relaxed (insecure), auto.
+    #[arg(short = 'c', long, value_name = "MODE")]
     pub cert_validation: Option<String>,
 }
 
@@ -127,41 +110,33 @@ pub enum Commands {
         #[arg(short, long, value_name = "FORMAT", default_value = "text")]
         format: String,
     },
-    /// Initialize a new workspace from a configuration file
+    /// Initialize a new workspace from a manifest
     Init {
-        /// Target name or URL (looks in targets/<name>/sdk.yml or fetches from URL)
-        #[arg(
-            short,
-            long,
-            value_name = "TARGET",
-            help = "Target name of the project"
-        )]
+        /// Target name or URL
+        ///
+        /// Looks in targets/<name>/sdk.yml or fetches from the URL.
+        #[arg(short, long, value_name = "TARGET")]
         target: Option<String>,
         #[command(flatten)]
         common: WorkspaceSelectionArgs,
-        /// Force initialization by removing existing workspace directory
-        #[arg(long, help = "Force workspace creation (removes existing")]
+        /// Replace an existing workspace directory
+        #[arg(short, long)]
         force: bool,
-        /// Install toolchains, pip packages, and install targets after workspace initialization
-        #[arg(long, help = "Install toolchains, pip packages, and install targets")]
+        /// Also install toolchains, pip packages and tools
+        #[arg(short, long)]
         install: bool,
-        /// Complete SDK setup including OS dependencies, toolchains, pip, and install targets
-        #[arg(
-            long,
-            help = "Install OS dependencies, toolchains, pip packages, and install targets"
-        )]
+        /// Also install OS deps, toolchains, pip and tools
+        #[arg(short = 'F', long)]
         full: bool,
-        /// Skip using sudo for package installation (for root users or special configurations)
-        #[arg(
-            long = "no-sudo",
-            help = "Skip using sudo when running package manager commands"
-        )]
+        /// Do not use sudo for package installs
+        ///
+        /// For root users or special configurations.
+        #[arg(short = 'S', long = "no-sudo")]
         no_sudo: bool,
-        /// Use symlinks for toolchains and pip packages (requires mirror)
-        #[arg(
-            long,
-            help = "Install toolchains and pip to mirror with symlinks in workspace"
-        )]
+        /// Symlink toolchains and pip venv from the mirror
+        ///
+        /// Requires a mirror.
+        #[arg(short = 'l', long)]
         symlink: bool,
     },
     /// Pick (or accept) a target, initialize a workspace, and run its build phases in one go

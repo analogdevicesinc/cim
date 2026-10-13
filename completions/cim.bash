@@ -15,9 +15,10 @@
 # Supports all commands and options:
 #   - list-targets: --source (-s), --target (-t), --format (-f), --verbose
 #   - init: --target (-t), --source (-s), --version (-v), --workspace (-w),
-#           --no-mirror, --mirror, --force, --match, --include-group,
-#           --exclude-group, --verbose, --install, --full, --symlink,
-#           --yes (-y), --cert-validation, --no-includes
+#           --no-mirror (-N), --mirror (-m), --force (-f), --match (-p),
+#           --include-group (-g), --exclude-group (-G), --verbose,
+#           --install (-i), --full (-F), --no-sudo (-S), --symlink (-l),
+#           --yes (-y), --cert-validation (-c), --no-includes
 #   - bootstrap: --target (-t), --source (-s), --version (-v), --workspace (-w),
 #           --no-mirror, --mirror, --match, --include-group, --exclude-group,
 #           --verbose, --yes (-y), --cert-validation
@@ -184,16 +185,20 @@ _cim_completions() {
                     _complete_dir_path
                     return 0
                     ;;
-                --match)
+                -m|--mirror)
+                    _complete_dir_path
+                    return 0
+                    ;;
+                -p|--match)
                     # Common regex patterns
                     COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
                     return 0
                     ;;
-                --include-group|--exclude-group)
+                -g|-G|--include-group|--exclude-group)
                     _complete_groups
                     return 0
                     ;;
-                --cert-validation)
+                -c|--cert-validation)
                     COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
                     return 0
                     ;;
@@ -207,7 +212,7 @@ _cim_completions() {
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --mirror --force --match --include-group --exclude-group --install --full --symlink --yes -y --verbose --cert-validation --no-includes --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror -N --mirror -m --force -f --match -p --include-group -g --exclude-group -G --install -i --full -F --no-sudo -S --symlink -l --yes -y --verbose --cert-validation -c --no-includes --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac

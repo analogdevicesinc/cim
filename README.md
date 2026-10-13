@@ -324,14 +324,16 @@ cim init --target NAME [--workspace PATH] [--version VERSION]
           [--install] [--full] [--symlink] [--no-mirror] [--mirror PATH]
 ```
 
-- `--install`: Install toolchains and pip packages after init
-- `--full`: Complete setup including OS dependencies (requires sudo)
-- `--symlink`: Install to mirror with symlinks in workspace
-- `--match REGEX`: Only clone repos matching pattern
-- `--include-group NAMES`: Only clone repos belonging to these comma-separated group(s)
-- `--exclude-group NAMES`: Skip repos belonging to these comma-separated group(s)
-- `--no-mirror`: Disable mirroring for this workspace
-- `--mirror PATH`: Override the mirror cache directory for this invocation (see [Mirror](#concepts))
+- `--install` (`-i`): Install toolchains and pip packages after init
+- `--full` (`-F`): Complete setup including OS dependencies (requires sudo)
+- `--symlink` (`-l`): Install to mirror with symlinks in workspace
+- `--match REGEX` (`-p`): Only clone repos matching pattern
+- `--include-group NAMES` (`-g`): Only clone repos belonging to these comma-separated group(s)
+- `--exclude-group NAMES` (`-G`): Skip repos belonging to these comma-separated group(s)
+- `--no-mirror` (`-N`): Disable mirroring for this workspace
+- `--mirror PATH` (`-m`): Override the mirror cache directory for this invocation (see [Mirror](#concepts))
+
+Every option also has a short form (shown by `-h`), except `--verbose`.
 
 #### bootstrap
 
