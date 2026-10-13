@@ -233,7 +233,7 @@ pub enum Commands {
         #[arg(short, long)]
         commit: String,
     },
-    /// Install system dependencies, Python packages, or toolchains
+    /// Install OS packages, Python packages or toolchains
     Install {
         #[command(subcommand)]
         install_command: InstallCommand,
@@ -421,66 +421,58 @@ pub enum DockerCommand {
 pub enum InstallCommand {
     /// Install OS system packages
     OsDeps {
-        /// Skip confirmation prompt and install automatically
-        #[arg(short = 'y', long = "yes", help = "Skip confirmation prompt")]
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
         yes: bool,
-        /// Skip using sudo for package installation (for root users or special configurations)
-        #[arg(
-            long = "no-sudo",
-            help = "Skip using sudo when running package manager commands"
-        )]
+        /// Do not use sudo for package installs
+        ///
+        /// For root users or special configurations.
+        #[arg(short = 'S', long = "no-sudo")]
         no_sudo: bool,
     },
-    /// Install Python packages for documentation
+    /// Install Python packages
     Pip {
-        /// Force reinstallation by removing existing virtual environment
-        #[arg(short, long, help = "Reinstall by removing the existing venv")]
+        /// Remove the existing venv and reinstall
+        #[arg(short, long)]
         force: bool,
-        /// Install Python packages to mirror and create symlinks in workspace
-        #[arg(long, help = "Use a shared venv in the mirror via a symlink")]
+        /// Use a shared venv in the mirror via symlink
+        #[arg(short = 'l', long)]
         symlink: bool,
-        /// Python dependency profile to use
-        #[arg(
-            short,
-            long,
-            value_name = "PROFILE",
-            help = "Profile to use (e.g. minimal, docs, dev, full)",
-            long_help = "Profile to use (e.g. minimal, docs, dev, full). \
-                    Supports comma-separated: --profile dev,docs"
-        )]
+        /// Dependency profile to use
+        ///
+        /// E.g. minimal, docs, dev, full. Comma-separated for several:
+        /// --profile dev,docs
+        #[arg(short, long, value_name = "PROFILE")]
         profile: Option<String>,
         /// List available dependency profiles
-        #[arg(long, help = "List available dependency profiles")]
+        #[arg(short = 'L', long)]
         list_profiles: bool,
-        /// Only install per-repo Python deps for repositories in the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Only install deps for these group(s)",
-            long_help = "Only install per-repo Python deps for repositories in \
-                    these comma-separated group(s)"
-        )]
+        /// Only deps for repositories in these groups
+        ///
+        /// Limits per-repo Python deps to repositories in these
+        /// comma-separated groups.
+        #[arg(short = 'g', long, value_name = "NAMES")]
         include_group: Option<String>,
-        /// Exclude per-repo Python deps for repositories in the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Exclude deps for these group(s)",
-            long_help = "Exclude per-repo Python deps for repositories in these \
-                    comma-separated group(s)"
-        )]
+        /// Skip deps for repositories in these groups
+        ///
+        /// Excludes per-repo Python deps for repositories in these
+        /// comma-separated groups.
+        #[arg(short = 'G', long, value_name = "NAMES")]
         exclude_group: Option<String>,
-        /// Certificate validation mode for package downloads (strict, relaxed, auto)
-        #[arg(
-            long,
-            value_name = "MODE",
-            help = "Certificate validation mode",
-            long_help = "Certificate validation: strict (default), relaxed \
-                    (insecure), auto"
-        )]
+        /// Certificate validation mode
+        ///
+        /// One of: strict (default), relaxed (insecure), auto.
+        #[arg(short = 'c', long, value_name = "MODE")]
         cert_validation: Option<String>,
-        /// Repair a broken shared mirror virtual environment in place
+        /// Repair the shared mirror venv in place
+        ///
+        /// Repairs the shared mirror virtual environment (used by
+        /// --symlink workspaces) instead of installing packages. Tries a
+        /// non-destructive fix first (e.g. a stale interpreter path after
+        /// a system Python upgrade) and only rebuilds it from scratch as
+        /// a last resort.
         #[arg(
+            short,
             long,
             conflicts_with_all = [
                 "force",
@@ -489,60 +481,42 @@ pub enum InstallCommand {
                 "list_profiles",
                 "include_group",
                 "exclude_group"
-            ],
-            help = "Repair the shared mirror venv in place",
-            long_help = "Repair the shared mirror virtual environment (used by \
-                    --symlink workspaces) instead of installing packages: tries \
-                    a non-destructive fix first (e.g. a stale interpreter path \
-                    after a system Python upgrade) and only rebuilds it from \
-                    scratch as a last resort"
+            ]
         )]
         repair: bool,
     },
     /// Install and extract toolchains
     Toolchains {
-        /// Force reinstallation by removing existing destination directories
-        #[arg(
-            short,
-            long,
-            help = "Force reinstallation by removing existing destination directories"
-        )]
+        /// Remove existing destinations and reinstall
+        #[arg(short, long)]
         force: bool,
-        /// Install toolchains to mirror and create symlinks in workspace
-        #[arg(
-            long,
-            help = "Install toolchains to mirror directory and create symlinks in workspace"
-        )]
+        /// Install to the mirror and symlink in workspace
+        #[arg(short = 'l', long)]
         symlink: bool,
-        /// Enable verbose output
-        #[arg(short, long, help = "Show detailed progress information")]
+        /// Show detailed progress information
+        #[arg(long)]
         verbose: bool,
-        /// Certificate validation mode for downloads (strict, relaxed, auto)
-        #[arg(
-            long,
-            value_name = "MODE",
-            help = "Certificate validation: strict (default), relaxed (insecure), auto"
-        )]
+        /// Certificate validation mode
+        ///
+        /// One of: strict (default), relaxed (insecure), auto.
+        #[arg(short = 'c', long, value_name = "MODE")]
         cert_validation: Option<String>,
     },
-    /// Install SDK components via install section targets (wraps Makefile)
+    /// Install SDK tools from the install section
     Tools {
-        /// Component name to install
-        #[arg(help = "Component name (e.g., ninja, ccache, zephyr-sdk)\n\
-                    Note: This wraps 'make install-<name>' for convenience. You can also use make directly.")]
+        /// Component to install
+        ///
+        /// E.g. ninja, ccache, zephyr-sdk. Wraps 'make install-<name>',
+        /// which can also be run directly.
         name: Option<String>,
         /// List available install targets
-        #[arg(long, help = "List available install targets")]
+        #[arg(short = 'l', long)]
         list: bool,
         /// Install all components
-        #[arg(long, help = "Install all components")]
+        #[arg(short, long)]
         all: bool,
-        /// Force reinstallation by removing sentinel file
-        #[arg(
-            short,
-            long,
-            help = "Force reinstallation by removing sentinel file before running"
-        )]
+        /// Remove the sentinel file and reinstall
+        #[arg(short, long)]
         force: bool,
     },
 }

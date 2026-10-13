@@ -28,11 +28,13 @@
 #   - makefile: --no-dividers (-d), --include-group (-g), --exclude-group (-G),
 #               --no-includes
 #   - add: --name (-n), --url (-u), --commit (-c)
-#   - install os-deps: --yes (-y), --no-sudo
-#   - install pip: --profile (-p), --force (-f), --symlink, --list-profiles,
-#                  --include-group, --exclude-group, --repair
-#   - install toolchains: --force (-f), --symlink, --verbose (-v), --cert-validation
-#   - install tools: name, --list, --all, --force (-f)
+#   - install os-deps: --yes (-y), --no-sudo (-S)
+#   - install pip: --profile (-p), --force (-f), --symlink (-l),
+#                  --list-profiles (-L), --include-group (-g),
+#                  --exclude-group (-G), --cert-validation (-c), --repair (-r)
+#   - install toolchains: --force (-f), --symlink (-l), --verbose,
+#                         --cert-validation (-c)
+#   - install tools: name, --list (-l), --all (-a), --force (-f)
 #   - docs create: --force (-f), --theme, --symlink, --verbose, --cert-validation
 #   - docs build: --format (-f)
 #   - docs serve: --port (-p), --host
@@ -349,14 +351,14 @@ _cim_completions() {
 
         install)
             if [ $COMP_CWORD -eq 2 ]; then
-                COMPREPLY=( $(compgen -W "os-deps pip toolchains tools --help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "os-deps pip toolchains tools --help -h" -- "${cur}") )
             elif [ "${COMP_WORDS[2]}" = "os-deps" ]; then
                 case "${prev}" in
                     os-deps)
-                        COMPREPLY=( $(compgen -W "--yes -y --no-sudo --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--yes -y --no-sudo -S --help -h" -- "${cur}") )
                         ;;
                     *)
-                        COMPREPLY=( $(compgen -W "--yes -y --no-sudo --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--yes -y --no-sudo -S --help -h" -- "${cur}") )
                         ;;
                 esac
             elif [ "${COMP_WORDS[2]}" = "pip" ]; then
@@ -366,27 +368,27 @@ _cim_completions() {
                         COMPREPLY=( $(compgen -W "minimal docs dev full" -- "${cur}") )
                         return 0
                         ;;
-                    --include-group|--exclude-group)
+                    -g|-G|--include-group|--exclude-group)
                         _complete_groups
                         return 0
                         ;;
                     pip)
-                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --include-group --exclude-group --repair --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink -l --list-profiles -L --include-group -g --exclude-group -G --cert-validation -c --repair -r --help -h" -- "${cur}") )
                         ;;
                     *)
-                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink --list-profiles --include-group --exclude-group --repair --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--profile -p --force -f --symlink -l --list-profiles -L --include-group -g --exclude-group -G --cert-validation -c --repair -r --help -h" -- "${cur}") )
                         ;;
                 esac
             elif [ "${COMP_WORDS[2]}" = "toolchains" ]; then
                 case "${prev}" in
                     toolchains)
-                        COMPREPLY=( $(compgen -W "--force -f --symlink --verbose -v --cert-validation --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--force -f --symlink -l --verbose --cert-validation -c --help -h" -- "${cur}") )
                         ;;
-                    --cert-validation)
+                    -c|--cert-validation)
                         COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
                         ;;
                     *)
-                        COMPREPLY=( $(compgen -W "--force -f --symlink --verbose -v --cert-validation --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--force -f --symlink -l --verbose --cert-validation -c --help -h" -- "${cur}") )
                         ;;
                 esac
             elif [ "${COMP_WORDS[2]}" = "tools" ]; then
@@ -400,14 +402,14 @@ _cim_completions() {
                             install_targets=$(grep -A1 "^  - name:" sdk.yml 2>/dev/null | grep "name:" | sed 's/.*name: //' | tr '\n' ' ')
                         fi
 
-                        COMPREPLY=( $(compgen -W "--list --all ${install_targets}" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--list -l --all -a ${install_targets}" -- "${cur}") )
                         ;;
                     *)
-                        COMPREPLY=( $(compgen -W "--force -f --list --all --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--force -f --list -l --all -a --help -h" -- "${cur}") )
                         ;;
                 esac
             else
-                COMPREPLY=( $(compgen -W "--help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "--help -h" -- "${cur}") )
             fi
             return 0
             ;;
