@@ -205,24 +205,20 @@ pub enum Commands {
         #[arg(short = 'G', long, value_name = "NAMES")]
         exclude_group: Option<String>,
     },
-    /// Generate a Makefile from configuration
+    /// Generate a Makefile from the manifest
     Makefile {
-        /// Skip section dividers in the generated Makefile
-        #[arg(long, help = "Do not add section dividers to the generated Makefile")]
+        /// Omit section dividers in the Makefile
+        #[arg(short = 'd', long)]
         no_dividers: bool,
-        /// Only include repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Only include repositories in these comma-separated group(s)"
-        )]
+        /// Only repositories in these groups
+        ///
+        /// Comma-separated group names.
+        #[arg(short = 'g', long, value_name = "NAMES")]
         include_group: Option<String>,
-        /// Exclude repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Exclude repositories in these comma-separated group(s)"
-        )]
+        /// Skip repositories in these groups
+        ///
+        /// Comma-separated group names.
+        #[arg(short = 'G', long, value_name = "NAMES")]
         exclude_group: Option<String>,
     },
     /// Add a new git repository to configuration

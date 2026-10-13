@@ -25,7 +25,8 @@
 #   - update: --no-mirror (-N), --mirror (-m), --match (-p), --include-group (-g),
 #             --exclude-group (-G), --all (-a), --verbose, --cert-validation (-c)
 #   - foreach: command, --match (-p), --include-group (-g), --exclude-group (-G)
-#   - makefile: --no-dividers, --include-group, --exclude-group, --no-includes
+#   - makefile: --no-dividers (-d), --include-group (-g), --exclude-group (-G),
+#               --no-includes
 #   - add: --name (-n), --url (-u), --commit
 #   - install os-deps: --yes (-y), --no-sudo
 #   - install pip: --profile (-p), --force (-f), --symlink, --list-profiles,
@@ -322,12 +323,12 @@ _cim_completions() {
                     COMPREPLY=( $(compgen -W "${repo_names}" -- "${cur}") )
                     return 0
                     ;;
-                --include-group|--exclude-group)
+                -g|-G|--include-group|--exclude-group)
                     _complete_groups
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--no-dividers --include-group --exclude-group --no-includes --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--no-dividers -d --include-group -g --exclude-group -G --no-includes --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac
