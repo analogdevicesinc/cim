@@ -273,6 +273,128 @@ fn strip_archive_extension(name: &str) -> String {
     without_ext.to_string()
 }
 
+/// URL, destination, and expected checksum for a toolchain download
+struct DownloadTarget<'a> {
+    url: &'a str,
+    dest_path: &'a Path,
+    expected_sha256: Option<&'a str>,
+}
+
+/// Certificate validation mode plus auth headers for a toolchain download
+struct DownloadAuth<'a> {
+    cert_validation: Option<&'a str>,
+    headers: &'a [(String, String)],
+    basic_auth: Option<&'a (String, String)>,
+}
+
+/// Print a security warning appropriate to the resolved certificate validation mode
+fn warn_about_cert_validation_mode(mode: &str) {
+    if mode == "relaxed" {
+        messages::info(
+            "Certificate validation is DISABLED - connections are vulnerable to MITM attacks",
+        );
+        messages::info("This should only be used in trusted networks or for testing");
+    } else if mode == "auto" {
+        messages::verbose(
+            "Using auto mode: will try strict validation first, then fallback to relaxed",
+        );
+    }
+}
+
+/// Build the ordered list of HTTP clients to try for the given cert validation mode
+fn build_download_clients(
+    mode: &str,
+    user_agent: &str,
+) -> Result<Vec<reqwest::blocking::Client>, Box<dyn std::error::Error>> {
+    let mut clients: Vec<reqwest::blocking::Client> = Vec::new();
+
+    match mode {
+        "strict" => {
+            clients.push(
+                reqwest::blocking::Client::builder()
+                    .user_agent(user_agent)
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?,
+            );
+        }
+        "relaxed" => {
+            clients.push(
+                reqwest::blocking::Client::builder()
+                    .user_agent(user_agent)
+                    .timeout(std::time::Duration::from_secs(300))
+                    .danger_accept_invalid_certs(true)
+                    .build()?,
+            );
+        }
+        "auto" => {
+            clients.push(
+                reqwest::blocking::Client::builder()
+                    .user_agent(user_agent)
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?,
+            );
+            clients.push(
+                reqwest::blocking::Client::builder()
+                    .user_agent(user_agent)
+                    .timeout(std::time::Duration::from_secs(300))
+                    .danger_accept_invalid_certs(true)
+                    .build()?,
+            );
+        }
+        _ => {
+            return Err(format!(
+                "Invalid cert_validation mode: {}. Use 'strict', 'relaxed', or 'auto'",
+                mode
+            )
+            .into());
+        }
+    }
+
+    Ok(clients)
+}
+
+/// Print runtime/compile-time architecture and platform-specific env vars
+/// in verbose mode, to help diagnose architecture-detection issues
+fn log_host_debug_info(host_info: &HostInfo) {
+    let compile_time_arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "x86") {
+        "x86"
+    } else {
+        "unknown"
+    };
+
+    messages::verbose(&format!(
+        "Debug: Runtime arch: {}, Compile-time arch: {}",
+        host_info.arch, compile_time_arch
+    ));
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(arch_pref) = std::env::var("ARCHPREFERENCE") {
+            messages::verbose(&format!("Debug: macOS ARCHPREFERENCE: {}", arch_pref));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(proc_arch) = std::env::var("PROCESSOR_ARCHITECTURE") {
+            messages::verbose(&format!(
+                "Debug: Windows PROCESSOR_ARCHITECTURE: {}",
+                proc_arch
+            ));
+        }
+        if let Ok(proc_arch_wow) = std::env::var("PROCESSOR_ARCHITEW6432") {
+            messages::verbose(&format!(
+                "Debug: Windows PROCESSOR_ARCHITEW6432: {}",
+                proc_arch_wow
+            ));
+        }
+    }
+}
+
 /// Manager for downloading and extracting toolchains
 pub struct ToolchainManager {
     workspace_path: PathBuf,
@@ -337,46 +459,7 @@ impl ToolchainManager {
             "Detected host: {} {}",
             host_info.os, host_info.arch
         ));
-
-        // Add debug information to help diagnose architecture detection issues
-        let compile_time_arch = if cfg!(target_arch = "x86_64") {
-            "x86_64"
-        } else if cfg!(target_arch = "aarch64") {
-            "aarch64"
-        } else if cfg!(target_arch = "x86") {
-            "x86"
-        } else {
-            "unknown"
-        };
-
-        messages::verbose(&format!(
-            "Debug: Runtime arch: {}, Compile-time arch: {}",
-            host_info.arch, compile_time_arch
-        ));
-
-        // Show platform-specific debug info
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(arch_pref) = std::env::var("ARCHPREFERENCE") {
-                messages::verbose(&format!("Debug: macOS ARCHPREFERENCE: {}", arch_pref));
-            }
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            if let Ok(proc_arch) = std::env::var("PROCESSOR_ARCHITECTURE") {
-                messages::verbose(&format!(
-                    "Debug: Windows PROCESSOR_ARCHITECTURE: {}",
-                    proc_arch
-                ));
-            }
-            if let Ok(proc_arch_wow) = std::env::var("PROCESSOR_ARCHITEW6432") {
-                messages::verbose(&format!(
-                    "Debug: Windows PROCESSOR_ARCHITEW6432: {}",
-                    proc_arch_wow
-                ));
-            }
-        }
+        log_host_debug_info(&host_info);
 
         // Filter toolchains based on host OS and architecture
         let applicable_toolchains: Vec<&ToolchainConfig> = toolchains
@@ -405,10 +488,17 @@ impl ToolchainManager {
             applicable_toolchains.len()
         ));
 
-        // Show installation plan in verbose mode
+        self.log_installation_plan(&applicable_toolchains, symlink);
+
+        self.install_all_applicable(applicable_toolchains, force, symlink, cert_validation)
+    }
+
+    /// Print the planned workspace/mirror path for each applicable toolchain
+    /// in verbose mode, before installation begins
+    fn log_installation_plan(&self, toolchains: &[&ToolchainConfig], symlink: bool) {
         if symlink {
             messages::verbose("Installation plan (--symlink mode):");
-            for toolchain in &applicable_toolchains {
+            for toolchain in toolchains {
                 let mirror_path = if let Some(ref mirror_dest) = toolchain.mirror_destination {
                     format!("{}/{}", self.mirror_path.display(), mirror_dest)
                 } else {
@@ -425,7 +515,7 @@ impl ToolchainManager {
             messages::verbose("");
         } else {
             messages::verbose("Installation plan (direct mode):");
-            for toolchain in &applicable_toolchains {
+            for toolchain in toolchains {
                 let workspace_path = format!(
                     "{}/{}",
                     self.workspace_path.display(),
@@ -435,9 +525,19 @@ impl ToolchainManager {
             }
             messages::verbose("");
         }
+    }
 
+    /// Install every applicable toolchain, continuing past individual
+    /// failures and reporting them all together at the end
+    fn install_all_applicable(
+        &self,
+        toolchains: Vec<&ToolchainConfig>,
+        force: bool,
+        symlink: bool,
+        cert_validation: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut failed_toolchains = Vec::new();
-        for toolchain in applicable_toolchains {
+        for toolchain in toolchains {
             if let Err(e) =
                 self.install_single_toolchain(toolchain, force, symlink, cert_validation)
             {
@@ -590,10 +690,36 @@ impl ToolchainManager {
         let workspace_dest_path = self
             .workspace_path
             .join(expand_env_vars(&toolchain.destination));
+        let mirror_dest_path = self.resolve_mirror_destination(toolchain);
 
-        // Determine mirror destination path:
-        // - If mirror_destination is explicitly specified, use it (backward compatible)
-        // - Otherwise, use toolchains/{name-without-extension} for unique identification
+        if self.prepare_workspace_symlink_slot(&workspace_dest_path, force)? {
+            return Ok(());
+        }
+
+        if mirror_dest_path.exists()
+            && self.reconcile_existing_mirror_destination(
+                toolchain,
+                &mirror_dest_path,
+                &workspace_dest_path,
+                cert_validation,
+                force,
+            )?
+        {
+            return Ok(());
+        }
+
+        self.finalize_mirror_install(
+            toolchain,
+            &mirror_dest_path,
+            &workspace_dest_path,
+            cert_validation,
+        )
+    }
+
+    /// Resolve the mirror destination path for a toolchain, respecting an
+    /// explicit `mirror_destination` or falling back to a name derived
+    /// from the toolchain's (extension-stripped) name
+    fn resolve_mirror_destination(&self, toolchain: &ToolchainConfig) -> PathBuf {
         let (mirror_relative_path, is_custom_location) =
             if let Some(ref mirror_dest) = toolchain.mirror_destination {
                 // User specified mirror_destination, respect it
@@ -606,7 +732,6 @@ impl ToolchainManager {
             };
         let mirror_dest_path = self.mirror_path.join(&mirror_relative_path);
 
-        // Show mirror path resolution in verbose mode
         messages::verbose(&format!(
             "Mirror path: {} ({})",
             mirror_dest_path.display(),
@@ -617,166 +742,214 @@ impl ToolchainManager {
             }
         ));
 
-        // Check if workspace symlink already exists
-        if let Ok(metadata) = fs::symlink_metadata(&workspace_dest_path) {
-            if metadata.file_type().is_symlink() {
-                if force {
-                    messages::info(&format!(
-                        "Symlink {} exists, removing due to --force",
-                        workspace_dest_path.display()
-                    ));
-                    if let Err(e) = fs::remove_file(&workspace_dest_path) {
-                        return Err(format!("Failed to remove existing symlink: {}", e).into());
-                    }
-                } else {
-                    messages::info("Already installed, skipping (use --force to reinstall)");
-                    return Ok(());
-                }
-            } else if force {
+        mirror_dest_path
+    }
+
+    /// Handle a pre-existing workspace symlink slot before a symlink install.
+    /// Returns `Ok(true)` if the caller should skip the rest of the install
+    /// (already installed), `Ok(false)` if it's clear to proceed.
+    fn prepare_workspace_symlink_slot(
+        &self,
+        workspace_dest_path: &Path,
+        force: bool,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let Ok(metadata) = fs::symlink_metadata(workspace_dest_path) else {
+            return Ok(false);
+        };
+
+        if metadata.file_type().is_symlink() {
+            if force {
                 messages::info(&format!(
-                    "Destination {} exists and is not a symlink, removing due to --force",
+                    "Symlink {} exists, removing due to --force",
                     workspace_dest_path.display()
                 ));
-                if workspace_dest_path.is_dir() {
-                    if let Err(e) = fs::remove_dir_all(&workspace_dest_path) {
-                        return Err(format!("Failed to remove existing directory: {}", e).into());
-                    }
-                } else if let Err(e) = fs::remove_file(&workspace_dest_path) {
-                    return Err(format!("Failed to remove existing file: {}", e).into());
+                if let Err(e) = fs::remove_file(workspace_dest_path) {
+                    return Err(format!("Failed to remove existing symlink: {}", e).into());
                 }
-            } else {
+                return Ok(false);
+            }
+            messages::info("Already installed, skipping (use --force to reinstall)");
+            return Ok(true);
+        }
+
+        if force {
+            messages::info(&format!(
+                "Destination {} exists and is not a symlink, removing due to --force",
+                workspace_dest_path.display()
+            ));
+            if workspace_dest_path.is_dir() {
+                if let Err(e) = fs::remove_dir_all(workspace_dest_path) {
+                    return Err(format!("Failed to remove existing directory: {}", e).into());
+                }
+            } else if let Err(e) = fs::remove_file(workspace_dest_path) {
+                return Err(format!("Failed to remove existing file: {}", e).into());
+            }
+            return Ok(false);
+        }
+
+        Err(format!(
+            "Destination path {} exists but is not a symlink. Use --force to remove it or install without --symlink",
+            workspace_dest_path.display()
+        ).into())
+    }
+
+    /// Handle a pre-existing mirror destination before a symlink install.
+    /// Returns `Ok(true)` if a valid installation was found and the symlink
+    /// was (re)created, so the caller should return early; `Ok(false)` if
+    /// the mirror destination was removed (or never existed) and a fresh
+    /// download/extract should proceed.
+    fn reconcile_existing_mirror_destination(
+        &self,
+        toolchain: &ToolchainConfig,
+        mirror_dest_path: &Path,
+        workspace_dest_path: &Path,
+        cert_validation: Option<&str>,
+        force: bool,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        if force {
+            messages::info(&format!(
+                "Mirror destination {} exists, removing due to --force",
+                mirror_dest_path.display()
+            ));
+            if let Err(e) = fs::remove_dir_all(mirror_dest_path) {
                 return Err(format!(
-                    "Destination path {} exists but is not a symlink. Use --force to remove it or install without --symlink",
-                    workspace_dest_path.display()
-                ).into());
+                    "Failed to remove existing mirror destination directory: {}",
+                    e
+                )
+                .into());
+            }
+            return Ok(false);
+        }
+
+        // First, check if we need to download to know what type of toolchain this is
+        let archive_path = self.ensure_archive_downloaded(toolchain, cert_validation)?;
+        let is_shell_script_toolchain = self.is_shell_script(&archive_path);
+
+        // Validate that the existing installation is actually valid
+        let (found_shell_script, installation_valid) =
+            self.scan_mirror_for_valid_shell_script(mirror_dest_path, toolchain)?;
+
+        // For shell script toolchains, we MUST find a valid shell script
+        // For archive toolchains, check if directory has content
+        if is_shell_script_toolchain {
+            if !found_shell_script {
+                messages::info(&format!(
+                    "Mirror destination for '{}' exists but no shell script found, removing",
+                    toolchain.get_name()
+                ));
+                if let Err(e) = fs::remove_dir_all(mirror_dest_path) {
+                    return Err(
+                        format!("Failed to remove invalid mirror destination: {}", e).into(),
+                    );
+                }
+                return Ok(false);
+            }
+            if installation_valid {
+                let friendly_name = extract_friendly_name(&toolchain.get_name());
+                messages::info(&format!(
+                    "Toolchain {} already installed in mirror",
+                    friendly_name
+                ));
+                messages::verbose(&format!("  Location: {}", mirror_dest_path.display()));
+                // Still create the symlink
+                self.create_symlink(mirror_dest_path, workspace_dest_path)?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+
+        // For archive toolchains, check if directory is non-empty
+        if let Ok(mut entries) = fs::read_dir(mirror_dest_path) {
+            if entries.next().is_some() {
+                let friendly_name = extract_friendly_name(&toolchain.get_name());
+                messages::info(&format!(
+                    "Toolchain {} already installed in mirror",
+                    friendly_name
+                ));
+                messages::verbose(&format!("  Location: {}", mirror_dest_path.display()));
+                // Still create the symlink
+                self.create_symlink(mirror_dest_path, workspace_dest_path)?;
+                return Ok(true);
+            } else {
+                messages::info(&format!(
+                    "Mirror destination for '{}' exists but is empty, removing",
+                    toolchain.get_name()
+                ));
+                if let Err(e) = fs::remove_dir_all(mirror_dest_path) {
+                    return Err(format!("Failed to remove empty mirror destination: {}", e).into());
+                }
             }
         }
 
-        // Check if mirror destination already exists
-        if mirror_dest_path.exists() {
-            if force {
-                messages::info(&format!(
-                    "Mirror destination {} exists, removing due to --force",
-                    mirror_dest_path.display()
-                ));
-                if let Err(e) = fs::remove_dir_all(&mirror_dest_path) {
-                    return Err(format!(
-                        "Failed to remove existing mirror destination directory: {}",
-                        e
-                    )
-                    .into());
-                }
-            } else {
-                // First, check if we need to download to know what type of toolchain this is
-                let archive_path = self.ensure_archive_downloaded(toolchain, cert_validation)?;
-                let is_shell_script_toolchain = self.is_shell_script(&archive_path);
+        Ok(false)
+    }
 
-                // Validate that the existing installation is actually valid
-                let mut installation_valid = false;
-                let mut found_shell_script = false;
+    /// Scan a mirror destination directory for shell-script toolchain files,
+    /// validating each one found. Removes the whole directory and stops
+    /// scanning if a corrupted shell script is found. Returns
+    /// `(found_shell_script, installation_valid)`.
+    fn scan_mirror_for_valid_shell_script(
+        &self,
+        mirror_dest_path: &Path,
+        toolchain: &ToolchainConfig,
+    ) -> Result<(bool, bool), Box<dyn std::error::Error>> {
+        let mut installation_valid = false;
+        let mut found_shell_script = false;
 
-                if let Ok(entries) = fs::read_dir(&mirror_dest_path) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        // Check if this is a shell script by content or extension
-                        if path.is_file()
-                            && (path.extension().and_then(|s| s.to_str()) == Some("sh")
-                                || self.is_shell_script(&path))
-                        {
-                            found_shell_script = true;
-                            // Validate the shell script
-                            if let Err(e) = self.validate_shell_script(&path) {
-                                messages::info(&format!(
-                                    "Mirror destination for '{}' exists but shell script '{}' appears corrupted or invalid: {}",
-                                    toolchain.get_name(),
-                                    path.display(),
-                                    e
-                                ));
-                                messages::info(&format!(
-                                    "Removing invalid installation at {}",
-                                    mirror_dest_path.display()
-                                ));
-                                if let Err(remove_err) = fs::remove_dir_all(&mirror_dest_path) {
-                                    return Err(format!(
-                                        "Failed to remove invalid mirror destination: {}",
-                                        remove_err
-                                    )
-                                    .into());
-                                }
-                                break;
-                            } else {
-                                // Found a valid shell script
-                                installation_valid = true;
-                            }
-                        }
-                    }
-                }
-
-                // For shell script toolchains, we MUST find a valid shell script
-                // For archive toolchains, check if directory has content
-                if is_shell_script_toolchain {
-                    if !found_shell_script {
+        if let Ok(entries) = fs::read_dir(mirror_dest_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                // Check if this is a shell script by content or extension
+                if path.is_file()
+                    && (path.extension().and_then(|s| s.to_str()) == Some("sh")
+                        || self.is_shell_script(&path))
+                {
+                    found_shell_script = true;
+                    // Validate the shell script
+                    if let Err(e) = self.validate_shell_script(&path) {
                         messages::info(&format!(
-                            "Mirror destination for '{}' exists but no shell script found, removing",
-                            toolchain.get_name()
+                            "Mirror destination for '{}' exists but shell script '{}' appears corrupted or invalid: {}",
+                            toolchain.get_name(),
+                            path.display(),
+                            e
                         ));
-                        if let Err(e) = fs::remove_dir_all(&mirror_dest_path) {
+                        messages::info(&format!(
+                            "Removing invalid installation at {}",
+                            mirror_dest_path.display()
+                        ));
+                        if let Err(remove_err) = fs::remove_dir_all(mirror_dest_path) {
                             return Err(format!(
                                 "Failed to remove invalid mirror destination: {}",
-                                e
+                                remove_err
                             )
                             .into());
                         }
-                    } else if installation_valid {
-                        let friendly_name = extract_friendly_name(&toolchain.get_name());
-                        messages::info(&format!(
-                            "Toolchain {} already installed in mirror",
-                            friendly_name
-                        ));
-                        messages::verbose(&format!("  Location: {}", mirror_dest_path.display()));
-                        // Still create the symlink
-                        self.create_symlink(&mirror_dest_path, &workspace_dest_path)?;
-                        return Ok(());
-                    }
-                } else {
-                    // For archive toolchains, check if directory is non-empty
-                    if let Ok(mut entries) = fs::read_dir(&mirror_dest_path) {
-                        if entries.next().is_some() {
-                            let friendly_name = extract_friendly_name(&toolchain.get_name());
-                            messages::info(&format!(
-                                "Toolchain {} already installed in mirror",
-                                friendly_name
-                            ));
-                            messages::verbose(&format!(
-                                "  Location: {}",
-                                mirror_dest_path.display()
-                            ));
-                            // Still create the symlink
-                            self.create_symlink(&mirror_dest_path, &workspace_dest_path)?;
-                            return Ok(());
-                        } else {
-                            messages::info(&format!(
-                                "Mirror destination for '{}' exists but is empty, removing",
-                                toolchain.get_name()
-                            ));
-                            if let Err(e) = fs::remove_dir_all(&mirror_dest_path) {
-                                return Err(format!(
-                                    "Failed to remove empty mirror destination: {}",
-                                    e
-                                )
-                                .into());
-                            }
-                        }
+                        break;
+                    } else {
+                        // Found a valid shell script
+                        installation_valid = true;
                     }
                 }
             }
         }
 
+        Ok((found_shell_script, installation_valid))
+    }
+
+    /// Download (if needed), extract, and symlink a toolchain into the mirror
+    /// once no valid existing mirror installation was found
+    fn finalize_mirror_install(
+        &self,
+        toolchain: &ToolchainConfig,
+        mirror_dest_path: &Path,
+        workspace_dest_path: &Path,
+        cert_validation: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Get and extract archive to mirror
         let archive_path = self.ensure_archive_downloaded(toolchain, cert_validation)?;
 
         // Create mirror destination directory
-        if let Err(e) = fs::create_dir_all(&mirror_dest_path) {
+        if let Err(e) = fs::create_dir_all(mirror_dest_path) {
             return Err(format!("Failed to create mirror destination directory: {}", e).into());
         }
 
@@ -789,13 +962,13 @@ impl ToolchainManager {
 
         // Always respect strip_components setting to properly extract the archive contents
         // The unique mirror path (based on archive name) prevents conflicts
-        self.extract_archive(&archive_path, &mirror_dest_path, toolchain.strip_components)?;
+        self.extract_archive(&archive_path, mirror_dest_path, toolchain.strip_components)?;
 
         // Execute post-install commands on the mirror installation
-        self.execute_post_install_commands(toolchain, &mirror_dest_path)?;
+        self.execute_post_install_commands(toolchain, mirror_dest_path)?;
 
         // Create symlink from workspace to mirror
-        self.create_symlink(&mirror_dest_path, &workspace_dest_path)?;
+        self.create_symlink(mirror_dest_path, workspace_dest_path)?;
 
         Ok(())
     }
@@ -871,12 +1044,16 @@ impl ToolchainManager {
                 }
             ));
             match self.download_toolchain(
-                &download_url,
-                &archive_path,
-                cert_validation,
-                expected_sha256,
-                &headers,
-                basic_auth.as_ref(),
+                &DownloadTarget {
+                    url: &download_url,
+                    dest_path: &archive_path,
+                    expected_sha256,
+                },
+                &DownloadAuth {
+                    cert_validation,
+                    headers: &headers,
+                    basic_auth: basic_auth.as_ref(),
+                },
             ) {
                 Ok(()) => return Ok(archive_path),
                 Err(e) => {
@@ -1142,88 +1319,76 @@ impl ToolchainManager {
     /// Download toolchain archive from URL
     fn download_toolchain(
         &self,
-        url: &str,
-        dest_path: &Path,
-        cert_validation: Option<&str>,
-        expected_sha256: Option<&str>,
-        headers: &[(String, String)],
-        basic_auth: Option<&(String, String)>,
+        target: &DownloadTarget,
+        auth: &DownloadAuth,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Use a wget-like user agent that is generally accepted by most servers
         // This avoids user-agent blocking from servers like rustup.rs
         let user_agent = "Wget/1.21.2";
 
         // Determine certificate validation mode
-        let (mode, show_warning) = config::get_cert_validation_mode(cert_validation);
+        let (mode, show_warning) = config::get_cert_validation_mode(auth.cert_validation);
 
-        // Show security warning if needed
         if show_warning {
-            if mode == "relaxed" {
-                messages::info("Certificate validation is DISABLED - connections are vulnerable to MITM attacks");
-                messages::info("This should only be used in trusted networks or for testing");
-            } else if mode == "auto" {
-                messages::verbose(
-                    "Using auto mode: will try strict validation first, then fallback to relaxed",
-                );
+            warn_about_cert_validation_mode(&mode);
+        }
+
+        let clients = build_download_clients(&mode, user_agent)?;
+
+        let last_error = match self.try_http_clients(&clients, &mode, target, auth)? {
+            Some(last_error) => last_error,
+            None => return Ok(()),
+        };
+
+        // In strict mode, provide helpful error message about enabling relaxed mode
+        if mode == "strict" {
+            let error_msg = format!(
+                "Download failed with strict SSL validation: {}.\n\
+                If you're behind a corporate proxy with SSL inspection, you can:\n\
+                1. Use --cert-validation=relaxed flag (INSECURE, testing only)\n\
+                2. Set cert_validation = \"auto\" in ~/.config/cim/config.toml\n\
+                3. Fix your SSL certificate chain",
+                last_error
+            );
+            return Err(error_msg.into());
+        }
+
+        // For relaxed and auto modes, try wget/curl as fallback
+        if mode == "relaxed" || mode == "auto" {
+            if self.try_wget_fallback(user_agent, &mode, target, auth)? {
+                return Ok(());
+            }
+            if self.try_curl_fallback(user_agent, &mode, target, auth)? {
+                return Ok(());
             }
         }
 
-        // Build client list based on mode
-        let mut clients: Vec<reqwest::blocking::Client> = Vec::new();
+        // All methods failed
+        Err(format!(
+            "All download methods failed. Last error: {}. Please check your network connection and SSL certificates.",
+            last_error
+        )
+        .into())
+    }
 
-        match mode.as_str() {
-            "strict" => {
-                // Only strict validation
-                clients.push(
-                    reqwest::blocking::Client::builder()
-                        .user_agent(user_agent)
-                        .timeout(std::time::Duration::from_secs(300))
-                        .build()?,
-                );
-            }
-            "relaxed" => {
-                // Only insecure client
-                clients.push(
-                    reqwest::blocking::Client::builder()
-                        .user_agent(user_agent)
-                        .timeout(std::time::Duration::from_secs(300))
-                        .danger_accept_invalid_certs(true)
-                        .build()?,
-                );
-            }
-            "auto" => {
-                // Try strict first, then relaxed
-                clients.push(
-                    reqwest::blocking::Client::builder()
-                        .user_agent(user_agent)
-                        .timeout(std::time::Duration::from_secs(300))
-                        .build()?,
-                );
-                clients.push(
-                    reqwest::blocking::Client::builder()
-                        .user_agent(user_agent)
-                        .timeout(std::time::Duration::from_secs(300))
-                        .danger_accept_invalid_certs(true)
-                        .build()?,
-                );
-            }
-            _ => {
-                return Err(format!(
-                    "Invalid cert_validation mode: {}. Use 'strict', 'relaxed', or 'auto'",
-                    mode
-                )
-                .into());
-            }
-        }
-
+    /// Try each HTTP client in turn; on success, write and verify the file and
+    /// return `Ok(None)`. On failure, return the last error message so the
+    /// caller can build a helpful error/fallback flow.
+    fn try_http_clients(
+        &self,
+        clients: &[reqwest::blocking::Client],
+        mode: &str,
+        target: &DownloadTarget,
+        auth: &DownloadAuth,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         let mut last_error = None;
 
         for (i, client) in clients.iter().enumerate() {
-            let mut request = client.get(url);
-            for (name, value) in headers {
+            let mut request = client.get(target.url);
+            for (name, value) in auth.headers {
                 request = request.header(name, value);
             }
-            if let Some((user, pass)) = basic_auth {
+            if let Some((user, pass)) = auth.basic_auth {
                 request = request.basic_auth(user, Some(pass));
             }
             match request.send() {
@@ -1243,9 +1408,9 @@ impl ToolchainManager {
                             "Download successful using client configuration {}",
                             i + 1
                         ));
-                        fs::write(dest_path, content)?;
-                        self.verify_toolchain_sha256(dest_path, expected_sha256)?;
-                        return Ok(());
+                        fs::write(target.dest_path, content)?;
+                        self.verify_toolchain_sha256(target.dest_path, target.expected_sha256)?;
+                        return Ok(None);
                     } else {
                         let error = format!(
                             "HTTP error {}: {}",
@@ -1266,116 +1431,123 @@ impl ToolchainManager {
             }
         }
 
-        // In strict mode, provide helpful error message about enabling relaxed mode
-        if mode == "strict" {
-            let error_msg = format!(
-                "Download failed with strict SSL validation: {}.\n\
-                If you're behind a corporate proxy with SSL inspection, you can:\n\
-                1. Use --cert-validation=relaxed flag (INSECURE, testing only)\n\
-                2. Set cert_validation = \"auto\" in ~/.config/cim/config.toml\n\
-                3. Fix your SSL certificate chain",
-                last_error.as_ref().unwrap_or(&"Unknown error".to_string())
-            );
-            return Err(error_msg.into());
-        }
+        Ok(Some(
+            last_error.unwrap_or_else(|| "Unknown error".to_string()),
+        ))
+    }
 
-        // For relaxed and auto modes, try wget as fallback
-        if mode == "relaxed" || mode == "auto" {
-            messages::verbose("HTTP clients failed, trying wget as fallback...");
-            let mut wget_cmd = Command::new("wget");
+    /// Fall back to a `wget` subprocess when the HTTP clients above all failed
+    fn try_wget_fallback(
+        &self,
+        user_agent: &str,
+        mode: &str,
+        target: &DownloadTarget,
+        auth: &DownloadAuth,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        messages::verbose("HTTP clients failed, trying wget as fallback...");
+        let mut wget_cmd = Command::new("wget");
+        wget_cmd
+            .arg("--no-check-certificate")
+            .arg(format!("--user-agent={}", user_agent))
+            .arg("--timeout=300");
+        for (name, value) in auth.headers {
+            wget_cmd.arg(format!("--header={}: {}", name, value));
+        }
+        if let Some((user, pass)) = auth.basic_auth {
             wget_cmd
-                .arg("--no-check-certificate")
-                .arg(format!("--user-agent={}", user_agent))
-                .arg("--timeout=300");
-            for (name, value) in headers {
-                wget_cmd.arg(format!("--header={}: {}", name, value));
-            }
-            if let Some((user, pass)) = basic_auth {
-                wget_cmd
-                    .arg(format!("--http-user={}", user))
-                    .arg(format!("--http-password={}", pass));
-            }
-            if let Ok(output) = wget_cmd.arg("-O").arg(dest_path).arg(url).output() {
-                if output.status.success() && !self.is_empty_file(dest_path) {
-                    messages::verbose("Download successful using wget");
-                    if mode == "auto" {
-                        messages::info(
-                            "Download succeeded using wget with disabled certificate validation",
-                        );
-                    }
-                    self.verify_toolchain_sha256(dest_path, expected_sha256)?;
-                    return Ok(());
-                } else {
-                    if output.status.success() {
-                        messages::verbose("wget wrote an empty (0-byte) file, treating as failure");
-                    } else {
-                        messages::verbose(&format!(
-                            "wget failed: {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        ));
-                    }
-                    // Remove partial/empty file left by wget
-                    if dest_path.exists() {
-                        let _ = fs::remove_file(dest_path);
-                    }
+                .arg(format!("--http-user={}", user))
+                .arg(format!("--http-password={}", pass));
+        }
+        if let Ok(output) = wget_cmd
+            .arg("-O")
+            .arg(target.dest_path)
+            .arg(target.url)
+            .output()
+        {
+            if output.status.success() && !self.is_empty_file(target.dest_path) {
+                messages::verbose("Download successful using wget");
+                if mode == "auto" {
+                    messages::info(
+                        "Download succeeded using wget with disabled certificate validation",
+                    );
                 }
-            }
-
-            // If wget is not available or failed, try curl
-            messages::verbose("wget not available or failed, trying curl as fallback...");
-            let mut curl_cmd = Command::new("curl");
-            curl_cmd
-                .arg("--insecure")
-                .arg("--fail") // non-2xx responses must be a failure, not a "successful" download of the error body
-                .arg("--user-agent")
-                .arg(user_agent)
-                .arg("--max-time")
-                .arg("300");
-            for (name, value) in headers {
-                curl_cmd.arg("-H").arg(format!("{}: {}", name, value));
-            }
-            if let Some((user, pass)) = basic_auth {
-                curl_cmd.arg("-u").arg(format!("{}:{}", user, pass));
-            }
-            if let Ok(output) = curl_cmd
-                .arg("-L") // follow redirects
-                .arg("-o")
-                .arg(dest_path)
-                .arg(url)
-                .output()
-            {
-                if output.status.success() && !self.is_empty_file(dest_path) {
-                    messages::verbose("Download successful using curl");
-                    if mode == "auto" {
-                        messages::info(
-                            "Download succeeded using curl with disabled certificate validation",
-                        );
-                    }
-                    self.verify_toolchain_sha256(dest_path, expected_sha256)?;
-                    return Ok(());
+                self.verify_toolchain_sha256(target.dest_path, target.expected_sha256)?;
+                return Ok(true);
+            } else {
+                if output.status.success() {
+                    messages::verbose("wget wrote an empty (0-byte) file, treating as failure");
                 } else {
-                    if output.status.success() {
-                        messages::verbose("curl wrote an empty (0-byte) file, treating as failure");
-                    } else {
-                        messages::verbose(&format!(
-                            "curl failed: {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        ));
-                    }
-                    // Remove partial/empty file left by curl
-                    if dest_path.exists() {
-                        let _ = fs::remove_file(dest_path);
-                    }
+                    messages::verbose(&format!(
+                        "wget failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                // Remove partial/empty file left by wget
+                if target.dest_path.exists() {
+                    let _ = fs::remove_file(target.dest_path);
                 }
             }
         }
 
-        // All methods failed
-        Err(format!(
-            "All download methods failed. Last error: {}. Please check your network connection and SSL certificates.",
-            last_error.unwrap_or_else(|| "Unknown error".to_string())
-        )
-        .into())
+        Ok(false)
+    }
+
+    /// Fall back to a `curl` subprocess when wget is unavailable or also failed
+    fn try_curl_fallback(
+        &self,
+        user_agent: &str,
+        mode: &str,
+        target: &DownloadTarget,
+        auth: &DownloadAuth,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        messages::verbose("wget not available or failed, trying curl as fallback...");
+        let mut curl_cmd = Command::new("curl");
+        curl_cmd
+            .arg("--insecure")
+            .arg("--fail") // non-2xx responses must be a failure, not a "successful" download of the error body
+            .arg("--user-agent")
+            .arg(user_agent)
+            .arg("--max-time")
+            .arg("300");
+        for (name, value) in auth.headers {
+            curl_cmd.arg("-H").arg(format!("{}: {}", name, value));
+        }
+        if let Some((user, pass)) = auth.basic_auth {
+            curl_cmd.arg("-u").arg(format!("{}:{}", user, pass));
+        }
+        if let Ok(output) = curl_cmd
+            .arg("-L") // follow redirects
+            .arg("-o")
+            .arg(target.dest_path)
+            .arg(target.url)
+            .output()
+        {
+            if output.status.success() && !self.is_empty_file(target.dest_path) {
+                messages::verbose("Download successful using curl");
+                if mode == "auto" {
+                    messages::info(
+                        "Download succeeded using curl with disabled certificate validation",
+                    );
+                }
+                self.verify_toolchain_sha256(target.dest_path, target.expected_sha256)?;
+                return Ok(true);
+            } else {
+                if output.status.success() {
+                    messages::verbose("curl wrote an empty (0-byte) file, treating as failure");
+                } else {
+                    messages::verbose(&format!(
+                        "curl failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                // Remove partial/empty file left by curl
+                if target.dest_path.exists() {
+                    let _ = fs::remove_file(target.dest_path);
+                }
+            }
+        }
+
+        Ok(false)
     }
 
     /// Extract archive to destination directory
