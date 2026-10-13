@@ -470,7 +470,7 @@ _cim_completions() {
         docker)
             if [ $COMP_CWORD -eq 2 ]; then
                 # Docker subcommands
-                COMPREPLY=( $(compgen -W "create --help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "create --help -h" -- "${cur}") )
                 return 0
             elif [ $COMP_CWORD -gt 2 ]; then
                 # Handle docker subcommand completion
@@ -499,7 +499,7 @@ _cim_completions() {
                                 return 0
                                 ;;
                             *)
-                                COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --distro -d --output -o --force -f --help" -- "${cur}") )
+                                COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --distro -d --output -o --force -f --help -h" -- "${cur}") )
                                 return 0
                                 ;;
                         esac

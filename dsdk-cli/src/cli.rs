@@ -243,7 +243,7 @@ pub enum Commands {
         #[command(subcommand)]
         docs_command: DocsCommand,
     },
-    /// Generate Docker configurations for development
+    /// Generate Docker configurations
     Docker {
         #[command(subcommand)]
         docker_command: DockerCommand,
@@ -362,47 +362,29 @@ pub enum DocsCommand {
 pub enum DockerCommand {
     /// Create a Dockerfile for SDK development
     Create {
-        /// Target name (looks in targets/<name>/sdk.yml)
-        #[arg(
-            short,
-            long,
-            value_name = "TARGET",
-            help = "Target name of the project"
-        )]
+        /// Target name
+        ///
+        /// Looks in targets/<name>/sdk.yml.
+        #[arg(short, long, value_name = "TARGET")]
         target: String,
-        /// Source location (git repository URL or local path, default: $HOME/devel/cim-manifests)
-        #[arg(
-            short,
-            long,
-            value_name = "URL|PATH",
-            help = "Git repository URL or local path to manifests"
-        )]
+        /// Manifest source: git URL or local path
+        ///
+        /// Defaults to $HOME/devel/cim-manifests.
+        #[arg(short, long, value_name = "URL|PATH")]
         source: Option<String>,
-        /// Target version (branch or tag name)
-        #[arg(
-            short,
-            long,
-            value_name = "VERSION",
-            help = "Target version (branch/tag name)"
-        )]
+        /// Target version (branch or tag)
+        #[arg(short, long, value_name = "VERSION")]
         version: Option<String>,
-        /// Base Docker image (e.g. ubuntu:22.04, fedora:40) [default: ubuntu:22.04]
-        #[arg(
-            short,
-            long,
-            help = "Linux distribution for Docker image (e.g. ubuntu:22.04)"
-        )]
+        /// Base image, e.g. ubuntu:22.04
+        ///
+        /// Defaults to ubuntu:22.04.
+        #[arg(short, long, value_name = "IMAGE")]
         distro: Option<String>,
         /// Output Dockerfile path
-        #[arg(
-            short,
-            long,
-            default_value = "Dockerfile",
-            help = "Output path for Dockerfile"
-        )]
+        #[arg(short, long, default_value = "Dockerfile")]
         output: PathBuf,
-        /// Force overwrite existing Dockerfile
-        #[arg(short, long, help = "Force overwrite existing Dockerfile")]
+        /// Overwrite an existing Dockerfile
+        #[arg(short, long)]
         force: bool,
     },
 }
