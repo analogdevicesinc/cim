@@ -24,7 +24,7 @@
 #           --exclude-group (-G), --verbose, --yes (-y), --cert-validation (-c)
 #   - update: --no-mirror (-N), --mirror (-m), --match (-p), --include-group (-g),
 #             --exclude-group (-G), --all (-a), --verbose, --cert-validation (-c)
-#   - foreach: command, --match, --include-group, --exclude-group
+#   - foreach: command, --match (-p), --include-group (-g), --exclude-group (-G)
 #   - makefile: --no-dividers, --include-group, --exclude-group, --no-includes
 #   - add: --name (-n), --url (-u), --commit
 #   - install os-deps: --yes (-y), --no-sudo
@@ -289,12 +289,12 @@ _cim_completions() {
 
         foreach)
             case "${prev}" in
-                --match)
+                -p|--match)
                     # Common regex patterns
                     COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
                     return 0
                     ;;
-                --include-group|--exclude-group)
+                -g|-G|--include-group|--exclude-group)
                     _complete_groups
                     return 0
                     ;;
@@ -302,9 +302,9 @@ _cim_completions() {
                     # Complete common commands for foreach
                     if [ $COMP_CWORD -eq 2 ]; then
                         local common_commands="\"git status\" \"git pull\" \"git log\" \"git diff\" \"make clean\" ls pwd"
-                        COMPREPLY=( $(compgen -W "${common_commands} --match --include-group --exclude-group --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "${common_commands} --match -p --include-group -g --exclude-group -G --help -h" -- "${cur}") )
                     else
-                        COMPREPLY=( $(compgen -W "--match --include-group --exclude-group --help" -- "${cur}") )
+                        COMPREPLY=( $(compgen -W "--match -p --include-group -g --exclude-group -G --help -h" -- "${cur}") )
                     fi
                     return 0
                     ;;

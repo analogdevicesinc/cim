@@ -189,24 +189,20 @@ pub enum Commands {
     },
     /// Execute a command in each repository
     Foreach {
-        /// The command to execute in each repository
+        /// Command to run in each repository
         command: String,
-        /// Only execute command in repositories matching the given regex pattern
-        #[arg(long, help = "Only run command in repositories matching this regex")]
+        /// Only repositories matching this regex
+        #[arg(short = 'p', long, value_name = "REGEX")]
         r#match: Option<String>,
-        /// Only execute command in repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Only run command in repositories in these comma-separated group(s)"
-        )]
+        /// Only repositories in these groups
+        ///
+        /// Comma-separated group names.
+        #[arg(short = 'g', long, value_name = "NAMES")]
         include_group: Option<String>,
-        /// Exclude repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Exclude repositories in these comma-separated group(s)"
-        )]
+        /// Skip repositories in these groups
+        ///
+        /// Comma-separated group names.
+        #[arg(short = 'G', long, value_name = "NAMES")]
         exclude_group: Option<String>,
     },
     /// Generate a Makefile from configuration
