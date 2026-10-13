@@ -88,10 +88,19 @@ pub struct WorkspaceSelectionArgs {
 #[command(name = "cim")]
 #[command(disable_version_flag = true)]
 #[command(
-    about = "Code in Motion - Multi-repository workspace manager\n\nWORKFLOW:\n  1. List targets:         cim list-targets [--source DIR|URL]\n  2. Initialize workspace: cim init --target <name> [--source DIR|URL] [-w /path/to/workspace]\n  3. Use from workspace:   cd /path/to/workspace && cim <command>\n\nCONFIG FILES:\n  sdk.yml                   - Main configuration\n  .workspace                - Workspace marker (auto-created)\n  os-dependencies.yml       - System packages\n  python-dependencies.yml   - Python packages"
+    about = "Code in Motion - Multi-repository workspace manager",
+    after_long_help = "WORKFLOW:\n  \
+        1. List targets:         cim list-targets [-s DIR|URL]\n  \
+        2. Initialize workspace: cim init -t <name> [-w DIR]\n  \
+        3. Use from workspace:   cd DIR && cim <command>\n\n\
+        CONFIG FILES:\n  \
+        sdk.yml                  - Main configuration\n  \
+        .workspace               - Workspace marker (auto-created)\n  \
+        os-dependencies.yml      - System packages\n  \
+        python-dependencies.yml  - Python packages"
 )]
 pub struct Cli {
-    /// Show version information
+    /// Show version
     #[arg(short = 'v', long = "version")]
     pub version: bool,
 
