@@ -20,8 +20,8 @@
 #           --install (-i), --full (-F), --no-sudo (-S), --symlink (-l),
 #           --yes (-y), --cert-validation (-c), --no-includes
 #   - bootstrap: --target (-t), --source (-s), --version (-v), --workspace (-w),
-#           --no-mirror, --mirror, --match, --include-group, --exclude-group,
-#           --verbose, --yes (-y), --cert-validation
+#           --no-mirror (-N), --mirror (-m), --match (-p), --include-group (-g),
+#           --exclude-group (-G), --verbose, --yes (-y), --cert-validation (-c)
 #   - update: --no-mirror, --mirror, --match, --include-group, --exclude-group,
 #             --all, --verbose (-v), --cert-validation
 #   - foreach: command, --match, --include-group, --exclude-group
@@ -237,21 +237,25 @@ _cim_completions() {
                     _complete_dir_path
                     return 0
                     ;;
-                --match)
+                -m|--mirror)
+                    _complete_dir_path
+                    return 0
+                    ;;
+                -p|--match)
                     # Common regex patterns
                     COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
                     return 0
                     ;;
-                --include-group|--exclude-group)
+                -g|-G|--include-group|--exclude-group)
                     _complete_groups
                     return 0
                     ;;
-                --cert-validation)
+                -c|--cert-validation)
                     COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror --mirror --match --include-group --exclude-group --yes -y --verbose --cert-validation --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror -N --mirror -m --match -p --include-group -g --exclude-group -G --yes -y --verbose --cert-validation -c --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac

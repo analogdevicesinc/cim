@@ -139,16 +139,13 @@ pub enum Commands {
         #[arg(short = 'l', long)]
         symlink: bool,
     },
-    /// Pick (or accept) a target, initialize a workspace, and run its build phases in one go
+    /// Pick a target, init a workspace and build it
     Bootstrap {
-        /// Target name or URL (omit to pick interactively; required when not running in a
-        /// terminal, e.g. in CI)
-        #[arg(
-            short,
-            long,
-            value_name = "TARGET",
-            help = "Target name of the project"
-        )]
+        /// Target name or URL
+        ///
+        /// Omit to pick interactively. Required when not running in a
+        /// terminal, e.g. in CI.
+        #[arg(short, long, value_name = "TARGET")]
         target: Option<String>,
         #[command(flatten)]
         common: WorkspaceSelectionArgs,
