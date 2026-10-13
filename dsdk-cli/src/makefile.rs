@@ -265,34 +265,8 @@ fn discover_overlay_phase_targets(
     phase_deps
 }
 
-/// Generate the content of the Makefile from SDK configuration.
-///
-/// When `workspace_path` is provided the workspace `build/` directory is
-/// scanned for per-git makefile fragments (`build/<name>.mk`).  Any fragment
-/// that exists is automatically included via a `-include build/<name>.mk`
-/// directive placed in the same section as the explicit `makefile_include`
-/// entries from `sdk.yml`.
-///
-/// The `makefile_include:` key in `sdk.yml` controls both:
-/// - Explicit include directives (via `files:` in structured form, or the
-///   bare list in legacy form).
-/// - Which auto-discovered fragments to suppress (via `exclude:` in structured
-///   form).  An empty or absent `exclude` list means no suppression.
-pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
-    sdk_config: &T,
-    dividers: bool,
-    workspace_path: Option<&std::path::Path>,
-) -> String {
-    let mut makefile = String::new();
-
-    if dividers {
-        makefile.push_str(&makefile_divider("Workspace and manifest variables"));
-    }
-
-    makefile.push_str(WORKSPACE_VARIABLE);
-    makefile.push_str("\n\n");
-
-    // Auto-generate _DIR variables from gits section
+/// Emit the auto-generated directory variables from gits.
+fn emit_git_dir_vars<T: config::SdkConfigCore>(makefile: &mut String, sdk_config: &T) {
     let git_dir_vars = match dsdk_cli::workspace::generate_git_dir_vars(
         sdk_config.gits(),
         sdk_config.variables().as_ref(),
@@ -304,20 +278,23 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         }
     };
 
-    if !git_dir_vars.is_empty() {
-        makefile.push_str("# Auto-generated directory variables from gits\n");
-        let mut sorted_dir_vars: Vec<_> = git_dir_vars.iter().collect();
-        sorted_dir_vars.sort_by_key(|(k, _)| k.as_str());
-        for (key, value) in sorted_dir_vars {
-            let make_value = render_command_for_makefile(value);
-            makefile.push_str(&format!("{} := {}\n", key, make_value));
-        }
-        makefile.push('\n');
+    if git_dir_vars.is_empty() {
+        return;
     }
+    makefile.push_str("# Auto-generated directory variables from gits\n");
+    let mut sorted_dir_vars: Vec<_> = git_dir_vars.iter().collect();
+    sorted_dir_vars.sort_by_key(|(k, _)| k.as_str());
+    for (key, value) in sorted_dir_vars {
+        let make_value = render_command_for_makefile(value);
+        makefile.push_str(&format!("{} := {}\n", key, make_value));
+    }
+    makefile.push('\n');
+}
 
-    // Auto-generate _VENV variables for gits that declare python-deps. These
-    // point at the per-git venv (.cim/<name>/.venv) so .mk fragments can
-    // activate it with `. $(NAME_VENV)/bin/activate`.
+/// Emit the `_VENV` variables for gits that declare python-deps, pointing at
+/// the per-git venv (`.cim/<name>/.venv`) so `.mk` fragments can activate it
+/// with `. $(NAME_VENV)/bin/activate`.
+fn emit_git_venv_vars<T: config::SdkConfigCore>(makefile: &mut String, sdk_config: &T) {
     let git_venv_vars = match dsdk_cli::workspace::generate_git_venv_vars(
         sdk_config.gits(),
         sdk_config.variables().as_ref(),
@@ -329,18 +306,21 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         }
     };
 
-    if !git_venv_vars.is_empty() {
-        makefile.push_str("# Auto-generated Python venv variables from gits python-deps\n");
-        let mut sorted_venv_vars: Vec<_> = git_venv_vars.iter().collect();
-        sorted_venv_vars.sort_by_key(|(k, _)| k.as_str());
-        for (key, value) in sorted_venv_vars {
-            let make_value = render_command_for_makefile(value);
-            makefile.push_str(&format!("{} := {}\n", key, make_value));
-        }
-        makefile.push('\n');
+    if git_venv_vars.is_empty() {
+        return;
     }
+    makefile.push_str("# Auto-generated Python venv variables from gits python-deps\n");
+    let mut sorted_venv_vars: Vec<_> = git_venv_vars.iter().collect();
+    sorted_venv_vars.sort_by_key(|(k, _)| k.as_str());
+    for (key, value) in sorted_venv_vars {
+        let make_value = render_command_for_makefile(value);
+        makefile.push_str(&format!("{} := {}\n", key, make_value));
+    }
+    makefile.push('\n');
+}
 
-    // Emit manifest variables as Make ?= assignments so host env vars override them
+/// Emit manifest variables as `?=` assignments so host env vars override them.
+fn emit_manifest_variables<T: config::SdkConfigCore>(makefile: &mut String, sdk_config: &T) {
     let vars: std::collections::HashMap<String, String> =
         if let Some(raw_vars) = sdk_config.variables() {
             dsdk_cli::workspace::resolve_variables(raw_vars)
@@ -348,28 +328,60 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
             std::collections::HashMap::new()
         };
 
-    if !vars.is_empty() {
-        makefile
-            .push_str("# Manifest variables — override with host env vars before invoking make\n");
-        // Sort for deterministic output
-        let mut sorted: Vec<_> = vars.iter().collect();
-        sorted.sort_by_key(|(k, _)| k.as_str());
-        for (key, value) in sorted {
-            // Convert ${{ VAR }} references to $(VAR) so Make resolves them at
-            // build time. This lets users reference $(WORKSPACE) and other Make
-            // variables directly from sdk.yml variable definitions.
-            let make_value = render_command_for_makefile(value);
-            makefile.push_str(&format!("{} ?= {}\n", key, make_value));
-        }
-        makefile.push('\n');
+    if vars.is_empty() {
+        return;
+    }
+    makefile.push_str("# Manifest variables — override with host env vars before invoking make\n");
+    // Sort for deterministic output
+    let mut sorted: Vec<_> = vars.iter().collect();
+    sorted.sort_by_key(|(k, _)| k.as_str());
+    for (key, value) in sorted {
+        // Convert ${{ VAR }} references to $(VAR) so Make resolves them at
+        // build time. This lets users reference $(WORKSPACE) and other Make
+        // variables directly from sdk.yml variable definitions.
+        let make_value = render_command_for_makefile(value);
+        makefile.push_str(&format!("{} ?= {}\n", key, make_value));
+    }
+    makefile.push('\n');
+}
+
+/// Emit the workspace-variable header, auto-generated dir/venv variables, and
+/// manifest variables (the "Workspace and manifest variables" section).
+fn emit_workspace_and_manifest_vars<T: config::SdkConfigCore>(
+    makefile: &mut String,
+    sdk_config: &T,
+    dividers: bool,
+) {
+    if dividers {
+        makefile.push_str(&makefile_divider("Workspace and manifest variables"));
     }
 
-    // Derive include directives and exclusion list from the makefile_include config key.
+    makefile.push_str(WORKSPACE_VARIABLE);
+    makefile.push_str("\n\n");
+
+    emit_git_dir_vars(makefile, sdk_config);
+    emit_git_venv_vars(makefile, sdk_config);
+    emit_manifest_variables(makefile, sdk_config);
+}
+
+/// Derive and emit the `makefile_include:` directives (explicit entries from
+/// sdk.yml plus auto-discovered per-git `.mk` fragments).
+///
+/// Returns the `exclude:` names from `makefile_include:` so the caller can
+/// reuse them for overlay phase-target discovery.
+fn emit_makefile_includes<T: config::SdkConfigCore>(
+    makefile: &mut String,
+    sdk_config: &T,
+    workspace_path: Option<&std::path::Path>,
+    dividers: bool,
+) -> Vec<String> {
     let config_include = sdk_config.makefile_include();
     let explicit_includes: Vec<String> = config_include
         .map(|mi| mi.files().to_vec())
         .unwrap_or_default();
-    let exclude_names: &[String] = config_include.map(|mi| mi.exclude()).unwrap_or(&[]);
+    let exclude_names: Vec<String> = config_include
+        .map(|mi| mi.exclude().to_vec())
+        .unwrap_or_default();
 
     // Auto-discover per-git makefile fragments: <build_folder>/<name>.mk
     let git_mk_includes: Vec<String> = if let Some(ws) = workspace_path {
@@ -377,7 +389,7 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
             ws,
             sdk_config.gits(),
             sdk_config.build_folder().as_deref(),
-            exclude_names,
+            &exclude_names,
         )
     } else {
         vec![]
@@ -404,29 +416,19 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         makefile.push('\n');
     }
 
-    let phases = sdk_config.phases();
+    exclude_names
+}
 
-    // Discover overlay phase targets (e.g. u-boot-build, linux-clean)
-    let phase_deps: std::collections::HashMap<String, Vec<String>> =
-        if let Some(ws) = workspace_path {
-            discover_overlay_phase_targets(
-                ws,
-                sdk_config.gits(),
-                sdk_config.build_folder().as_deref(),
-                exclude_names,
-                &phases,
-            )
-        } else {
-            std::collections::HashMap::new()
-        };
-
-    if dividers {
-        makefile.push_str(&makefile_divider("High-level SDK targets"));
-    }
-
-    // Add .PHONY declarations
+/// Build the `.PHONY:` target list: `all`, `sdk-<phase>` for every phase that
+/// has configuration/overlay work (or is `help`), and `install-all` if any
+/// install sections exist.
+fn build_phony_targets<T: config::SdkConfigCore>(
+    sdk_config: &T,
+    phases: &[String],
+    phase_deps: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<String> {
     let mut phony_targets = vec!["all".to_string()];
-    for phase in &phases {
+    for phase in phases {
         let deps = phase_deps.get(phase).map(|v| v.as_slice()).unwrap_or(&[]);
         let has_sdk_target = sdk_config.phase_target(phase).is_some();
         // sdk-help is always generated (self-documenting entry point), even
@@ -436,13 +438,28 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
         }
     }
 
-    // Add install targets to PHONY if install section exists
     if let Some(install_configs) = sdk_config.install() {
         if !install_configs.is_empty() {
             phony_targets.push("install-all".to_string());
         }
     }
+    phony_targets
+}
 
+/// Emit the "High-level SDK targets" section: `.PHONY:`, `all:`, and every
+/// `sdk-<phase>:` target.
+fn emit_phase_targets_section<T: config::SdkConfigCore>(
+    makefile: &mut String,
+    sdk_config: &T,
+    phases: &[String],
+    phase_deps: &std::collections::HashMap<String, Vec<String>>,
+    dividers: bool,
+) {
+    if dividers {
+        makefile.push_str(&makefile_divider("High-level SDK targets"));
+    }
+
+    let phony_targets = build_phony_targets(sdk_config, phases, phase_deps);
     makefile.push_str(&format!(".PHONY: {}\n", phony_targets.join(" ")));
 
     // Add 'all' target that depends on sdk-build and sdk-test
@@ -455,15 +472,15 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
     makefile.push_str(&format!("all: {}\n\n", all_deps.join(" ")));
 
     // Add sdk-<phase> targets for every configured phase
-    for phase in &phases {
+    for phase in phases {
         let deps = phase_deps.get(phase).map(|v| v.as_slice()).unwrap_or(&[]);
         let target = sdk_config.phase_target(phase);
         if phase == "help" {
             add_help_target(
-                &mut makefile,
+                makefile,
                 target,
                 deps,
-                &phases,
+                phases,
                 sdk_config.install().as_ref(),
             );
             continue;
@@ -474,10 +491,17 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
             "flash" => Some("No flash commands defined in sdk.yml"),
             _ => None,
         };
-        add_phase_target(&mut makefile, phase, target, deps, fallback);
+        add_phase_target(makefile, phase, target, deps, fallback);
     }
+}
 
-    // Add install-all target if install section exists
+/// Emit the "Installation targets" section: `install-all` and each
+/// individual `install-<name>` target.
+fn emit_install_targets_section<T: config::SdkConfigCore>(
+    makefile: &mut String,
+    sdk_config: &T,
+    dividers: bool,
+) {
     let has_install = match sdk_config.install() {
         Some(configs) => !configs.is_empty(),
         None => false,
@@ -489,26 +513,78 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
 
     if let Some(install_configs) = sdk_config.install() {
         if !install_configs.is_empty() {
-            add_install_all_target(&mut makefile, install_configs);
+            add_install_all_target(makefile, install_configs);
         }
     }
 
-    // Add individual install targets
     if let Some(install_configs) = sdk_config.install() {
         for install in install_configs {
-            add_install_target(&mut makefile, install);
+            add_install_target(makefile, install);
         }
     }
+}
 
-    // Add individual git targets
+/// Emit the per-git targets, retroactively inserting the "Git repository
+/// targets" divider only if at least one target was actually written.
+fn emit_git_targets_section<T: config::SdkConfigCore>(
+    makefile: &mut String,
+    sdk_config: &T,
+    dividers: bool,
+) {
     let repo_targets_start = makefile.len();
     for git in sdk_config.gits() {
-        add_makefile_target(&mut makefile, git);
+        add_makefile_target(makefile, git);
     }
     if repo_targets_start < makefile.len() && dividers {
         let divider = makefile_divider("Git repository targets");
         makefile.insert_str(repo_targets_start, &divider);
     }
+}
+
+/// Generate the content of the Makefile from SDK configuration.
+///
+/// When `workspace_path` is provided the workspace `build/` directory is
+/// scanned for per-git makefile fragments (`build/<name>.mk`).  Any fragment
+/// that exists is automatically included via a `-include build/<name>.mk`
+/// directive placed in the same section as the explicit `makefile_include`
+/// entries from `sdk.yml`.
+///
+/// The `makefile_include:` key in `sdk.yml` controls both:
+/// - Explicit include directives (via `files:` in structured form, or the
+///   bare list in legacy form).
+/// - Which auto-discovered fragments to suppress (via `exclude:` in structured
+///   form).  An empty or absent `exclude` list means no suppression.
+pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
+    sdk_config: &T,
+    dividers: bool,
+    workspace_path: Option<&std::path::Path>,
+) -> String {
+    let mut makefile = String::new();
+
+    emit_workspace_and_manifest_vars(&mut makefile, sdk_config, dividers);
+
+    // Derive include directives and exclusion list from the makefile_include config key.
+    let exclude_names = emit_makefile_includes(&mut makefile, sdk_config, workspace_path, dividers);
+
+    let phases = sdk_config.phases();
+
+    // Discover overlay phase targets (e.g. u-boot-build, linux-clean)
+    let phase_deps: std::collections::HashMap<String, Vec<String>> =
+        if let Some(ws) = workspace_path {
+            discover_overlay_phase_targets(
+                ws,
+                sdk_config.gits(),
+                sdk_config.build_folder().as_deref(),
+                &exclude_names,
+                &phases,
+            )
+        } else {
+            std::collections::HashMap::new()
+        };
+
+    emit_phase_targets_section(&mut makefile, sdk_config, &phases, &phase_deps, dividers);
+    emit_install_targets_section(&mut makefile, sdk_config, dividers);
+    emit_git_targets_section(&mut makefile, sdk_config, dividers);
 
     makefile
 }

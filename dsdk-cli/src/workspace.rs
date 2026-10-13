@@ -348,6 +348,113 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// Clone `git_source` into `dest`, shallow when no `version` is requested and
+/// the source is a URL (local paths and version checkouts get a full clone,
+/// since a shallow clone can't check out arbitrary branches/tags).
+fn clone_target_repo(
+    git_source: &str,
+    version: Option<&str>,
+    dest: &Path,
+) -> Result<(), anyhow::Error> {
+    let clone_result = if version.is_some() {
+        // For version checkout, we need full history to access branches/tags
+        git_operations::clone_repo(git_source, dest, None)?
+    } else if is_url(git_source) {
+        // For main branch, use shallow clone
+        git_operations::clone_repo_shallow(git_source, dest, 1)?
+    } else {
+        // For local repos without version, still do full clone since shallow clone of local repos is not very useful
+        git_operations::clone_repo(git_source, dest, None)?
+    };
+
+    if !clone_result.is_success() {
+        return Err(anyhow::anyhow!("Git clone failed: {}", clone_result.stderr));
+    }
+    Ok(())
+}
+
+/// Checkout `version` in the repo at `repo_path`, if one was requested.
+fn checkout_version_if_requested(
+    repo_path: &Path,
+    version: Option<&str>,
+) -> Result<(), anyhow::Error> {
+    let Some(v) = version else {
+        return Ok(());
+    };
+
+    let checkout_result = git_operations::checkout(repo_path, v)?;
+    if !checkout_result.is_success() {
+        return Err(anyhow::anyhow!(
+            "Git checkout of version '{}' failed: {}",
+            v,
+            checkout_result.stderr
+        ));
+    }
+    Ok(())
+}
+
+/// Locate `targets/<target>/` inside the cloned repo, erroring with a
+/// version-aware message if it doesn't have an `sdk.yml`.
+fn locate_target_dir(
+    repo_path: &Path,
+    target: &str,
+    version: Option<&str>,
+) -> Result<PathBuf, anyhow::Error> {
+    let target_dir = repo_path.join("targets").join(target);
+    let config_path = target_dir.join(SDK_CONFIG_FILE);
+
+    if !config_path.exists() {
+        return Err(anyhow::anyhow!(
+            "Target '{}' not found or missing sdk.yml in repository{}",
+            target,
+            if let Some(v) = version {
+                format!(" at version '{}'", v)
+            } else {
+                String::new()
+            }
+        ));
+    }
+    Ok(target_dir)
+}
+
+/// Prepare the directory the target's files will be extracted into: either a
+/// fresh subdirectory of the caller-provided `persistent_dir`, or a brand-new
+/// tempdir when none was given. Returns the extraction path and, for the
+/// tempdir case, the `TempDir` guard the caller must keep alive.
+fn prepare_extraction_dir(
+    persistent_dir: Option<&Path>,
+    target: &str,
+) -> Result<(PathBuf, Option<tempfile::TempDir>), anyhow::Error> {
+    let Some(persist_dir) = persistent_dir else {
+        // Create a persistent temporary directory for init command
+        let persistent_temp_dir = tempfile::tempdir()
+            .map_err(|e| anyhow::anyhow!("Failed to create persistent temp directory: {}", e))?;
+        let persistent_path = persistent_temp_dir.path().to_path_buf();
+        return Ok((persistent_path, Some(persistent_temp_dir)));
+    };
+
+    // Use provided persistent directory
+    let target_extract_dir = persist_dir.join(target);
+    if target_extract_dir.exists() {
+        // Clean up existing directory
+        fs::remove_dir_all(&target_extract_dir).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to remove existing directory {}: {}",
+                target_extract_dir.display(),
+                e
+            )
+        })?;
+    }
+    fs::create_dir_all(&target_extract_dir).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to create directory {}: {}",
+            target_extract_dir.display(),
+            e
+        )
+    })?;
+    Ok((target_extract_dir, None))
+}
+
 /// Resolve target config from git repository with optional version checkout
 ///
 /// # Arguments
@@ -368,85 +475,16 @@ pub fn resolve_target_config_from_git(
     // Create a temporary directory for clone
     let temp_dir = tempfile::tempdir()
         .map_err(|e| anyhow::anyhow!("Failed to create temp directory: {}", e))?;
-
     let temp_path = temp_dir.path();
 
-    // Clone the repository (shallow if no version specified, full if version needed)
-    let clone_result = if version.is_some() {
-        // For version checkout, we need full history to access branches/tags
-        git_operations::clone_repo(git_source, temp_path, None)?
-    } else {
-        // For main branch, use shallow clone
-        if is_url(git_source) {
-            git_operations::clone_repo_shallow(git_source, temp_path, 1)?
-        } else {
-            // For local repos without version, still do full clone since shallow clone of local repos is not very useful
-            git_operations::clone_repo(git_source, temp_path, None)?
-        }
-    };
-
-    if !clone_result.is_success() {
-        return Err(anyhow::anyhow!("Git clone failed: {}", clone_result.stderr));
-    }
-
-    // Checkout specific version if requested
-    if let Some(v) = version {
-        let checkout_result = git_operations::checkout(temp_path, v)?;
-
-        if !checkout_result.is_success() {
-            return Err(anyhow::anyhow!(
-                "Git checkout of version '{}' failed: {}",
-                v,
-                checkout_result.stderr
-            ));
-        }
-    }
+    clone_target_repo(git_source, version, temp_path)?;
+    checkout_version_if_requested(temp_path, version)?;
 
     // Check if target exists and has sdk.yml
-    let target_dir = temp_path.join("targets").join(target);
-    let config_path = target_dir.join(SDK_CONFIG_FILE);
-
-    if !config_path.exists() {
-        return Err(anyhow::anyhow!(
-            "Target '{}' not found or missing sdk.yml in repository{}",
-            target,
-            if let Some(v) = version {
-                format!(" at version '{}'", v)
-            } else {
-                String::new()
-            }
-        ));
-    }
+    let target_dir = locate_target_dir(temp_path, target, version)?;
 
     // Extract to persistent directory or create a temporary one
-    let (extraction_path, temp_dir_keeper) = if let Some(persist_dir) = persistent_dir {
-        // Use provided persistent directory
-        let target_extract_dir = persist_dir.join(target);
-        if target_extract_dir.exists() {
-            // Clean up existing directory
-            fs::remove_dir_all(&target_extract_dir).map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to remove existing directory {}: {}",
-                    target_extract_dir.display(),
-                    e
-                )
-            })?;
-        }
-        fs::create_dir_all(&target_extract_dir).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to create directory {}: {}",
-                target_extract_dir.display(),
-                e
-            )
-        })?;
-        (target_extract_dir, None)
-    } else {
-        // Create a persistent temporary directory for init command
-        let persistent_temp_dir = tempfile::tempdir()
-            .map_err(|e| anyhow::anyhow!("Failed to create persistent temp directory: {}", e))?;
-        let persistent_path = persistent_temp_dir.path().to_path_buf();
-        (persistent_path, Some(persistent_temp_dir))
-    };
+    let (extraction_path, temp_dir_keeper) = prepare_extraction_dir(persistent_dir, target)?;
 
     // Recursively copy all files and directories from target directory to extraction path
     // This ensures that any files referenced in copy_files are available, including

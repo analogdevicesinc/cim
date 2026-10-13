@@ -1537,26 +1537,35 @@ fn generate_makefile_and_install_all(
     }
 }
 
+/// Inputs needed to run the post-clone install steps (OS deps, toolchains,
+/// pip packages, Makefile + install-all), gathered here purely to keep
+/// `run_install_steps`'s own signature from ballooning into nine positional
+/// parameters.
+struct InstallStepsParams<'a> {
+    config: &'a InitConfig<'a>,
+    sdk_config: &'a config::SdkConfig,
+    workspace_path: &'a Path,
+    dest_config_path: &'a Path,
+    mirror_path: &'a Path,
+    match_regex: &'a Option<Regex>,
+    include_groups: &'a [String],
+    exclude_groups: &'a [String],
+    user_config: Option<&'a config::UserConfig>,
+}
+
 /// Run every `--install`/`--full` step in order: OS deps (only for `--full`),
 /// toolchains, pip packages, then Makefile generation + `make install-all`.
-#[allow(clippy::too_many_arguments)]
-fn run_install_steps(
-    config: &InitConfig<'_>,
-    sdk_config: &config::SdkConfig,
-    workspace_path: &Path,
-    dest_config_path: &Path,
-    mirror_path: &Path,
-    match_regex: &Option<Regex>,
-    include_groups: &[String],
-    exclude_groups: &[String],
-    user_config: Option<&config::UserConfig>,
-) {
+fn run_install_steps(params: InstallStepsParams<'_>) {
     messages::status("");
-    if config.full {
+    if params.config.full {
         messages::status("Setting up SDK components with --full...");
 
         // Step 0: Install OS dependencies if --full is specified
-        if let Err(e) = install_os_deps_if_available(workspace_path, config.yes, config.no_sudo) {
+        if let Err(e) = install_os_deps_if_available(
+            params.workspace_path,
+            params.config.yes,
+            params.config.no_sudo,
+        ) {
             messages::info(&format!(
                 "Note: OS dependencies installation encountered an issue: {}",
                 e
@@ -1568,11 +1577,11 @@ fn run_install_steps(
 
     // Step 1: Install toolchains if available
     if let Err(e) = install_toolchains_if_available(
-        workspace_path,
-        dest_config_path,
-        mirror_path,
-        config.symlink,
-        config.verbose,
+        params.workspace_path,
+        params.dest_config_path,
+        params.mirror_path,
+        params.config.symlink,
+        params.config.verbose,
     ) {
         messages::info(&format!(
             "Note: Toolchain installation encountered an issue: {}",
@@ -1582,13 +1591,13 @@ fn run_install_steps(
 
     // Step 2: Install Python packages if available
     if let Err(e) = install_pip_packages_if_available(
-        workspace_path,
-        dest_config_path,
-        mirror_path,
-        config.symlink,
-        match_regex,
-        include_groups,
-        exclude_groups,
+        params.workspace_path,
+        params.dest_config_path,
+        params.mirror_path,
+        params.config.symlink,
+        params.match_regex,
+        params.include_groups,
+        params.exclude_groups,
     ) {
         messages::error(&format!("Failed to install Python packages: {}", e));
         messages::error("Workspace creation failed");
@@ -1597,12 +1606,12 @@ fn run_install_steps(
 
     // Step 3: Generate Makefile and run install-all (original --install behavior)
     generate_makefile_and_install_all(
-        sdk_config,
-        workspace_path,
-        match_regex,
-        include_groups,
-        exclude_groups,
-        user_config,
+        params.sdk_config,
+        params.workspace_path,
+        params.match_regex,
+        params.include_groups,
+        params.exclude_groups,
+        params.user_config,
     );
 }
 
@@ -1768,17 +1777,17 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     // Run installation steps if --install or --full flag was provided
     // (--full implies --install)
     if config.install || config.full {
-        run_install_steps(
-            &config,
-            &sdk_config,
-            &workspace_path,
-            &dest_config_path,
-            &mirror_path,
-            &match_regex,
-            &include_groups,
-            &exclude_groups,
-            user_config.as_ref(),
-        );
+        run_install_steps(InstallStepsParams {
+            config: &config,
+            sdk_config: &sdk_config,
+            workspace_path: &workspace_path,
+            dest_config_path: &dest_config_path,
+            mirror_path: &mirror_path,
+            match_regex: &match_regex,
+            include_groups: &include_groups,
+            exclude_groups: &exclude_groups,
+            user_config: user_config.as_ref(),
+        });
     }
 
     setup_direnv_if_used(&sdk_config, &workspace_path, config.symlink);

@@ -78,11 +78,13 @@ pub(crate) fn handle_bootstrap_command(cfg: BootstrapConfig) {
     run_workspace_init(
         &cfg,
         &target,
-        resolved_source,
-        version,
         &workspace_path,
-        force,
-        symlink,
+        ResolvedBootstrapRun {
+            resolved_source,
+            version,
+            force,
+            symlink,
+        },
     );
 
     let phases = bootstrap_phases(user_config.as_ref());
@@ -172,25 +174,31 @@ fn resolve_bootstrap_version(
     resolved_source.and_then(|source| pick_version(target, source))
 }
 
+/// Per-run values resolved before the timer starts (target/version
+/// selection, force/symlink from user config), grouped to keep
+/// `run_workspace_init`'s signature from needing many positional parameters.
+struct ResolvedBootstrapRun {
+    resolved_source: Option<String>,
+    version: Option<String>,
+    force: bool,
+    symlink: bool,
+}
+
 /// Run `cim init` for the resolved target and verify a Makefile was produced.
-#[allow(clippy::too_many_arguments)]
 fn run_workspace_init(
     cfg: &BootstrapConfig,
     target: &str,
-    resolved_source: Option<String>,
-    version: Option<String>,
     workspace_path: &Path,
-    force: bool,
-    symlink: bool,
+    run: ResolvedBootstrapRun,
 ) {
     handle_init_command(InitConfig {
         target: target.to_string(),
-        source: resolved_source,
-        version,
+        source: run.resolved_source,
+        version: run.version,
         workspace: Some(workspace_path.to_path_buf()),
         no_mirror: cfg.no_mirror,
         mirror: cfg.mirror.clone(),
-        force,
+        force: run.force,
         match_pattern: cfg.match_pattern.as_deref(),
         include_group: cfg.include_group.as_deref(),
         exclude_group: cfg.exclude_group.as_deref(),
@@ -198,7 +206,7 @@ fn run_workspace_init(
         install: true,
         full: false,
         no_sudo: false,
-        symlink,
+        symlink: run.symlink,
         yes: cfg.yes,
         _cert_validation: cfg.cert_validation.as_deref(),
     });
