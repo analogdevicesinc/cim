@@ -221,16 +221,16 @@ pub enum Commands {
         #[arg(short = 'G', long, value_name = "NAMES")]
         exclude_group: Option<String>,
     },
-    /// Add a new git repository to configuration
+    /// Add a git repository to the manifest
     Add {
-        /// Name of the repository
-        #[arg(short, long, help = "Name of the repository")]
+        /// Repository name
+        #[arg(short, long)]
         name: String,
-        /// URL of the repository
-        #[arg(short, long, help = "URL of the repository")]
+        /// Repository URL
+        #[arg(short, long)]
         url: String,
-        /// Commit or tag to checkout
-        #[arg(long, help = "Commit or tag to checkout")]
+        /// Commit or tag to check out
+        #[arg(short, long)]
         commit: String,
     },
     /// Install system dependencies, Python packages, or toolchains

@@ -27,7 +27,7 @@
 #   - foreach: command, --match (-p), --include-group (-g), --exclude-group (-G)
 #   - makefile: --no-dividers (-d), --include-group (-g), --exclude-group (-G),
 #               --no-includes
-#   - add: --name (-n), --url (-u), --commit
+#   - add: --name (-n), --url (-u), --commit (-c)
 #   - install os-deps: --yes (-y), --no-sudo
 #   - install pip: --profile (-p), --force (-f), --symlink, --list-profiles,
 #                  --include-group, --exclude-group, --repair
@@ -336,12 +336,12 @@ _cim_completions() {
 
         add)
             case "${prev}" in
-                -n|--name|-u|--url|--commit)
+                -n|--name|-u|--url|-c|--commit)
                     # These expect user input, no completion
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--name -n --url -u --commit --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--name -n --url -u --commit -c --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac
