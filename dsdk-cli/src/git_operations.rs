@@ -41,7 +41,7 @@ impl GitResult {
 // matter what. Overridable via `git_timeout_secs` under `[network]` in
 // `~/.config/cim/config.toml` -- large repositories (e.g. full kernel
 // histories) on slower links can legitimately need more than the default.
-const DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS: u64 = 900;
+const DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS: u64 = 1800;
 
 /// Resolve the effective hard timeout from an optional user config,
 /// falling back to [`DEFAULT_GIT_COMMAND_HARD_TIMEOUT_SECS`]. Split out from

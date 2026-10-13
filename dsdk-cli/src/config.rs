@@ -1381,7 +1381,7 @@ pub struct NetworkConfig {
 
     /// Hard timeout (in seconds) applied to every git subprocess invocation
     /// (clone, fetch, checkout, ls-remote, ...) as a backstop against hangs
-    /// the HTTP low-speed check can't see. Default: 900 (15 minutes).
+    /// the HTTP low-speed check can't see. Default: 1800 (30 minutes).
     /// Increase this for very large repositories (e.g. full kernel/monorepo
     /// histories) on slower links, where a full `fetch --all --tags` can
     /// legitimately take longer than the default even with no stalls.
@@ -1720,7 +1720,7 @@ impl UserConfig {
 # before any bytes flow, credential-helper issues) -- it kills the git
 # process if it runs longer than this, no matter what it's doing.
 #
-# Default: 900 (15 minutes)
+# Default: 1800 (30 minutes)
 # Use cases:
 #   - Very large repositories (e.g. full kernel/monorepo histories) whose
 #     `fetch --all --tags` legitimately takes longer than the default,
@@ -1728,8 +1728,8 @@ impl UserConfig {
 #   - Lower it to fail fast in CI or scripted environments
 #
 # Examples:
-# git_timeout_secs = 900     # Default
-# git_timeout_secs = 1800    # Large repos on slow links
+# git_timeout_secs = 1800    # Default
+# git_timeout_secs = 3600    # Large repos on slow links
 # git_timeout_secs = 120     # Fail fast in CI
 
 # =============================================================================
