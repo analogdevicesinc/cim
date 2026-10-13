@@ -152,48 +152,39 @@ pub enum Commands {
     },
     /// Update all git repositories
     Update {
-        /// Skip mirror operations and clone directly from remote URLs
-        #[arg(long, help = "Skip mirror, only update workspace from remote URLs")]
+        /// Skip the mirror and use remote URLs
+        #[arg(short = 'N', long)]
         no_mirror: bool,
-        /// Override the mirror cache directory for this invocation
-        #[arg(
-            long,
-            value_name = "DIR",
-            help = "Mirror cache directory (overrides config file and default)"
-        )]
+        /// Mirror cache directory
+        ///
+        /// Overrides the config file and the default location.
+        #[arg(short, long, value_name = "DIR")]
         mirror: Option<PathBuf>,
-        /// Only update repositories matching the given regex pattern
-        #[arg(long, help = "Only update repositories matching this regex pattern")]
+        /// Only repositories matching this regex
+        #[arg(short = 'p', long, value_name = "REGEX")]
         r#match: Option<String>,
-        /// Only update repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Only update repositories in these comma-separated group(s)"
-        )]
+        /// Only repositories in these groups
+        ///
+        /// Comma-separated group names.
+        #[arg(short = 'g', long, value_name = "NAMES")]
         include_group: Option<String>,
-        /// Exclude repositories belonging to the given group(s)
-        #[arg(
-            long,
-            value_name = "NAMES",
-            help = "Exclude repositories in these comma-separated group(s)"
-        )]
+        /// Skip repositories in these groups
+        ///
+        /// Comma-separated group names.
+        #[arg(short = 'G', long, value_name = "NAMES")]
         exclude_group: Option<String>,
-        /// Update all repositories, ignoring the stored match pattern
-        #[arg(
-            long,
-            help = "Update all repositories, ignoring stored match filter from init"
-        )]
+        /// Update all repositories
+        ///
+        /// Ignores the match filter stored by init.
+        #[arg(short, long)]
         all: bool,
-        /// Enable verbose output
-        #[arg(short, long, help = "Show detailed progress information")]
+        /// Show detailed progress information
+        #[arg(long)]
         verbose: bool,
-        /// Certificate validation mode for downloads (strict, relaxed, auto)
-        #[arg(
-            long,
-            value_name = "MODE",
-            help = "Certificate validation: strict (default), relaxed (insecure), auto"
-        )]
+        /// Certificate validation mode
+        ///
+        /// One of: strict (default), relaxed (insecure), auto.
+        #[arg(short = 'c', long, value_name = "MODE")]
         cert_validation: Option<String>,
     },
     /// Execute a command in each repository

@@ -22,8 +22,8 @@
 #   - bootstrap: --target (-t), --source (-s), --version (-v), --workspace (-w),
 #           --no-mirror (-N), --mirror (-m), --match (-p), --include-group (-g),
 #           --exclude-group (-G), --verbose, --yes (-y), --cert-validation (-c)
-#   - update: --no-mirror, --mirror, --match, --include-group, --exclude-group,
-#             --all, --verbose (-v), --cert-validation
+#   - update: --no-mirror (-N), --mirror (-m), --match (-p), --include-group (-g),
+#             --exclude-group (-G), --all (-a), --verbose, --cert-validation (-c)
 #   - foreach: command, --match, --include-group, --exclude-group
 #   - makefile: --no-dividers, --include-group, --exclude-group, --no-includes
 #   - add: --name (-n), --url (-u), --commit
@@ -263,21 +263,25 @@ _cim_completions() {
 
         update)
             case "${prev}" in
-                --match)
+                -m|--mirror)
+                    _complete_dir_path
+                    return 0
+                    ;;
+                -p|--match)
                     # Common regex patterns
                     COMPREPLY=( $(compgen -W "\"optee.*\" \".*test.*\" \"build.*\"" -- "${cur}") )
                     return 0
                     ;;
-                --include-group|--exclude-group)
+                -g|-G|--include-group|--exclude-group)
                     _complete_groups
                     return 0
                     ;;
-                --cert-validation)
+                -c|--cert-validation)
                     COMPREPLY=( $(compgen -W "strict relaxed auto" -- "${cur}") )
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--no-mirror --mirror --match --include-group --exclude-group --all --verbose -v --cert-validation --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--no-mirror -N --mirror -m --match -p --include-group -g --exclude-group -G --all -a --verbose --cert-validation -c --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac
