@@ -60,7 +60,7 @@ _cim_completions() {
     local main_commands="list-targets init bootstrap update foreach makefile add install docs docker release config utils help"
 
     # Global options
-    local global_opts="--help --version -v"
+    local global_opts="--help -h --version -v"
 
     # Function to complete file paths
     _complete_file_path() {
