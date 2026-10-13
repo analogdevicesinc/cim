@@ -155,6 +155,9 @@ cim-manifests for a full worked example.
 - Always use `git commit -s` to sign off your commits.
 - Consider making small, incremential and logical commits.
 - Use Linux kernel style commit messages, with a short (50 char) summary, a blank line, and a more detailed explanatory text wrapped at 72 characters.
+- The message explains WHY (the problem, the motivation, the user-visible effect), not WHAT. NEVER mention file names, function names, constants, struct fields or other identifiers in the message; `git log --stat` and `git show` already show them.
+- Describe the behavior change in plain words (e.g. "Raise the default git timeout from 15 to 30 minutes"), not the code that implements it.
+- Do not list which docs, comments or tests were updated alongside the change.
 
 ## Makefile Targets
 The repository includes a Makefile to streamline common development tasks:
