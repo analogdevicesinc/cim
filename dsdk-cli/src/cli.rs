@@ -279,7 +279,7 @@ pub enum Commands {
         #[arg(short = 'l', long = "list")]
         list: bool,
 
-        /// Get specific configuration value
+        /// Get a configuration value
         #[arg(short = 'g', long = "get", value_name = "KEY")]
         get: Option<String>,
 
@@ -295,11 +295,13 @@ pub enum Commands {
         #[arg(short = 'c', long = "create")]
         create: bool,
 
-        /// Force overwrite when creating config
+        /// Overwrite when creating config
         #[arg(short = 'f', long = "force")]
         force: bool,
 
-        /// Open config in editor (creates from template if missing)
+        /// Open config in editor
+        ///
+        /// Creates the file from the template if it is missing.
         #[arg(short = 'e', long = "edit")]
         edit: bool,
 

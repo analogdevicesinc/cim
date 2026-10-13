@@ -535,7 +535,7 @@ _cim_completions() {
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--list -l --get -g --path -p --template -t --create -c --force -f --edit -e --validate -v --help" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--list -l --get -g --path -p --template -t --create -c --force -f --edit -e --validate -v --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac
