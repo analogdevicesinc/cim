@@ -517,6 +517,12 @@ cim init -t my-sdk --exclude-group docs,optional
 `--exclude-group` can be combined; a repository must satisfy both to be
 included.
 
+The git that provides the per-git `<build_folder>/<name>.mk` fragments
+(by default the git named `build`, i.e. the one checked out into
+`build_folder`) is always kept, whatever group selection is used.
+Without it the workspace would have no `<git>-<phase>` targets.
+`--match` still applies to it as to any other repository.
+
 If a git excluded by group/pattern filtering (or removed by an overlay's
 `gits: remove:`) is named in an `install:` step's `depends_on_gits`, that
 install step is dropped from the generated Makefile too — see

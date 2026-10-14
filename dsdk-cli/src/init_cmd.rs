@@ -865,8 +865,12 @@ pub(crate) fn install_pip_packages_if_available(
     // Only consider gits that survived the same match/group filtering used
     // to decide which repos actually got cloned -- otherwise this reaches
     // into checkouts that were deliberately excluded and don't exist.
-    let group_filtered_gits =
-        filter_git_configs_by_group(&sdk_config.gits, include_groups, exclude_groups);
+    let group_filtered_gits = filter_git_configs_by_group(
+        &sdk_config.gits,
+        include_groups,
+        exclude_groups,
+        sdk_config.build_folder.as_deref(),
+    );
     let filtered_gits = filter_git_configs(&group_filtered_gits, pattern_regex);
     for git in &filtered_gits {
         if let Some(reqs) = &git.python_deps {
@@ -1921,6 +1925,25 @@ pub(crate) fn filter_git_configs(
 /// explicit `group:` entries set in sdk.yml.
 pub(crate) const DEFAULT_GROUP: &str = "default";
 
+/// Name of the git whose checkout is the folder holding the per-git
+/// `<name>.mk` fragments: the first workspace-relative component of
+/// `build_folder` (default `build`). `None` if the folder is outside the
+/// workspace.
+pub(crate) fn build_fragment_git(build_folder: Option<&str>) -> Option<String> {
+    let mut vars = std::collections::HashMap::new();
+    vars.insert("WORKSPACE".to_string(), ".".to_string());
+    let expanded =
+        dsdk_cli::workspace::expand_manifest_vars(build_folder.unwrap_or("build"), &vars);
+    let path = Path::new(&expanded);
+    if path.is_absolute() {
+        return None;
+    }
+    path.components().find_map(|c| match c {
+        std::path::Component::Normal(n) => n.to_str().map(String::from),
+        _ => None,
+    })
+}
+
 /// Split a comma-separated `--include-group`/`--exclude-group` value into a
 /// trimmed, non-empty list of group names.
 pub(crate) fn parse_group_list(pattern: &str) -> Vec<String> {
@@ -1938,14 +1961,21 @@ pub(crate) fn parse_group_list(pattern: &str) -> Vec<String> {
 /// group. When `include` is non-empty, only repositories whose group set
 /// intersects `include` are kept. Repositories whose group set intersects
 /// `exclude` are then dropped. Both lists empty is a no-op.
+///
+/// The git that provides the `<build_folder>/<name>.mk` fragments (see
+/// `build_fragment_git`) is exempt: without it the workspace has no
+/// `<git>-<phase>` targets at all, whichever groups were selected.
 pub(crate) fn filter_git_configs_by_group(
     gits: &[config::GitConfig],
     include: &[String],
     exclude: &[String],
+    build_folder: Option<&str>,
 ) -> Vec<config::GitConfig> {
     if include.is_empty() && exclude.is_empty() {
         return gits.to_vec();
     }
+
+    let fragment_git = build_fragment_git(build_folder);
 
     fn groups_of(git_cfg: &config::GitConfig) -> Vec<&str> {
         match &git_cfg.group {
@@ -1961,6 +1991,15 @@ pub(crate) fn filter_git_configs_by_group(
             let included =
                 include.is_empty() || groups.iter().any(|g| include.iter().any(|i| i == g));
             let excluded = groups.iter().any(|g| exclude.iter().any(|e| e == g));
+            if fragment_git.as_deref() == Some(git_cfg.name.as_str()) {
+                if !included || excluded {
+                    messages::info(&format!(
+                        "Keeping '{}' despite group selection: it provides the build fragments",
+                        git_cfg.name
+                    ));
+                }
+                return true;
+            }
             included && !excluded
         })
         .cloned()
@@ -2040,8 +2079,12 @@ pub(crate) fn create_filtered_sdk_config<T: config::SdkConfigCore>(
     include_groups: &[String],
     exclude_groups: &[String],
 ) -> FilteredSdkConfig {
-    let group_filtered_gits =
-        filter_git_configs_by_group(sdk_config.gits(), include_groups, exclude_groups);
+    let group_filtered_gits = filter_git_configs_by_group(
+        sdk_config.gits(),
+        include_groups,
+        exclude_groups,
+        sdk_config.build_folder().as_deref(),
+    );
     let filtered_gits = filter_git_configs(&group_filtered_gits, pattern_regex);
     FilteredSdkConfig {
         gits: filtered_gits,
@@ -2090,8 +2133,12 @@ pub(crate) fn filtered_sdk_config_for_makefile(
     exclude_groups: &[String],
 ) -> config::SdkConfig {
     let mut filtered = sdk_config.clone();
-    let group_filtered_gits =
-        filter_git_configs_by_group(&sdk_config.gits, include_groups, exclude_groups);
+    let group_filtered_gits = filter_git_configs_by_group(
+        &sdk_config.gits,
+        include_groups,
+        exclude_groups,
+        sdk_config.build_folder.as_deref(),
+    );
     filtered.gits = filter_git_configs(&group_filtered_gits, pattern_regex);
 
     let git_names: std::collections::HashSet<&str> =
@@ -2979,6 +3026,52 @@ gits:
              build_depends_on validation runs pre-filter, this only guards \
              the install-side dangling reference"
         );
+    }
+
+    #[test]
+    fn test_group_filter_keeps_build_fragment_git() {
+        let gits = vec![
+            git_config("build", Some(vec!["tesa"])),
+            git_config("tesa-repo", Some(vec!["tesa"])),
+            git_config("other", None),
+        ];
+        let exclude = vec!["tesa".to_string()];
+
+        let names =
+            |v: Vec<config::GitConfig>| -> Vec<String> { v.into_iter().map(|g| g.name).collect() };
+
+        // Default build folder: the git named "build" survives exclusion.
+        assert_eq!(
+            names(filter_git_configs_by_group(&gits, &[], &exclude, None)),
+            vec!["build", "other"]
+        );
+        // ... and inclusion of an unrelated group.
+        let include = vec!["default".to_string()];
+        assert_eq!(
+            names(filter_git_configs_by_group(&gits, &include, &[], None)),
+            vec!["build", "other"]
+        );
+        // Custom build folder: the git that backs it is kept instead.
+        let gits = vec![
+            git_config("build", Some(vec!["tesa"])),
+            git_config("mk-files", Some(vec!["tesa"])),
+        ];
+        assert_eq!(
+            names(filter_git_configs_by_group(
+                &gits,
+                &[],
+                &exclude,
+                Some("${{ WORKSPACE }}/mk-files")
+            )),
+            vec!["mk-files"]
+        );
+    }
+
+    #[test]
+    fn test_build_fragment_git() {
+        assert_eq!(build_fragment_git(None).as_deref(), Some("build"));
+        assert_eq!(build_fragment_git(Some("./fw/mk")).as_deref(), Some("fw"));
+        assert_eq!(build_fragment_git(Some("/opt/mk")), None);
     }
 
     #[test]

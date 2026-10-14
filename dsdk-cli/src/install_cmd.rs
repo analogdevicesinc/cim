@@ -137,8 +137,12 @@ fn handle_install_pip(workspace_path: &Path, sdk_config: &config::SdkConfig, arg
 
     let (include_groups, exclude_groups) =
         resolve_pip_group_selection(workspace_path, args.include_group, args.exclude_group);
-    let filtered_gits =
-        filter_git_configs_by_group(&sdk_config.gits, &include_groups, &exclude_groups);
+    let filtered_gits = filter_git_configs_by_group(
+        &sdk_config.gits,
+        &include_groups,
+        &exclude_groups,
+        sdk_config.build_folder.as_deref(),
+    );
 
     // Announce non-default flags once up front instead of letting every
     // venv (git-level and workspace-level) repeat the same detail.
