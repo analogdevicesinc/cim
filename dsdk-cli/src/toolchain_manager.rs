@@ -825,9 +825,20 @@ impl ToolchainManager {
         let archive_path = self.ensure_archive_downloaded(toolchain, cert_validation)?;
         let is_shell_script_toolchain = self.is_shell_script(&archive_path);
 
-        // Validate that the existing installation is actually valid
-        let (found_shell_script, installation_valid) =
-            self.scan_mirror_for_valid_shell_script(mirror_dest_path, toolchain)?;
+        // Validate that the existing installation is actually valid.
+        // Only shell-script-distributed toolchains (e.g. sh.rustup.rs) install
+        // themselves as a single .sh file directly in the destination, so
+        // only those need this scan. Archive toolchains (.tar.xz etc.) can
+        // legitimately end up with unrelated .sh files in their destination -
+        // e.g. a self-extracting installer that post_install_commands
+        // downloaded as a side effect (Zephyr SDK's setup.sh fetching
+        // host-tools) - scanning/validating those would misjudge a perfectly
+        // good archive installation as corrupted.
+        let (found_shell_script, installation_valid) = if is_shell_script_toolchain {
+            self.scan_mirror_for_valid_shell_script(mirror_dest_path, toolchain)?
+        } else {
+            (false, false)
+        };
 
         // For shell script toolchains, we MUST find a valid shell script
         // For archive toolchains, check if directory has content
@@ -1581,15 +1592,27 @@ impl ToolchainManager {
         }
     }
 
+    /// Read up to `max_bytes` from the start of a file. Many shell-script
+    /// installers (makeself-style) bundle a binary payload after a text
+    /// header, so they are not valid UTF-8 end-to-end - callers that only
+    /// need to inspect the shebang/header must not read_to_string() the
+    /// whole file.
+    fn read_prefix(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        use std::io::Read;
+        let file = fs::File::open(path)?;
+        let mut buf = Vec::new();
+        file.take(max_bytes).read_to_end(&mut buf)?;
+        Ok(buf)
+    }
+
     /// Check if a file is a shell script by checking for shebang
     fn is_shell_script(&self, path: &Path) -> bool {
-        if let Ok(content) = fs::read_to_string(path) {
-            content
+        match Self::read_prefix(path, 4096) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes)
                 .lines()
                 .next()
-                .is_some_and(|line| line.starts_with("#!"))
-        } else {
-            false
+                .is_some_and(|line| line.starts_with("#!")),
+            Err(_) => false,
         }
     }
 
@@ -1703,7 +1726,11 @@ impl ToolchainManager {
 
     /// Validate that a shell script is actually a shell script, not HTML or other content
     fn validate_shell_script(&self, script_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(script_path)?;
+        // Only the header needs inspecting, and some shell-script installers
+        // (makeself-style) append a binary payload after it - read a bounded
+        // prefix rather than the whole file, which may not be valid UTF-8.
+        let bytes = Self::read_prefix(script_path, 4096)?;
+        let content = String::from_utf8_lossy(&bytes);
         let first_line = content.lines().next().unwrap_or("");
 
         // Check if it starts with a shebang
@@ -2488,6 +2515,47 @@ mod tests {
             !archive_path.exists(),
             "Zero-byte file should have been removed from mirror"
         );
+    }
+
+    #[test]
+    fn test_is_shell_script_true_for_self_extracting_binary_payload() {
+        // Makeself-style installers (e.g. the Zephyr SDK's host-tools
+        // bundle) are a text shebang header followed by raw binary data,
+        // so the whole file is not valid UTF-8.
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let path = fixture.path().join("installer.sh");
+        let mut content = b"#!/bin/sh\necho hello\n".to_vec();
+        content.extend_from_slice(&[0xFF, 0xFE, 0x00, 0x80, 0x81]);
+        fs::write(&path, &content).expect("Failed to write file");
+
+        let manager = create_test_manager();
+        assert!(manager.is_shell_script(&path));
+    }
+
+    #[test]
+    fn test_validate_shell_script_accepts_self_extracting_binary_payload() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let path = fixture.path().join("installer.sh");
+        let mut content = b"#!/bin/sh\necho hello\n".to_vec();
+        content.extend_from_slice(&[0xFF, 0xFE, 0x00, 0x80, 0x81]);
+        fs::write(&path, &content).expect("Failed to write file");
+
+        let manager = create_test_manager();
+        assert!(manager.validate_shell_script(&path).is_ok());
+    }
+
+    #[test]
+    fn test_validate_shell_script_rejects_html() {
+        let fixture = tempfile::tempdir().expect("Failed to create temp dir");
+        let path = fixture.path().join("installer.sh");
+        fs::write(
+            &path,
+            b"<!doctype html>\n<html><body>blocked</body></html>\n",
+        )
+        .expect("Failed to write file");
+
+        let manager = create_test_manager();
+        assert!(manager.validate_shell_script(&path).is_err());
     }
 
     #[test]
