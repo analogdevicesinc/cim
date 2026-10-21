@@ -2271,6 +2271,12 @@ pub(crate) fn list_target_versions(
                 continue;
             };
 
+            // Skip peeled annotated-tag entries ("<tag>^{}") so each tag is
+            // listed once
+            if name.ends_with("^{}") {
+                continue;
+            }
+
             // Filter for branches/tags starting with target prefix
             if name.starts_with(&target_prefix) {
                 versions.push(name.to_string());
