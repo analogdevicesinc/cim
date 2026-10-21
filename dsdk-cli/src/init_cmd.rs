@@ -23,8 +23,8 @@ use dsdk_cli::manifest_index::{
 };
 use dsdk_cli::workspace::{
     create_workspace_marker, download_config_from_url, expand_env_vars,
-    expand_manifest_vars_in_config, get_all_sources_from_config, get_home_dir, is_url,
-    load_config_with_extends, load_config_with_user_overrides, require_workspace_config,
+    expand_manifest_vars_in_config, get_all_sources_from_config, get_home_dir, is_git_source,
+    is_url, load_config_with_extends, load_config_with_user_overrides, require_workspace_config,
     resolve_mirror, resolve_target_config_from_git, CreateWorkspaceMarkerParams, OS_DEPS_FILE,
     OVERLAYS_DIR, PYTHON_DEPS_FILE, SDK_CONFIG_FILE, WORKSPACE_MARKER_FILE,
 };
@@ -392,6 +392,22 @@ pub(crate) fn source_label(index: usize) -> &'static str {
     }
 }
 
+/// Return `source` as an absolute path when it names an existing local
+/// directory, otherwise unchanged (URLs, `file://`, ...).
+///
+/// Git sources are recorded in the `.workspace` marker and re-cloned later
+/// (e.g. by `cim release`) from inside the workspace, so a relative path like
+/// `../manifest.git` must not be stored as-is.
+fn absolute_local_source(source: &str) -> String {
+    let p = Path::new(source);
+    if p.is_dir() {
+        if let Ok(abs) = p.canonicalize() {
+            return abs.to_string_lossy().to_string();
+        }
+    }
+    source.to_string()
+}
+
 /// Search multiple manifest sources for a target, returning the first match.
 ///
 /// Iterates through `sources` in order, attempting URL-based git resolution,
@@ -414,7 +430,7 @@ pub(crate) fn resolve_target_from_sources(
     let multi_source = sources.len() > 1;
 
     for (i, source_path) in sources.iter().enumerate() {
-        if is_url(source_path) {
+        if is_git_source(source_path) {
             match resolve_target_config_from_git(
                 source_path,
                 target,
@@ -426,7 +442,7 @@ pub(crate) fn resolve_target_from_sources(
                     return Ok(ResolvedTarget {
                         config_path: manifest.config_path,
                         manifest_path: manifest.manifest_path,
-                        source_path: source_path.clone(),
+                        source_path: absolute_local_source(source_path),
                         is_git_source: true,
                         source_index: i,
                     });
@@ -457,7 +473,7 @@ pub(crate) fn resolve_target_from_sources(
                             return Ok(ResolvedTarget {
                                 config_path: manifest.config_path,
                                 manifest_path: manifest.manifest_path,
-                                source_path: source_path.clone(),
+                                source_path: absolute_local_source(source_path),
                                 is_git_source: true,
                                 source_index: i,
                             });
@@ -2220,8 +2236,9 @@ pub(crate) fn filtered_sdk_config_for_makefile(
 
 /// List available targets from either a local directory or git repository
 pub(crate) fn list_targets_from_source(source_path: &str) -> Result<Vec<String>, anyhow::Error> {
-    if is_url(source_path) {
-        // For git URLs, we need to create a temporary shallow clone to list targets
+    if is_git_source(source_path) {
+        // For git sources (URLs, file://, bare repos), create a temporary
+        // shallow clone to list targets
         list_targets_from_git_repo(source_path)
     } else {
         // Local directory approach
@@ -2254,8 +2271,9 @@ pub(crate) fn list_target_versions(
     source_path: &str,
     target_name: &str,
 ) -> Result<Vec<String>, anyhow::Error> {
-    if is_url(source_path) {
-        // Use git ls-remote to list branches and tags
+    if is_git_source(source_path) {
+        // Use git ls-remote to list branches and tags (works for remote
+        // URLs, file:// URLs and bare repository paths alike)
         let refs = git_operations::ls_remote(source_path, true, true)?;
 
         let mut versions = Vec::new();

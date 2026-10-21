@@ -258,7 +258,7 @@ pub fn create_workspace_marker(
 
     // Get the source directory of the original config file
     let config_source_dir = match params.source_path {
-        Some(source_path) if is_url(source_path) => Some(source_path.to_string()),
+        Some(source_path) if is_git_source(source_path) => Some(source_path.to_string()),
         Some(source_path) => Some(
             std::path::absolute(source_path)?
                 .to_string_lossy()
@@ -374,8 +374,10 @@ fn clone_target_repo(
     let clone_result = if version.is_some() {
         // For version checkout, we need full history to access branches/tags
         git_operations::clone_repo(git_source, dest, None)?
-    } else if is_url(git_source) {
-        // For main branch, use shallow clone
+    } else if is_git_url(git_source) {
+        // For main branch of a git URL (including file:// and ssh://), use
+        // a shallow clone. git ignores --depth for plain local paths (e.g.
+        // a bare repo given by path), so those take the full-clone branch.
         git_operations::clone_repo_shallow(git_source, dest, 1)?
     } else {
         // For local repos without version, still do full clone since shallow clone of local repos is not very useful
@@ -545,8 +547,9 @@ pub fn resolve_config_source_dir_from_marker(
     };
 
     if let Some(ref source_dir_str) = marker.config_source_dir {
-        if is_url(source_dir_str) {
-            // Remote git source: re-clone to a fresh temp dir
+        if is_git_source(source_dir_str) {
+            // Git source (remote URL, file:// or bare repo): re-clone to a
+            // fresh temp dir
             let temp_dir = match tempfile::tempdir() {
                 Ok(d) => d,
                 Err(_) => return (workspace_path.to_path_buf(), None),
@@ -640,6 +643,65 @@ pub fn require_workspace_config() -> Result<(PathBuf, PathBuf), String> {
 /// Check if a string represents a URL (http://, https://, or git@ SSH)
 pub fn is_url(input: &str) -> bool {
     input.starts_with("http://") || input.starts_with("https://") || input.starts_with("git@")
+}
+
+/// Check if a manifest source string must be accessed through git (cloned or
+/// queried with `git ls-remote`) rather than read as a local directory.
+///
+/// This is a superset of [`is_url`] meant only for classifying *manifest
+/// sources* (`--source`, `default_source`, `extends.source`, the
+/// `.workspace` marker's `config_source_dir`). It additionally accepts:
+///
+/// - `file://` and `ssh://` git URLs, and
+/// - a local path to a bare git repository (a directory with a `HEAD` file
+///   and an `objects/` directory but no `targets/` working tree).
+///
+/// [`is_url`] deliberately stays narrower, because it also decides whether a
+/// `copy_files` source is downloaded over HTTP, where `file://` must not be
+/// handed to the HTTP client.
+pub fn is_git_source(input: &str) -> bool {
+    is_git_url(input) || is_bare_git_repo(Path::new(input))
+}
+
+/// True for strings git understands as a repository URL: everything
+/// [`is_url`] accepts plus the `file://` and `ssh://` schemes and any
+/// scp-like `[user@]host:path` address (see [`is_scp_like`]).
+fn is_git_url(input: &str) -> bool {
+    is_url(input)
+        || input.starts_with("file://")
+        || input.starts_with("ssh://")
+        || is_scp_like(input)
+}
+
+/// True for an scp-like SSH address such as `user@host:path`,
+/// `host:org/repo.git` or an ssh-config alias `alias:org/repo`.
+///
+/// Follows git's own rule (`url_is_local_not_ssh()` in git's `connect.c`):
+/// the string is scp-like when it contains a `:` and no `/` comes before the
+/// first `:`. In addition:
+///
+/// - a single-letter host is a Windows drive (`C:\x`, `C:/x`), not a host,
+/// - an empty host or empty path (`:foo`, `host:`) is not an address, and
+/// - a string naming an existing local path stays local, so a directory
+///   literally called `host:dir` is still read in place.
+fn is_scp_like(input: &str) -> bool {
+    let Some((host, path)) = input.split_once(':') else {
+        return false;
+    };
+    if host.is_empty() || path.is_empty() || host.contains('/') || host.contains('\\') {
+        return false;
+    }
+    if host.len() == 1 && host.chars().all(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    !Path::new(input).exists()
+}
+
+/// True when `path` looks like a bare git repository: it has a `HEAD` file
+/// and an `objects/` directory, and no `targets/` directory (which would make
+/// it a usable manifest working tree instead).
+fn is_bare_git_repo(path: &Path) -> bool {
+    path.join("HEAD").is_file() && path.join("objects").is_dir() && !path.join("targets").exists()
 }
 
 /// Expand environment variables in a path string
@@ -2293,6 +2355,85 @@ mod tests {
     #[test]
     fn test_is_url_ssh() {
         assert!(is_url("git@github.com:org/repo.git"));
+    }
+
+    #[test]
+    fn test_is_git_source_urls() {
+        assert!(is_git_source("https://github.com/org/repo.git"));
+        assert!(is_git_source("http://example.com/manifests"));
+        assert!(is_git_source("git@github.com:org/repo.git"));
+        assert!(is_git_source("ssh://git@example.com/org/repo.git"));
+        assert!(is_git_source("file:///srv/git/manifest.git"));
+    }
+
+    #[test]
+    fn test_is_git_source_scp_like_table() {
+        let cases: &[(&str, bool)] = &[
+            // scp-like SSH addresses
+            ("git@github.com:org/repo.git", true),
+            ("joakim@localhost:/tmp/x/bare.git", true),
+            ("user@host:path/repo.git", true),
+            ("host:org/repo", true),
+            ("myalias:org/repo.git", true),
+            ("host:~/repo.git", true),
+            ("[host:22]:repo.git", true),
+            // Local paths, even with a ':' in them
+            ("/tmp/a:b", false),
+            ("./a:b", false),
+            ("../x/y:z", false),
+            ("dir/sub:thing", false),
+            // Windows drive letters are never a host
+            ("C:\\manifests", false),
+            ("C:/manifests", false),
+            ("c:manifests", false),
+            // Degenerate forms
+            (":foo", false),
+            ("host:", false),
+            ("manifests", false),
+            ("a\\b:c", false),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                is_git_source(input),
+                *expected,
+                "is_git_source({:?}) should be {}",
+                input,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_git_source_local_paths() {
+        assert!(!is_git_source("/nonexistent/path/manifest.git"));
+        assert!(!is_git_source("manifests"));
+        assert!(!is_git_source("./relative/path"));
+
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Plain directory (manifest working tree without git)
+        let plain = tmp.path().join("plain");
+        fs::create_dir_all(plain.join("targets")).unwrap();
+        assert!(!is_git_source(&plain.to_string_lossy()));
+
+        // Bare repository layout
+        let bare = tmp.path().join("bare.git");
+        fs::create_dir_all(bare.join("objects")).unwrap();
+        fs::create_dir_all(bare.join("refs")).unwrap();
+        fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert!(is_git_source(&bare.to_string_lossy()));
+
+        // Something with HEAD/objects but also a targets/ tree is treated
+        // as a local manifest directory.
+        fs::create_dir_all(bare.join("targets")).unwrap();
+        assert!(!is_git_source(&bare.to_string_lossy()));
+
+        // A non-bare working tree (.git/ subdirectory) is a local directory.
+        let wt = tmp.path().join("wt");
+        fs::create_dir_all(wt.join(".git").join("objects")).unwrap();
+        fs::write(wt.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::create_dir_all(wt.join("targets")).unwrap();
+        assert!(!is_git_source(&wt.to_string_lossy()));
     }
 
     #[test]
