@@ -846,12 +846,28 @@ pub fn expand_env_vars_with_overrides(
     chars.into_iter().collect()
 }
 
-/// Return `true` if `s` contains a `$` that is **not** part of a `${{ … }}`
-/// manifest-variable reference or a `$$` Make/shell escape.
+/// Return `true` if `s` contains a `$` reference that neither cim nor Make
+/// can make sense of.
 ///
-/// `${{ VAR }}` patterns are intentionally kept as-is so that Makefile
-/// generation can later convert them to `$(VAR)` Make references.  They must
-/// not trigger the "unresolved host env var" warning.
+/// This runs on manifest `variables:` values *after* host env expansion,
+/// and those values end up verbatim (modulo `${{ VAR }}` → `$(VAR)`) on the
+/// right-hand side of a `VAR ?= value` line in the generated Makefile. The
+/// following are therefore **not** unresolved:
+///
+/// - `${{ VAR }}` manifest-variable references, which Makefile generation
+///   converts to `$(VAR)` Make references.
+/// - `$(NAME)` / `$(func args)` Make references and function calls (with
+///   balanced parentheses). cim never expands these; Make does at build
+///   time. Their contents are still checked, so `$(dir $UNSET)` is flagged.
+/// - `$$`, Make's escape for a literal `$`.
+///
+/// Everything else is flagged:
+///
+/// - `$VAR` / `${VAR}` host env var references that [`expand_env_vars`]
+///   could not resolve because the variable is unset (the user meant a
+///   host variable that is missing).
+/// - A `${{` with no closing `}}`, or an empty `${{ }}`.
+/// - A `$(` with no matching `)`, or a trailing / otherwise stray `$`.
 ///
 /// # Examples
 ///
@@ -862,30 +878,59 @@ pub fn expand_env_vars_with_overrides(
 /// assert!(!has_unresolved_env_var_refs("${{ WORKSPACE }}/bin"));
 /// assert!(!has_unresolved_env_var_refs("${{ A }}/${{ B }}"));
 /// assert!(!has_unresolved_env_var_refs("-j$$(nproc)"));
+/// assert!(!has_unresolved_env_var_refs("${{ WORKSPACE }}/release/$(CUSTOMER)"));
 /// assert!(has_unresolved_env_var_refs("$UNSET_HOST_VAR/path"));
 /// assert!(has_unresolved_env_var_refs("${{ WORKSPACE }}/$UNSET"));
+/// assert!(has_unresolved_env_var_refs("${{ WORKSPACE"));
 /// ```
 pub fn has_unresolved_env_var_refs(s: &str) -> bool {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'$' {
-            // Make uses $$ to pass a literal $ to the recipe shell.
-            if bytes.get(i + 1) == Some(&b'$') {
-                i += 2;
-                continue;
-            }
-            // Check for ${{ … }} pattern — skip it entirely.
-            if bytes.get(i + 1) == Some(&b'{') && bytes.get(i + 2) == Some(&b'{') {
-                if let Some(rel) = s[i + 3..].find("}}") {
-                    i = i + 3 + rel + 2;
-                    continue;
-                }
-            }
-            // A bare `$` that is not part of a manifest-variable reference.
-            return true;
+        if bytes[i] != b'$' {
+            i += 1;
+            continue;
         }
-        i += 1;
+        match bytes.get(i + 1) {
+            // `$$` is Make's escape for a literal `$`.
+            Some(b'$') => {
+                i += 2;
+            }
+            // `${{ VAR }}` manifest-variable reference.
+            Some(b'{') if bytes.get(i + 2) == Some(&b'{') => match s[i + 3..].find("}}") {
+                Some(rel) if !s[i + 3..i + 3 + rel].trim().is_empty() => {
+                    i = i + 3 + rel + 2;
+                }
+                // Unterminated or empty: cim cannot turn it into `$(VAR)`.
+                _ => return true,
+            },
+            // `$(...)` Make variable reference or function call.
+            Some(b'(') => {
+                let open = i + 2;
+                let mut depth = 1usize;
+                let mut j = open;
+                while j < bytes.len() && depth > 0 {
+                    match bytes[j] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if depth > 0 {
+                    // No matching `)`.
+                    return true;
+                }
+                // `j` is one past the matching `)`.
+                if has_unresolved_env_var_refs(&s[open..j - 1]) {
+                    return true;
+                }
+                i = j;
+            }
+            // `$VAR`, `${VAR}` left unexpanded by `expand_env_vars`, or a
+            // stray `$`.
+            _ => return true,
+        }
     }
     false
 }
@@ -953,12 +998,14 @@ pub fn find_unresolved_env_var_name(s: &str) -> Option<String> {
 /// Resolve manifest variable values by expanding host env vars within them.
 ///
 /// Each value in the raw map is passed through [`expand_env_vars`]. If a value
-/// still contains a `$` character after expansion — and that `$` is **not**
-/// part of a `${{ VAR }}` manifest-variable reference — a warning is logged so
-/// the user knows the variable is unresolved.
+/// still contains a reference that [`has_unresolved_env_var_refs`] considers
+/// unresolved (typically an unset host env var such as `$FOO` / `${FOO}`), a
+/// warning is logged so the user knows the variable is unresolved.
 ///
 /// `${{ VAR }}` patterns are left in place intentionally: Makefile generation
-/// will convert them to `$(VAR)` Make references at a later stage.
+/// will convert them to `$(VAR)` Make references at a later stage. Make
+/// references such as `$(CUSTOMER)` are likewise passed through untouched
+/// and do not warn, since Make resolves them at build time.
 ///
 /// # Example
 ///
@@ -967,6 +1014,7 @@ pub fn find_unresolved_env_var_name(s: &str) -> Option<String> {
 ///   DOCKER_DEFAULT_PLATFORM: $HOST_DEFAULT_PLATFORM    # resolved from env
 ///   SDK_BASE_URL: https://example.com/sdk               # literal
 ///   TOOLCHAIN_PATH: ${{ WORKSPACE }}/toolchains/bin    # passed to Make
+///   RELEASE_DIR: ${{ WORKSPACE }}/release/$(CUSTOMER)  # Make ref, no warning
 /// ```
 pub fn resolve_variables(
     raw: &std::collections::HashMap<String, String>,
@@ -1990,6 +2038,52 @@ mod tests {
     fn test_has_unresolved_env_var_refs_mixed() {
         // A mix: the ${{ }} part is fine, but the bare $UNSET is a real warning.
         assert!(has_unresolved_env_var_refs("${{ WORKSPACE }}/$UNSET"));
+    }
+
+    #[test]
+    fn test_has_unresolved_env_var_refs_make_refs_ok() {
+        // $(NAME) and Make function calls are valid Make references that
+        // Make resolves at build time; they must not warn.
+        assert!(!has_unresolved_env_var_refs("$(CUSTOMER)"));
+        assert!(!has_unresolved_env_var_refs(
+            "${{ WORKSPACE }}/release/$(CUSTOMER)"
+        ));
+        assert!(!has_unresolved_env_var_refs("$(WORKSPACE)/a/$(B)/c"));
+        assert!(!has_unresolved_env_var_refs(
+            "$(patsubst %.c,%.o,$(wildcard ${{ WORKSPACE }}/*.c))"
+        ));
+        assert!(!has_unresolved_env_var_refs("$(shell echo $$HOME)"));
+        // `$$` is Make's escape for a literal `$`.
+        assert!(!has_unresolved_env_var_refs("cost-$$5"));
+    }
+
+    #[test]
+    fn test_has_unresolved_env_var_refs_real_problems() {
+        // Unset host env vars inside a Make function are still flagged.
+        assert!(has_unresolved_env_var_refs("$(dir $UNSET)"));
+        // Unbalanced Make reference.
+        assert!(has_unresolved_env_var_refs("$(CUSTOMER"));
+        // Unterminated or empty manifest-variable reference.
+        assert!(has_unresolved_env_var_refs("${{ WORKSPACE /bin"));
+        assert!(has_unresolved_env_var_refs("${{ }}/bin"));
+        // Stray `$`.
+        assert!(has_unresolved_env_var_refs("trailing$"));
+        assert!(has_unresolved_env_var_refs("$(CUSTOMER)/$UNSET"));
+    }
+
+    #[test]
+    fn test_resolve_variables_keeps_make_refs() {
+        let mut raw = std::collections::HashMap::new();
+        raw.insert(
+            "RELEASE_DIR".to_string(),
+            "${{ WORKSPACE }}/release/$(CUSTOMER)".to_string(),
+        );
+
+        let resolved = resolve_variables(&raw);
+        assert_eq!(
+            resolved.get("RELEASE_DIR").map(String::as_str),
+            Some("${{ WORKSPACE }}/release/$(CUSTOMER)")
+        );
     }
 
     #[test]
