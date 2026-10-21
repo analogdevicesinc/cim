@@ -166,6 +166,33 @@ cim list-targets -t optee-qemu-v8  # show versions
 cim list-targets --source https://github.com/org/private-manifests --verbose  # diagnose auth issues
 ```
 
+### Manifest source formats
+
+`--source` (and `default_source` / `alternate_sources` in the config file)
+accepts any of the following:
+
+| Form | Example | How it is read |
+|------|---------|----------------|
+| HTTPS URL | `https://github.com/org/manifests.git` | cloned with git |
+| SCP-style SSH | `git@github.com:org/manifests.git`, `user@host:/srv/git/manifests.git`, `myalias:org/manifests` | cloned with git |
+| SSH URL | `ssh://git@host/org/manifests.git` | cloned with git |
+| `file://` URL | `file:///srv/git/manifests.git` | cloned with git |
+| Bare repository path | `/srv/git/manifests.git` | cloned with git |
+| Working-tree path | `~/devel/cim-manifests` | read in place; with `--version`, cloned with git into a temporary directory and checked out at that version (only committed content is used) |
+
+A source is SCP-style SSH, as in git, when it contains a `:` and no `/`
+comes before the first `:`. A string that names an existing local path
+is always read locally, and a single drive letter (`C:\`, `C:/`) is never
+taken as a host. A local path is treated as a bare repository when it
+contains `HEAD` and `objects/` but no `targets/` directory.
+
+For every git form, `--version` (`-v`) checks out the given branch or
+tag. The source and version are recorded in the workspace's `.workspace`
+file, and later commands that need the original target directory (for
+example `cim release` resolving relative `copy_files` sources) clone it
+again at that version. A working-tree path used without `--version` is
+recorded as its `targets/<name>` directory and read in place.
+
 ### Authentication for private repositories
 
 `cim` uses the host system's **git** binary for all git operations.
