@@ -907,12 +907,17 @@ Note that this example, isn't a complete manifest, but rather a demonstration of
 # to $(VAR), so Make expands the variable at recipe time rather than at
 # manifest load time.
 #
-# Unresolved ${{ VAR }} references are left unchanged and a warning is
-# printed, making mistakes visible rather than silently ignored.
+# Values may also contain Make references such as $(CUSTOMER) or Make
+# function calls; they are passed through verbatim and expanded by Make.
+#
+# cim prints a warning when a value still contains a reference it cannot
+# hand over to Make: an unset host env var ($VAR / ${VAR}), an
+# unterminated or empty ${{ }}, an unbalanced $( or a stray $.
 ################################################################################
 variables:
   SDK_BASE_URL: https://artifacts.example.com/sdk  # literal base URL
   SDK_ARCH: $HOST_ARCH                             # resolved from host env var
+  RELEASE_DIR: ${{ WORKSPACE }}/release/$(CUSTOMER) # Make ref, expanded by make
 
 
 ################################################################################
