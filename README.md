@@ -463,6 +463,11 @@ fragment files (`<name>.mk`) are auto-discovered from the directory
 set by `build_folder` (default: `build/`) and added as `-include`
 directives automatically.
 
+The generated Makefile sets `.DEFAULT_GOAL := all` ahead of the
+`-include` lines, so a bare `make` always runs `all` (`sdk-build`, plus
+`sdk-test` when test work exists) rather than whichever target happens to
+come first in an included fragment.
+
 ```bash
 cim makefile [--no-dividers] [--include-group NAMES] [--exclude-group NAMES]
 ```

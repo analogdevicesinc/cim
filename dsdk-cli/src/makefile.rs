@@ -364,6 +364,20 @@ fn emit_workspace_and_manifest_vars<T: config::SdkConfigCore>(
     emit_manifest_variables(makefile, sdk_config);
 }
 
+/// Emit `.DEFAULT_GOAL := all` so that a bare `make` runs `all`.
+///
+/// Without it, GNU Make picks the first target it parses as the default
+/// goal. The `-include` directives are emitted before the high-level
+/// targets (so fragments can use the variables above them), which means
+/// the first target of the first included fragment (e.g. `foo-build`)
+/// would otherwise win over `all`. The assignment is emitted before the
+/// includes so a fragment can still deliberately override it.
+fn emit_default_goal(makefile: &mut String) {
+    makefile
+        .push_str("# Run 'all' on a bare 'make', even if included files define targets first\n");
+    makefile.push_str(".DEFAULT_GOAL := all\n\n");
+}
+
 /// Derive and emit the `makefile_include:` directives (explicit entries from
 /// sdk.yml plus auto-discovered per-git `.mk` fragments).
 ///
@@ -562,6 +576,7 @@ pub(crate) fn generate_makefile_content<T: config::SdkConfigCore>(
     let mut makefile = String::new();
 
     emit_workspace_and_manifest_vars(&mut makefile, sdk_config, dividers);
+    emit_default_goal(&mut makefile);
 
     // Derive include directives and exclusion list from the makefile_include config key.
     let exclude_names = emit_makefile_includes(&mut makefile, sdk_config, workspace_path, dividers);
@@ -1589,6 +1604,67 @@ mod tests {
         assert!(
             vars_pos < include_pos,
             "Expected variables before -include, got:\n{}",
+            makefile
+        );
+    }
+
+    #[test]
+    fn test_default_goal_is_all_without_includes() {
+        let config = config::SdkConfig {
+            gits: vec![],
+            ..Default::default()
+        };
+
+        let makefile = generate_makefile_content(&config, false, None);
+
+        assert_eq!(
+            makefile.matches(".DEFAULT_GOAL := all\n").count(),
+            1,
+            "Expected exactly one '.DEFAULT_GOAL := all', got:\n{}",
+            makefile
+        );
+        let goal_pos = makefile.find(".DEFAULT_GOAL").unwrap();
+        let all_pos = makefile.find("\nall:").expect("all target missing");
+        assert!(goal_pos < all_pos);
+    }
+
+    #[test]
+    fn test_default_goal_before_includes() {
+        // Included fragments define targets before `all:`; without an
+        // explicit default goal the first fragment target would win.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let build_dir = tmp.path().join("build");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::write(
+            build_dir.join("drivers.mk"),
+            "drivers-check:\n\t@true\ndrivers-build:\n\t@true\n",
+        )
+        .unwrap();
+
+        let git = config::GitConfig {
+            name: "drivers".to_string(),
+            url: "https://github.com/test/drivers.git".to_string(),
+            commit: "main".to_string(),
+            ..Default::default()
+        };
+        let config = config::SdkConfig {
+            gits: vec![git],
+            makefile_include: Some(config::MakefileInclude::Legacy(vec![
+                "include build/extra.mk".to_string(),
+            ])),
+            ..Default::default()
+        };
+
+        let makefile = generate_makefile_content(&config, true, Some(tmp.path()));
+
+        let goal_pos = makefile
+            .find(".DEFAULT_GOAL := all\n")
+            .expect("default goal missing");
+        let include_pos = makefile.find("-include").expect("include block missing");
+        let all_pos = makefile.find("\nall:").expect("all target missing");
+        assert!(
+            goal_pos < include_pos && include_pos < all_pos,
+            "Expected .DEFAULT_GOAL before -include lines and all:, got:\n{}",
             makefile
         );
     }
