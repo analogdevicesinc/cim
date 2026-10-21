@@ -1587,6 +1587,8 @@ impl UserConfig {
 # default_source = "https://github.com/mycompany/sdk-manifests"
 # default_source = "git@github.com:myteam/custom-manifests.git"
 # default_source = "/home/user/projects/my-manifests"
+# default_source = "file:///srv/git/sdk-manifests.git"
+# default_source = "/srv/git/sdk-manifests.git"   # bare repository
 # default_source = "https://github.com/joabech/cim-manifests"
 
 # =============================================================================
