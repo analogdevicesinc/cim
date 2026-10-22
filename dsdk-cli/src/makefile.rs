@@ -1464,6 +1464,46 @@ mod tests {
     }
 
     #[test]
+    fn test_manifest_vars_dollar_escape() {
+        // `$$` in a variable value is a literal `$` for Make and must reach
+        // the Makefile as written, even when the name after it is a host
+        // env var that cim could expand.
+        std::env::set_var("CIM_TEST_MK_DOLLAR_ESCAPE", "/expanded");
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("JOBS".to_string(), "-j$$(nproc)".to_string());
+        vars.insert(
+            "SHELL_REF".to_string(),
+            "$$CIM_TEST_MK_DOLLAR_ESCAPE/bin".to_string(),
+        );
+        vars.insert(
+            "SHELL_BRACED".to_string(),
+            "$${CIM_TEST_MK_DOLLAR_ESCAPE}/bin".to_string(),
+        );
+
+        let config = config::SdkConfig {
+            gits: vec![],
+            variables: Some(vars),
+            ..Default::default()
+        };
+
+        let makefile = generate_makefile_content(&config, false, None);
+
+        for line in [
+            "JOBS ?= -j$$(nproc)",
+            "SHELL_REF ?= $$CIM_TEST_MK_DOLLAR_ESCAPE/bin",
+            "SHELL_BRACED ?= $${CIM_TEST_MK_DOLLAR_ESCAPE}/bin",
+        ] {
+            assert!(
+                makefile.contains(line),
+                "Expected '{}', got:\n{}",
+                line,
+                makefile
+            );
+        }
+        assert!(!makefile.contains("/expanded"), "got:\n{}", makefile);
+    }
+
+    #[test]
     fn test_manifest_vars_arbitrary_make_variable_reference() {
         // Any ${{ VAR }} (not just WORKSPACE) in a variable value must be
         // converted to $(VAR), enabling cross-variable composition.
