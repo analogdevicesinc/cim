@@ -662,9 +662,26 @@ pub fn remote_add(repo_path: &Path, remote_name: &str, url: &str) -> Result<GitR
 // ---------------------------------------------------------------
 
 /// Normalize a git URL for comparison purposes.
-/// Strips trailing `/` and `.git`, then lowercases.
+///
+/// Lowercases, collapses repeated `/` in the path, then strips trailing `/`
+/// and `.git`. The `://` after a scheme is kept, and so is the single `/`
+/// that starts an absolute path: `file:///srv//repo` gives `file:///srv/repo`.
+/// A scheme-less path keeps a leading `//` (a UNC-style `//server/share`).
 pub fn normalize_git_url(url: &str) -> String {
-    let mut s = url.trim().to_lowercase();
+    let lowered = url.trim().to_lowercase();
+    let (prefix, rest) = match lowered.find("://") {
+        Some(i) => lowered.split_at(i + 3),
+        None if lowered.starts_with("//") => lowered.split_at(2),
+        None => ("", lowered.as_str()),
+    };
+    let mut s = String::with_capacity(lowered.len());
+    s.push_str(prefix);
+    for c in rest.chars() {
+        if c == '/' && s.ends_with('/') && s.len() > prefix.len() {
+            continue;
+        }
+        s.push(c);
+    }
     // Strip trailing slashes
     while s.ends_with('/') {
         s.pop();
@@ -965,6 +982,44 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_git_url_collapses_repeated_slashes() {
+        let cases = [
+            // Path slashes collapse, the scheme's :// is kept.
+            (
+                "https://github.com/org//repo",
+                "https://github.com/org/repo",
+            ),
+            (
+                "https://github.com//org///repo.git//",
+                "https://github.com/org/repo",
+            ),
+            (
+                "ssh://git@host:22//org//repo.git",
+                "ssh://git@host:22/org/repo",
+            ),
+            // file:// + absolute path: the path's leading / stays single.
+            ("file:///abs/path/repo", "file:///abs/path/repo"),
+            ("file:///abs//path/repo.git", "file:///abs/path/repo"),
+            ("file:////abs/path/repo", "file:///abs/path/repo"),
+            // scp-style
+            ("git@github.com:org//repo.git", "git@github.com:org/repo"),
+            ("git@host:/abs//repo", "git@host:/abs/repo"),
+            // Plain paths, with a UNC-style // prefix preserved.
+            ("/abs//path/repo.git", "/abs/path/repo"),
+            ("//server/share//repo", "//server/share/repo"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(normalize_git_url(input), expected, "input: {}", input);
+        }
+        // A file:// URL with an absolute path is not the host-relative
+        // file://abs/... form.
+        assert_ne!(
+            normalize_git_url("file:///abs/repo"),
+            normalize_git_url("file://abs/repo")
+        );
+    }
+
+    #[test]
     fn test_hash_url() {
         let hash1 = hash_url("https://github.com/u-boot/u-boot.git");
         assert_eq!(hash1.len(), 8);
@@ -978,6 +1033,23 @@ mod tests {
             hash_url("https://github.com/u-boot/u-boot.git"),
             hash_url("https://github.com/u-boot/u-boot.git/")
         );
+        // A doubled slash, e.g. from `${{ BASE }}/repo` with a BASE ending
+        // in `/`, must not give a separate mirror.
+        assert_eq!(
+            hash_url("https://github.com/u-boot/u-boot.git"),
+            hash_url("https://github.com/u-boot//u-boot.git")
+        );
+        assert_eq!(
+            hash_url("git@github.com:org/repo.git"),
+            hash_url("git@github.com:org//repo")
+        );
+        assert_eq!(
+            hash_url("file:///srv/git/repo"),
+            hash_url("file:///srv//git/repo.git")
+        );
+        // Unchanged for an already-normal URL, so existing mirrors keep
+        // their hash.
+        assert_eq!(hash_url("https://github.com/u-boot/u-boot"), "d92ef881");
         // Test specific URLs from test cases
         let hash_analog = hash_url("https://github.com/analogdevicesinc/u-boot-xlnx.git");
         let hash_someorg = hash_url("https://github.com/someorg/u-boot-xlnx.git");
