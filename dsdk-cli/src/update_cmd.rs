@@ -1034,6 +1034,7 @@ fn fetch_existing_workspace_repo(
     target: &str,
 ) -> bool {
     let Some(mirror_path) = mirror_path else {
+        let _ = git_operations::remote_set_url(repo_path, "origin", &git_cfg.url);
         return git_operations::fetch_ref(repo_path, "origin", fetch_refspec, Some(1))
             .is_ok_and(|r| r.is_success());
     };
