@@ -1421,6 +1421,12 @@ overlay:
       - SOME_INHERITED_VAR
 ```
 
+`extends.source` accepts the same forms as `--source` (see [Manifest
+source formats](#manifest-source-formats)). A relative path there is
+resolved from the directory `cim` is run in, not from the manifest that
+declares it, so `source: ../base-manifests.git` only works when run from
+the right place. Use an absolute path or a `file://` URL instead.
+
 Merge order per list section is always fixed: **remove** (against the
 base only) → **combine** (base-after-removal plus this target's own new
 `sdk.yml` entries — a name/dest collision here is a hard error) →
