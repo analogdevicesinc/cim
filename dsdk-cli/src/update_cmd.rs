@@ -806,8 +806,13 @@ pub(crate) fn update_mirror_repos<T: config::SdkConfigCore>(sdk_config: &T, mirr
     pool.join();
 }
 
-/// Fetch an existing mirror repo up to date; if the pinned commit is a branch
-/// name, also advance the local branch ref to the latest remote commit.
+/// Fetch an existing mirror repo up to date.
+///
+/// Mirrors are `git clone --mirror`, so the fetch refspec is
+/// `+refs/*:refs/*` and the fetch alone moves `refs/heads/<branch>` to the
+/// source's branch tip. Nothing must be re-resolved afterwards: a mirror of
+/// a non-bare working checkout also holds that checkout's own
+/// `refs/remotes/origin/*` tracking refs, which can be behind its branches.
 fn update_existing_mirror_repo(
     repo_mirror_path: &Path,
     git_cfg: &config::GitConfig,
@@ -818,34 +823,7 @@ fn update_existing_mirror_repo(
     let _ = git_operations::remote_set_url(repo_mirror_path, "origin", &git_cfg.url);
 
     match git_operations::fetch_all_with_tags(repo_mirror_path) {
-        Ok(result) if result.is_success() => {}
-        _ => return MirrorOperationResult::Failed,
-    }
-
-    if !is_branch_reference(repo_mirror_path, &git_cfg.commit) {
-        // Non-branch commit, fetch completed successfully
-        return MirrorOperationResult::Updated;
-    }
-
-    // Branch reference: get the latest commit hash for the remote branch and
-    // update the local branch to point to it.
-    let Some(latest_commit) = git_operations::get_latest_commit_for_remote_branch(
-        repo_mirror_path,
-        "origin",
-        &git_cfg.commit,
-    ) else {
-        // Failed to get latest commit
-        return MirrorOperationResult::Failed;
-    };
-
-    let update_result = git_operations::update_ref(
-        repo_mirror_path,
-        &format!("refs/heads/{}", git_cfg.commit),
-        &latest_commit,
-    );
-
-    match update_result {
-        Ok(up_result) if up_result.is_success() => MirrorOperationResult::Updated,
+        Ok(result) if result.is_success() => MirrorOperationResult::Updated,
         _ => MirrorOperationResult::Failed,
     }
 }

@@ -510,39 +510,6 @@ pub fn get_latest_commit_for_branch_with_remote(
     None
 }
 
-/// Get latest commit hash for remote branch after fetch (works in bare repos)
-pub fn get_latest_commit_for_remote_branch(
-    repo_path: &Path,
-    remote: &str,
-    branch_name: &str,
-) -> Option<String> {
-    // In bare repos after fetch, we can use origin/branch notation
-    let remote_branch = format!("{}/{}", remote, branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &remote_branch], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    // For mirror repos, branches are stored directly as refs/heads/{branch}
-    // Try refs/heads/{branch} directly (this works for mirror repos)
-    let heads_ref = format!("refs/heads/{}", branch_name);
-    if let Ok(result) = git_command(&["rev-parse", &heads_ref], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    // Try just the branch name as a final fallback
-    if let Ok(result) = git_command(&["rev-parse", branch_name], Some(repo_path)) {
-        if result.success {
-            return Some(result.stdout.trim().to_string());
-        }
-    }
-
-    None
-}
-
 // ---------------------------------------------------------------
 // Refspec resolution
 // ---------------------------------------------------------------
