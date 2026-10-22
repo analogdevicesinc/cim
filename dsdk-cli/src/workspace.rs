@@ -525,7 +525,9 @@ pub struct ResolvedManifest {
 
 /// Resolve the config_source_dir from the workspace marker
 ///
-/// If the config_source_dir is a URL, re-clones the repo into a fresh TempDir
+/// If the config_source_dir is a git source (URL, `file://`, bare repo, or a
+/// local checkout recorded together with a version), re-clones the repo at the
+/// recorded version into a fresh TempDir and returns that target directory.
 /// Returns the directory path and the TempDir (if created) to keep it alive
 pub fn resolve_config_source_dir_from_marker(
     workspace_path: &Path,
@@ -547,17 +549,23 @@ pub fn resolve_config_source_dir_from_marker(
     };
 
     if let Some(ref source_dir_str) = marker.config_source_dir {
-        if is_git_source(source_dir_str) {
-            // Git source (remote URL, file:// or bare repo): re-clone to a
-            // fresh temp dir
+        let version = if marker.target_version == "latest" {
+            None
+        } else {
+            Some(marker.target_version.as_str())
+        };
+        // A local non-bare checkout used with `cim init -v` is recorded as
+        // its repository root; the target was read from the committed tree
+        // at that version, not from the live working tree, so it has to be
+        // fetched through git again like any other git source.
+        let local_checkout_at_version =
+            version.is_some() && Path::new(source_dir_str).join(".git").exists();
+        if is_git_source(source_dir_str) || local_checkout_at_version {
+            // Git source (remote URL, file://, bare repo, or a local
+            // checkout at a version): re-clone to a fresh temp dir
             let temp_dir = match tempfile::tempdir() {
                 Ok(d) => d,
                 Err(_) => return (workspace_path.to_path_buf(), None),
-            };
-            let version = if marker.target_version == "latest" {
-                None
-            } else {
-                Some(marker.target_version.as_str())
             };
             match resolve_target_config_from_git(
                 source_dir_str,
