@@ -25,6 +25,7 @@ use std::time::Instant;
 pub(crate) struct BootstrapConfig {
     pub(crate) target: Option<String>,
     pub(crate) source: Option<String>,
+    pub(crate) manifest_path: Option<PathBuf>,
     pub(crate) version: Option<String>,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) no_mirror: bool,
@@ -194,6 +195,7 @@ fn run_workspace_init(
     handle_init_command(InitConfig {
         target: target.to_string(),
         source: run.resolved_source,
+        manifest_path: cfg.manifest_path.clone(),
         version: run.version,
         workspace: Some(workspace_path.to_path_buf()),
         no_mirror: cfg.no_mirror,

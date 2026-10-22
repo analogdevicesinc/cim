@@ -247,6 +247,21 @@ cim init -t optee-qemu-v8
 
 Creates workspace at `$HOME/dsdk-optee-qemu-v8`. Use `-w` or `--workspace` to specify a different location.
 
+By default CIM expects `targets/<target>/sdk.yml`. Projects that use `targets/`
+for something else, or have their own layout, can keep the manifest anywhere by
+adding a `.cim.yml` at the repository root that points to the `sdk.yml`:
+
+```yaml
+manifest: cim/sdk.yml
+```
+
+```bash
+cim init -t project -s https://github.com/org/project.git
+```
+
+`-M`/`--manifest-path` (relative to the repository root) overrides the pointer.
+Without either, CIM falls back to `targets/<target>/sdk.yml`.
+
 ### Build and Test
 
 ```bash

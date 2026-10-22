@@ -23,6 +23,11 @@ pub struct WorkspaceSelectionArgs {
     /// Defaults to $HOME/devel/cim-manifests.
     #[arg(short, long, value_name = "URL|PATH")]
     pub source: Option<String>,
+    /// Manifest path relative to the source repo
+    ///
+    /// Overrides the path in the source repository's .cim.yml.
+    #[arg(short = 'M', long, value_name = "PATH")]
+    pub manifest_path: Option<PathBuf>,
     /// Target version (branch or tag)
     ///
     /// When omitted, the target's default version is used.

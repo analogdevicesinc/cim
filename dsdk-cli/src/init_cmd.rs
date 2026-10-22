@@ -22,8 +22,9 @@ use dsdk_cli::workspace::{
     create_workspace_marker, download_config_from_url, expand_env_vars,
     expand_manifest_vars_in_config, get_all_sources_from_config, get_home_dir, is_url,
     load_config_with_extends, load_config_with_user_overrides, require_workspace_config,
-    resolve_mirror, resolve_target_config_from_git, CreateWorkspaceMarkerParams, OS_DEPS_FILE,
-    OVERLAYS_DIR, PYTHON_DEPS_FILE, SDK_CONFIG_FILE, WORKSPACE_MARKER_FILE,
+    resolve_manifest_path, resolve_mirror, resolve_target_config_from_git,
+    CreateWorkspaceMarkerParams, ManifestSelection, OS_DEPS_FILE, OVERLAYS_DIR,
+    PROJECT_CONFIG_FILE, PYTHON_DEPS_FILE, SDK_CONFIG_FILE, WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{
     config, doc_manager, git_operations, messages, overlay, toolchain_manager, vscode_tasks_manager,
@@ -391,6 +392,8 @@ pub(crate) fn list_available_targets(config_root: &Path) -> Result<Vec<String>, 
 pub(crate) struct ResolvedTarget {
     /// Path to the resolved sdk.yml
     pub config_path: PathBuf,
+    /// Manifest path relative to the source repository
+    pub manifest_path: PathBuf,
     /// The source URL or path that matched
     pub source_path: String,
     /// Whether the source was a remote git repo (or local with version checkout)
@@ -424,16 +427,24 @@ pub(crate) fn resolve_target_from_sources(
     target: &str,
     version: Option<&str>,
     sources: &[String],
+    selection: ManifestSelection<'_>,
     persistent_dir: Option<&Path>,
 ) -> Result<ResolvedTarget, String> {
     let multi_source = sources.len() > 1;
 
     for (i, source_path) in sources.iter().enumerate() {
         if is_url(source_path) {
-            match resolve_target_config_from_git(source_path, target, version, persistent_dir) {
-                Ok(path) => {
+            match resolve_target_config_from_git(
+                source_path,
+                target,
+                version,
+                selection,
+                persistent_dir,
+            ) {
+                Ok(manifest) => {
                     return Ok(ResolvedTarget {
-                        config_path: path,
+                        config_path: manifest.config_path,
+                        manifest_path: manifest.manifest_path,
                         source_path: source_path.clone(),
                         is_git_source: true,
                         source_index: i,
@@ -458,11 +469,13 @@ pub(crate) fn resolve_target_from_sources(
                         source_path,
                         target,
                         Some(v),
+                        selection,
                         persistent_dir,
                     ) {
-                        Ok(path) => {
+                        Ok(manifest) => {
                             return Ok(ResolvedTarget {
-                                config_path: path,
+                                config_path: manifest.config_path,
+                                manifest_path: manifest.manifest_path,
                                 source_path: source_path.clone(),
                                 is_git_source: true,
                                 source_index: i,
@@ -488,17 +501,28 @@ pub(crate) fn resolve_target_from_sources(
                     ));
                 }
             } else {
-                match resolve_target_config(target, &source_root) {
+                match resolve_manifest_path(&source_root, target, selection) {
                     Ok(path) => {
                         return Ok(ResolvedTarget {
-                            config_path: path,
+                            config_path: source_root.join(&path),
+                            manifest_path: path,
                             source_path: source_path.clone(),
                             is_git_source: false,
                             source_index: i,
                         });
                     }
-                    Err(_) => {
+                    Err(e) => {
                         if !multi_source {
+                            let custom_manifest = match selection {
+                                ManifestSelection::Explicit(_) => true,
+                                ManifestSelection::Discover => {
+                                    source_root.join(PROJECT_CONFIG_FILE).exists()
+                                }
+                                ManifestSelection::TargetsLayout => false,
+                            };
+                            if custom_manifest {
+                                return Err(e.to_string());
+                            }
                             let mut msg =
                                 format!("Target '{}' not found in source {}", target, source_path);
                             if let Ok(targets) = list_available_targets(&source_root) {
@@ -714,6 +738,7 @@ fn resolve_extends_chain_from_source_inner(
         &extends.target,
         extends.version.as_deref(),
         &base_sources,
+        ManifestSelection::TargetsLayout,
         None,
     )
     .map_err(|e| {
@@ -917,6 +942,7 @@ pub(crate) fn install_pip_packages_if_available(
 pub(crate) struct InitConfig<'a> {
     pub(crate) target: String,
     pub(crate) source: Option<String>,
+    pub(crate) manifest_path: Option<PathBuf>,
     pub(crate) version: Option<String>,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) no_mirror: bool,
@@ -1024,6 +1050,7 @@ pub(crate) fn resolve_workspace_path(
 /// resolve any URL-relative copy_files/YAML references later.
 struct ResolvedTargetConfig {
     config_path: PathBuf,
+    manifest_path: Option<PathBuf>,
     config_url: Option<String>,
     is_remote_git_source: bool,
     resolved_source_path: Option<String>,
@@ -1083,9 +1110,16 @@ fn resolve_target_config_path(
     user_config: Option<&config::UserConfig>,
 ) -> Result<ResolvedTargetConfig, ()> {
     if is_url(&config.target) {
+        if config.manifest_path.is_some() {
+            messages::error(
+                "--manifest-path requires a manifest repository selected with --source",
+            );
+            return Err(());
+        }
         return match resolve_target_config(&config.target, &PathBuf::new()) {
             Ok(path) => Ok(ResolvedTargetConfig {
                 config_path: path,
+                manifest_path: None,
                 config_url: Some(config.target.clone()),
                 is_remote_git_source: false,
                 resolved_source_path: None,
@@ -1101,6 +1135,7 @@ fn resolve_target_config_path(
         &config.target,
         config.version.as_deref(),
         sources,
+        ManifestSelection::from_override(config.manifest_path.as_deref()),
         None, // Use tempfile with mem::forget for init
     ) {
         Ok(resolved) => {
@@ -1128,6 +1163,7 @@ fn resolve_target_config_path(
             ));
             Ok(ResolvedTargetConfig {
                 config_path: resolved.config_path,
+                manifest_path: Some(resolved.manifest_path),
                 config_url: None,
                 is_remote_git_source: resolved.is_git_source,
                 resolved_source_path: Some(resolved.source_path),
@@ -1349,6 +1385,7 @@ fn populate_workspace_files(
 struct MarkerParams<'a> {
     workspace_path: &'a Path,
     config_path: &'a Path,
+    manifest_path: Option<&'a Path>,
     mirror_path: &'a Path,
     target: &'a str,
     version: Option<&'a str>,
@@ -1379,11 +1416,16 @@ fn create_marker_and_get_skip_mirror(params: MarkerParams<'_>) -> Result<bool, (
         workspace_path: params.workspace_path,
         config_name: SDK_CONFIG_FILE,
         original_config_path: params.config_path,
+        manifest_path: if params.is_remote_git_source {
+            params.manifest_path
+        } else {
+            None
+        },
         mirror_path: params.mirror_path,
         original_identifier: Some(params.target),
         target_version: params.version,
         skip_mirror,
-        source_url: if params.is_remote_git_source {
+        source_path: if params.is_remote_git_source {
             params.resolved_source_path
         } else {
             None
@@ -1718,6 +1760,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     let Ok(skip_mirror) = create_marker_and_get_skip_mirror(MarkerParams {
         workspace_path: &workspace_path,
         config_path: &resolved.config_path,
+        manifest_path: resolved.manifest_path.as_deref(),
         mirror_path: &mirror_path,
         target: &config.target,
         version: config.version.as_deref(),
@@ -2453,6 +2496,7 @@ mod tests {
             &git_repo_dir.to_string_lossy(),
             "nonexistent-target",
             None,
+            ManifestSelection::Discover,
             None,
         );
         // This should fail since it's not a real git repo, but the error should be about clone
@@ -2466,6 +2510,85 @@ mod tests {
             "Expected clone-related error, got: {}",
             error_msg
         );
+    }
+
+    #[test]
+    fn test_resolve_target_config_from_git_uses_project_manifest_and_override() {
+        let (_temp_dir, workspace_path) = create_test_workspace();
+        let repo_path = workspace_path.join("project-repo");
+        fs::create_dir_all(&repo_path).unwrap();
+        git_operations::init_repo(&repo_path, false).unwrap();
+        git_operations::config(&repo_path, "user.email", "test@example.com").unwrap();
+        git_operations::config(&repo_path, "user.name", "Test User").unwrap();
+
+        for path in ["cim/sdk.yml", "custom/sdk.yml"] {
+            let manifest_path = repo_path.join(path);
+            fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+            fs::write(&manifest_path, format!("gits: []\n# source: {path}\n")).unwrap();
+        }
+        fs::write(
+            repo_path.join(SDK_CONFIG_FILE),
+            "gits: []\n# source: root\n",
+        )
+        .unwrap();
+        fs::write(repo_path.join("cim/patch.txt"), "patch").unwrap();
+        fs::write(repo_path.join(".cim.yml"), "manifest: cim/sdk.yml\n").unwrap();
+        git_operations::add_files(&repo_path, &["."]).unwrap();
+        git_operations::commit(&repo_path, "Add project manifests").unwrap();
+
+        let source = repo_path.to_string_lossy().to_string();
+        let pointed_manifest = resolve_target_config_from_git(
+            &source,
+            "project",
+            None,
+            ManifestSelection::Discover,
+            None,
+        )
+        .unwrap();
+        assert_eq!(pointed_manifest.manifest_path, PathBuf::from("cim/sdk.yml"));
+        assert!(pointed_manifest.config_path.exists());
+        assert_eq!(
+            fs::read_to_string(
+                pointed_manifest
+                    .config_path
+                    .parent()
+                    .unwrap()
+                    .join("patch.txt")
+            )
+            .unwrap(),
+            "patch"
+        );
+
+        let overridden_manifest = resolve_target_config_from_git(
+            &source,
+            "project",
+            None,
+            ManifestSelection::Explicit(Path::new("custom/sdk.yml")),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            overridden_manifest.manifest_path,
+            PathBuf::from("custom/sdk.yml")
+        );
+        let content = fs::read_to_string(overridden_manifest.config_path).unwrap();
+        assert!(content.contains("# source: custom/sdk.yml"));
+
+        let root_manifest = resolve_target_config_from_git(
+            &source,
+            "project",
+            None,
+            ManifestSelection::Explicit(Path::new(SDK_CONFIG_FILE)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(root_manifest.manifest_path, PathBuf::from(SDK_CONFIG_FILE));
+        assert!(!root_manifest
+            .config_path
+            .parent()
+            .unwrap()
+            .join(".git")
+            .exists());
     }
 
     #[test]

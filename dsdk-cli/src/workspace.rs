@@ -26,6 +26,8 @@ pub const OS_DEPS_FILE: &str = "os-dependencies.yml";
 pub const PYTHON_DEPS_FILE: &str = "python-dependencies.yml";
 /// Filename for the workspace marker
 pub const WORKSPACE_MARKER_FILE: &str = ".workspace";
+/// Optional project-root file that points to a nonstandard CIM manifest.
+pub const PROJECT_CONFIG_FILE: &str = ".cim.yml";
 /// Subfolder (nested under the existing `.cim/` cim-internal directory,
 /// alongside per-git venvs) holding every `extends:` ancestor's own
 /// manifest/dependency files (`<target>-sdk.yml`,
@@ -167,9 +169,12 @@ pub struct WorkspaceMarker {
     pub cim_commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_mirror: Option<bool>,
-    /// Directory containing the original config file (for resolving relative copy_files paths)
+    /// Source repository URL/path or local manifest directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_source_dir: Option<String>,
+    /// Manifest path relative to its source repository, when one was used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_path: Option<String>,
     /// Regex pattern used to filter repositories during init (--match option)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_pattern: Option<String>,
@@ -210,7 +215,10 @@ pub struct CreateWorkspaceMarkerParams<'a> {
     pub original_identifier: Option<&'a str>,
     pub target_version: Option<&'a str>,
     pub skip_mirror: bool,
-    pub source_url: Option<&'a str>,
+    /// Source repository URL/path, when the manifest was resolved from one.
+    pub source_path: Option<&'a str>,
+    /// Selected sdk.yml path relative to its source repository.
+    pub manifest_path: Option<&'a Path>,
     pub match_pattern: Option<&'a str>,
     pub include_group: Option<&'a str>,
     pub exclude_group: Option<&'a str>,
@@ -250,14 +258,19 @@ pub fn create_workspace_marker(
     };
 
     // Get the source directory of the original config file
-    let config_source_dir = if let Some(url) = params.source_url {
-        // For remote git sources, store the URL so sync-copy-files can re-clone
-        Some(url.to_string())
-    } else {
-        params
+    let config_source_dir = match params.source_path {
+        Some(source_path) if is_url(source_path) => Some(source_path.to_string()),
+        Some(source_path) => Some(
+            std::path::absolute(source_path)?
+                .to_string_lossy()
+                .to_string(),
+        ),
+        None => params
             .original_config_path
             .parent()
-            .map(|p| p.to_string_lossy().to_string())
+            .map(std::path::absolute)
+            .transpose()?
+            .map(|path| path.to_string_lossy().to_string()),
     };
 
     let marker_path = params.workspace_path.join(WORKSPACE_MARKER_FILE);
@@ -278,6 +291,9 @@ pub fn create_workspace_marker(
         cim_commit,
         no_mirror: if params.skip_mirror { Some(true) } else { None },
         config_source_dir,
+        manifest_path: params
+            .manifest_path
+            .map(|path| path.to_string_lossy().to_string()),
         match_pattern: params.match_pattern.map(|s| s.to_string()),
         include_groups: params.include_group.map(|s| s.to_string()),
         exclude_groups: params.exclude_group.map(|s| s.to_string()),
@@ -393,28 +409,128 @@ fn checkout_version_if_requested(
     Ok(())
 }
 
-/// Locate `targets/<target>/` inside the cloned repo, erroring with a
-/// version-aware message if it doesn't have an `sdk.yml`.
-fn locate_target_dir(
-    repo_path: &Path,
-    target: &str,
-    version: Option<&str>,
-) -> Result<PathBuf, anyhow::Error> {
-    let target_dir = repo_path.join("targets").join(target);
-    let config_path = target_dir.join(SDK_CONFIG_FILE);
+/// Contents of the optional `.cim.yml` at a source repository root.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectConfig {
+    manifest: PathBuf,
+}
 
-    if !config_path.exists() {
+/// How to locate the `sdk.yml` inside a source repository.
+#[derive(Debug, Clone, Copy)]
+pub enum ManifestSelection<'a> {
+    /// A repository-relative path, from `--manifest-path` or the workspace marker.
+    Explicit(&'a Path),
+    /// The root `.cim.yml` pointer when present, else `targets/<target>/sdk.yml`.
+    Discover,
+    /// Always `targets/<target>/sdk.yml`, ignoring any `.cim.yml`.
+    TargetsLayout,
+}
+
+impl<'a> ManifestSelection<'a> {
+    /// Selection for a user-supplied `--manifest-path` override, if any.
+    pub fn from_override(manifest_path: Option<&'a Path>) -> Self {
+        manifest_path.map_or(Self::Discover, Self::Explicit)
+    }
+}
+
+/// Read the manifest path declared by the repository's `.cim.yml`, if present.
+fn read_project_pointer(repo_path: &Path) -> Result<Option<PathBuf>, anyhow::Error> {
+    let pointer_path = repo_path.join(PROJECT_CONFIG_FILE);
+    if !pointer_path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&pointer_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to read project config {}: {}",
+            pointer_path.display(),
+            e
+        )
+    })?;
+    let project_config: ProjectConfig = noyalib::from_str(&content).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to parse project config {}: {}",
+            pointer_path.display(),
+            e
+        )
+    })?;
+    Ok(Some(project_config.manifest))
+}
+
+/// Reject manifest paths that are empty, escape the repository, or do not
+/// name an `sdk.yml`.
+fn validate_manifest_path(manifest_path: &Path) -> Result<(), anyhow::Error> {
+    let escapes_repo = manifest_path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    });
+    if manifest_path.as_os_str().is_empty() || escapes_repo {
         return Err(anyhow::anyhow!(
-            "Target '{}' not found or missing sdk.yml in repository{}",
-            target,
-            if let Some(v) = version {
-                format!(" at version '{}'", v)
-            } else {
-                String::new()
-            }
+            "Manifest path must be relative to the source repository and must not contain '..': {}",
+            manifest_path.display()
         ));
     }
-    Ok(target_dir)
+    if manifest_path.file_name().and_then(|name| name.to_str()) != Some(SDK_CONFIG_FILE) {
+        return Err(anyhow::anyhow!(
+            "Manifest path must point to {}: {}",
+            SDK_CONFIG_FILE,
+            manifest_path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve the repository-relative path of the `sdk.yml` selected by
+/// `selection`, validating that it stays inside the repository and exists.
+pub fn resolve_manifest_path(
+    repo_path: &Path,
+    target: &str,
+    selection: ManifestSelection<'_>,
+) -> Result<PathBuf, anyhow::Error> {
+    let pointed = match selection {
+        ManifestSelection::Explicit(path) => Some(path.to_path_buf()),
+        ManifestSelection::Discover => read_project_pointer(repo_path)?,
+        ManifestSelection::TargetsLayout => None,
+    };
+    let manifest_path =
+        pointed.unwrap_or_else(|| PathBuf::from("targets").join(target).join(SDK_CONFIG_FILE));
+
+    validate_manifest_path(&manifest_path)?;
+
+    let config_path = repo_path.join(&manifest_path);
+    if !config_path.is_file() {
+        return Err(anyhow::anyhow!(
+            "Manifest not found at {}",
+            config_path.display()
+        ));
+    }
+
+    Ok(manifest_path)
+}
+
+/// Copy the manifest's directory into `dst`, leaving out the clone's own
+/// `.git` that is present when the manifest sits at the repository root.
+fn copy_manifest_dir(src: &Path, dst: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        if file_name == ".git" {
+            continue;
+        }
+        let path = entry.path();
+        let dest_path = dst.join(&file_name);
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest_path)?;
+        } else {
+            fs::copy(&path, &dest_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Prepare the directory the target's files will be extracted into: either a
@@ -462,6 +578,7 @@ fn prepare_extraction_dir(
 /// * `git_source` - Git repository URL or local path
 /// * `target` - Target name to extract
 /// * `version` - Optional version (branch/tag) to checkout
+/// * `selection` - How to locate the sdk.yml inside the repository
 /// * `persistent_dir` - Optional directory to extract files to. If None, uses tempfile with mem::forget
 ///
 /// When `persistent_dir` is Some, files are extracted there and caller is responsible for cleanup.
@@ -470,8 +587,9 @@ pub fn resolve_target_config_from_git(
     git_source: &str,
     target: &str,
     version: Option<&str>,
+    selection: ManifestSelection<'_>,
     persistent_dir: Option<&Path>,
-) -> Result<PathBuf, anyhow::Error> {
+) -> Result<ResolvedManifest, anyhow::Error> {
     // Create a temporary directory for clone
     let temp_dir = tempfile::tempdir()
         .map_err(|e| anyhow::anyhow!("Failed to create temp directory: {}", e))?;
@@ -480,8 +598,25 @@ pub fn resolve_target_config_from_git(
     clone_target_repo(git_source, version, temp_path)?;
     checkout_version_if_requested(temp_path, version)?;
 
-    // Check if target exists and has sdk.yml
-    let target_dir = locate_target_dir(temp_path, target, version)?;
+    let manifest_path = resolve_manifest_path(temp_path, target, selection).map_err(|e| {
+        anyhow::anyhow!(
+            "Target '{}' not found or missing a valid sdk.yml in repository{}: {}",
+            target,
+            if let Some(v) = version {
+                format!(" at version '{}'", v)
+            } else {
+                String::new()
+            },
+            e
+        )
+    })?;
+    let manifest_dir = temp_path.join(&manifest_path);
+    let manifest_dir = manifest_dir.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Manifest path has no parent directory: {}",
+            manifest_path.display()
+        )
+    })?;
 
     // Extract to persistent directory or create a temporary one
     let (extraction_path, temp_dir_keeper) = prepare_extraction_dir(persistent_dir, target)?;
@@ -489,7 +624,7 @@ pub fn resolve_target_config_from_git(
     // Recursively copy all files and directories from target directory to extraction path
     // This ensures that any files referenced in copy_files are available, including
     // files in subdirectories like patches/qemu/*.patch
-    copy_dir_recursive(&target_dir, &extraction_path)
+    copy_manifest_dir(manifest_dir, &extraction_path)
         .map_err(|e| anyhow::anyhow!("Failed to copy target directory contents: {}", e))?;
 
     let persistent_config = extraction_path.join(SDK_CONFIG_FILE);
@@ -499,7 +634,17 @@ pub fn resolve_target_config_from_git(
         std::mem::forget(temp_keeper);
     }
 
-    Ok(persistent_config)
+    Ok(ResolvedManifest {
+        config_path: persistent_config,
+        manifest_path,
+    })
+}
+
+/// A manifest copied out of a source repository for workspace initialization.
+#[derive(Debug)]
+pub struct ResolvedManifest {
+    pub config_path: PathBuf,
+    pub manifest_path: PathBuf,
 }
 
 /// Resolve the config_source_dir from the workspace marker
@@ -541,10 +686,17 @@ pub fn resolve_config_source_dir_from_marker(
                 source_dir_str,
                 &marker.target,
                 version,
+                marker
+                    .manifest_path
+                    .as_deref()
+                    .map_or(ManifestSelection::TargetsLayout, |path| {
+                        ManifestSelection::Explicit(Path::new(path))
+                    }),
                 Some(temp_dir.path()),
             ) {
-                Ok(config_file_path) => {
-                    let dir = config_file_path
+                Ok(manifest) => {
+                    let dir = manifest
+                        .config_path
                         .parent()
                         .unwrap_or(temp_dir.path())
                         .to_path_buf();
@@ -559,6 +711,19 @@ pub fn resolve_config_source_dir_from_marker(
             // Local path: use if it exists
             let p = PathBuf::from(source_dir_str);
             if p.exists() {
+                if let Some(manifest_path) = &marker.manifest_path {
+                    let manifest = p.join(manifest_path);
+                    if manifest.is_file() {
+                        let dir = manifest.parent().unwrap_or(&p).to_path_buf();
+                        return (dir, None);
+                    }
+                    messages::error(&format!(
+                        "Manifest {} recorded in {} no longer exists",
+                        manifest_path,
+                        p.display()
+                    ));
+                    return (workspace_path.to_path_buf(), None);
+                }
                 return (p, None);
             }
         }
@@ -1587,6 +1752,70 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_manifest_path_precedence_and_validation() {
+        let (_temp_dir, repo_path) = create_test_workspace();
+        let pointer_manifest = repo_path.join("cim/sdk.yml");
+        let explicit_manifest = repo_path.join("custom/sdk.yml");
+        let legacy_manifest = repo_path.join("targets/project/sdk.yml");
+        for manifest in [&pointer_manifest, &explicit_manifest, &legacy_manifest] {
+            fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+            fs::write(manifest, "gits: []\n").unwrap();
+        }
+        fs::write(
+            repo_path.join(PROJECT_CONFIG_FILE),
+            "manifest: cim/sdk.yml\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_manifest_path(&repo_path, "project", ManifestSelection::Discover).unwrap(),
+            PathBuf::from("cim/sdk.yml")
+        );
+        assert_eq!(
+            resolve_manifest_path(
+                &repo_path,
+                "project",
+                ManifestSelection::Explicit(Path::new("custom/sdk.yml")),
+            )
+            .unwrap(),
+            PathBuf::from("custom/sdk.yml")
+        );
+        assert_eq!(
+            resolve_manifest_path(&repo_path, "project", ManifestSelection::TargetsLayout).unwrap(),
+            PathBuf::from("targets/project/sdk.yml")
+        );
+
+        fs::write(repo_path.join(PROJECT_CONFIG_FILE), "invalid: [\n").unwrap();
+        assert_eq!(
+            resolve_manifest_path(
+                &repo_path,
+                "project",
+                ManifestSelection::Explicit(Path::new("custom/sdk.yml")),
+            )
+            .unwrap(),
+            PathBuf::from("custom/sdk.yml")
+        );
+        assert!(resolve_manifest_path(&repo_path, "project", ManifestSelection::Discover).is_err());
+
+        let traversal = resolve_manifest_path(
+            &repo_path,
+            "project",
+            ManifestSelection::Explicit(Path::new("../sdk.yml")),
+        )
+        .unwrap_err();
+        assert!(traversal
+            .to_string()
+            .contains("relative to the source repository"));
+        let wrong_file = resolve_manifest_path(
+            &repo_path,
+            "project",
+            ManifestSelection::Explicit(Path::new("custom/other.yml")),
+        )
+        .unwrap_err();
+        assert!(wrong_file.to_string().contains("must point to sdk.yml"));
+    }
+
+    #[test]
     fn test_workspace_marker_serialization() {
         let marker = WorkspaceMarker {
             workspace_version: "1".to_string(),
@@ -1602,6 +1831,7 @@ mod tests {
             cim_commit: "6b4768b7".to_string(),
             no_mirror: Some(true),
             config_source_dir: Some("/path/to/source".to_string()),
+            manifest_path: Some("cim/sdk.yml".to_string()),
             match_pattern: None,
             include_groups: None,
             exclude_groups: None,
@@ -1623,6 +1853,7 @@ mod tests {
         assert_eq!(marker.cim_commit, deserialized.cim_commit);
         assert_eq!(marker.no_mirror, deserialized.no_mirror);
         assert_eq!(marker.config_source_dir, deserialized.config_source_dir);
+        assert_eq!(marker.manifest_path, deserialized.manifest_path);
     }
 
     #[test]
@@ -1646,7 +1877,8 @@ mod tests {
             original_identifier: None,
             target_version: None,
             skip_mirror: false,
-            source_url: None,
+            source_path: Some("https://example.com/project.git"),
+            manifest_path: Some(Path::new("cim/sdk.yml")),
             match_pattern: None,
             include_group: None,
             exclude_group: None,
@@ -1665,6 +1897,38 @@ mod tests {
         assert_eq!(marker.target, "test-config.yml");
         assert!(!marker.config_sha256.is_empty());
         assert_eq!(marker.mirror_path, "/tmp/test-mirror");
+        assert_eq!(marker.manifest_path.as_deref(), Some("cim/sdk.yml"));
+    }
+
+    #[test]
+    fn test_resolve_local_manifest_source_from_marker() {
+        let (_workspace_temp, workspace_path) = create_test_workspace();
+        let (_source_temp, source_path) = create_test_workspace();
+        fs::create_dir_all(source_path.join("cim")).unwrap();
+        fs::write(source_path.join("cim/sdk.yml"), "gits: []\n").unwrap();
+        let workspace_config = workspace_path.join(SDK_CONFIG_FILE);
+        fs::write(&workspace_config, "gits: []\n").unwrap();
+        let source = source_path.to_string_lossy().to_string();
+
+        create_workspace_marker(CreateWorkspaceMarkerParams {
+            workspace_path: &workspace_path,
+            config_name: SDK_CONFIG_FILE,
+            original_config_path: &workspace_config,
+            mirror_path: Path::new("/tmp/test-mirror"),
+            original_identifier: Some("project"),
+            target_version: None,
+            skip_mirror: false,
+            source_path: Some(&source),
+            manifest_path: Some(Path::new("cim/sdk.yml")),
+            match_pattern: None,
+            include_group: None,
+            exclude_group: None,
+        })
+        .unwrap();
+
+        let (config_source_dir, _temp_dir) =
+            resolve_config_source_dir_from_marker(&workspace_path, &workspace_config);
+        assert_eq!(config_source_dir, source_path.join("cim"));
     }
 
     #[test]
