@@ -314,3 +314,110 @@ fn test_marker_source_for_local_checkout_with_version_is_refetched() {
         sdk
     );
 }
+
+/// Commit hash `rev` resolves to in the git repository at `dir`.
+fn rev_parse(dir: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(dir)
+        .output()
+        .expect("failed to run git");
+    assert!(
+        out.status.success(),
+        "git rev-parse {} failed in {}: {}",
+        rev,
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Add and commit a file in `dir`.
+fn commit_file(dir: &Path, name: &str, content: &str) {
+    fs::write(dir.join(name), content).unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", name]);
+}
+
+#[test]
+fn test_mirror_of_working_checkout_uses_local_branch_tip() {
+    // A git source that is a non-bare working checkout carries its own
+    // refs/remotes/origin/* tracking refs, and a `git clone --mirror` of it
+    // copies them. The mirror must still resolve `main` from refs/heads/main
+    // (the checkout's local tip), not from that stale tracking ref.
+    let f = Fixture::new();
+    let root = f.root();
+
+    // upstream.git <- src (non-bare); src's main is ahead of its origin/main.
+    git(root, &["clone", "-q", "--bare", "dep", "upstream.git"]);
+    git(root, &["clone", "-q", "upstream.git", "src"]);
+    let src = root.join("src");
+    commit_file(&src, "local-1", "1\n");
+    let stale = rev_parse(&src, "origin/main");
+    assert_ne!(rev_parse(&src, "main"), stale);
+
+    let manifest = root.join("local-manifest");
+    fs::create_dir_all(manifest.join("targets").join("wc")).unwrap();
+    fs::write(
+        manifest.join("targets").join("wc").join("sdk.yml"),
+        format!(
+            "gits:\n  - name: wc\n    url: file://{}\n    commit: main\n",
+            src.display()
+        ),
+    )
+    .unwrap();
+    let manifest = manifest.to_string_lossy().to_string();
+    let mirror = root.join("mirror");
+    let mirror_str = mirror.to_string_lossy().to_string();
+    let init = |ws_name: &str| -> PathBuf {
+        let ws = root.join(ws_name);
+        let ws_str = ws.to_string_lossy().to_string();
+        f.cim_ok(
+            root,
+            &[
+                "init",
+                "-t",
+                "wc",
+                "-s",
+                &manifest,
+                "-w",
+                &ws_str,
+                "-m",
+                &mirror_str,
+            ],
+        );
+        ws
+    };
+    let mirror_repo = || {
+        let entries: Vec<PathBuf> = fs::read_dir(&mirror)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.join("HEAD").exists())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected one git mirror: {:?}", entries);
+        entries[0].clone()
+    };
+
+    // 1. First init clones the mirror.
+    let ws1 = init("ws1");
+    let tip = rev_parse(&src, "main");
+    assert_eq!(rev_parse(&mirror_repo(), "refs/heads/main"), tip);
+    assert_eq!(rev_parse(&ws1.join("wc"), "HEAD"), tip);
+
+    // 2. A second init updates the existing mirror.
+    commit_file(&src, "local-2", "2\n");
+    let tip = rev_parse(&src, "main");
+    let ws2 = init("ws2");
+    assert_eq!(rev_parse(&mirror_repo(), "refs/heads/main"), tip);
+    assert_eq!(rev_parse(&ws2.join("wc"), "HEAD"), tip);
+
+    // 3. `cim update` in an existing workspace follows the new tip too.
+    commit_file(&src, "local-3", "3\n");
+    let tip = rev_parse(&src, "main");
+    f.cim_ok(&ws1, &["update", "-m", &mirror_str]);
+    assert_eq!(rev_parse(&mirror_repo(), "refs/heads/main"), tip);
+    assert_eq!(rev_parse(&ws1.join("wc"), "HEAD"), tip);
+
+    // The source's stale tracking ref was never what we checked out.
+    assert_ne!(tip, stale);
+}
