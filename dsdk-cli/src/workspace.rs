@@ -717,6 +717,8 @@ fn is_bare_git_repo(path: &Path) -> bool {
 /// This function expands environment variables in path strings.
 /// It supports Unix-style $VAR and ${VAR}, Windows-style %VAR%, and tilde (~) expansion.
 /// If an environment variable is not found, it leaves the variable reference unchanged.
+/// `$$` is Make's escape for a literal `$`, so `$$VAR` and `$${VAR}` are left
+/// unchanged too.
 ///
 /// # Examples
 ///
@@ -725,6 +727,7 @@ fn is_bare_git_repo(path: &Path) -> bool {
 /// expand_env_vars("$HOME/workspace") => "/Users/alice/workspace"
 /// expand_env_vars("${HOME}/tmp/mirror") => "/Users/alice/tmp/mirror"
 /// expand_env_vars("~/workspace") => "/Users/alice/workspace"
+/// expand_env_vars("$$HOME/bin") => "$$HOME/bin"
 ///
 /// // Windows style (USERPROFILE=C:\Users\alice):
 /// expand_env_vars("%USERPROFILE%\\workspace") => "C:\\Users\\alice\\workspace"
@@ -741,7 +744,8 @@ pub fn expand_env_vars(path: &str) -> String {
 /// real environment variable with the same name.
 ///
 /// Supports Unix-style `$VAR` and `${VAR}`, Windows-style `%VAR%`, and tilde
-/// (`~`) expansion.  Unknown variables are left unchanged.
+/// (`~`) expansion.  Unknown variables are left unchanged, and so are `$$VAR`
+/// and `$${VAR}`, since `$$` is Make's escape for a literal `$`.
 pub fn expand_env_vars_with_overrides(
     path: &str,
     overrides: &std::collections::HashMap<&str, &str>,
@@ -795,7 +799,21 @@ pub fn expand_env_vars_with_overrides(
     }
 
     // Handle ${VAR} syntax
-    while let Some(start) = result.find("${") {
+    let mut search_from = 0;
+    while let Some(rel) = result[search_from..].find("${") {
+        let start = search_from + rel;
+        // An even run of `$` ending here means this `$` is the second half
+        // of a `$$` escape, so `$${VAR}` stays as is.
+        let dollars = result[..=start]
+            .bytes()
+            .rev()
+            .take_while(|&b| b == b'$')
+            .count();
+        if dollars % 2 == 0 {
+            search_from = start + 1;
+            continue;
+        }
+        search_from = start;
         if let Some(end) = result[start..].find('}') {
             let var_name = &result[start + 2..start + end].to_string();
             if let Some(value) = resolve_var(var_name, overrides) {
@@ -814,7 +832,10 @@ pub fn expand_env_vars_with_overrides(
     let mut i = 0;
 
     while i < chars.len() {
-        if chars[i] == '$' && i + 1 < chars.len() {
+        if chars[i] == '$' && chars.get(i + 1) == Some(&'$') {
+            // `$$` escape: keep both, so `$$VAR` is not expanded.
+            i += 2;
+        } else if chars[i] == '$' && i + 1 < chars.len() {
             // Find the end of the variable name
             let var_start = i + 1;
             let mut var_end = var_start;
@@ -953,6 +974,7 @@ pub fn has_unresolved_env_var_refs(s: &str) -> bool {
 ///
 /// assert_eq!(find_unresolved_env_var_name("https://example.com"), None);
 /// assert_eq!(find_unresolved_env_var_name("${{ WORKSPACE }}/bin"), None);
+/// assert_eq!(find_unresolved_env_var_name("$$UNSET_VAR/path"), None);
 /// assert_eq!(
 ///     find_unresolved_env_var_name("$UNSET_HOST_VAR/path"),
 ///     Some("UNSET_HOST_VAR".to_string())
@@ -967,6 +989,11 @@ pub fn find_unresolved_env_var_name(s: &str) -> Option<String> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'$' {
+            // Skip a `$$` escape, so `$$VAR` is not reported.
+            if bytes.get(i + 1) == Some(&b'$') {
+                i += 2;
+                continue;
+            }
             // Skip a `${{ … }}` manifest-variable reference entirely.
             if bytes.get(i + 1) == Some(&b'{') && bytes.get(i + 2) == Some(&b'{') {
                 if let Some(rel) = s[i + 3..].find("}}") {
@@ -2020,6 +2047,59 @@ mod tests {
         assert!(!has_unresolved_env_var_refs(
             "prefix/${{ WORKSPACE }}/suffix"
         ));
+    }
+
+    #[test]
+    fn test_expand_env_vars_dollar_escape() {
+        // `$$` is Make's escape for a literal `$`: `$$VAR` and `$${VAR}`
+        // must reach the Makefile untouched, not as `$<value>`.
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("HOME", "/home/alice");
+        let expand = |s: &str| expand_env_vars_with_overrides(s, &overrides);
+
+        assert_eq!(expand("$$HOME/bin"), "$$HOME/bin");
+        assert_eq!(expand("$${HOME}/bin"), "$${HOME}/bin");
+        assert_eq!(expand("-j$$(nproc)"), "-j$$(nproc)");
+        assert_eq!(expand("$(shell echo $$HOME)"), "$(shell echo $$HOME)");
+        // An odd run: `$$` escape followed by a live `$HOME`.
+        assert_eq!(expand("$$$HOME/bin"), "$$/home/alice/bin");
+        assert_eq!(expand("$$${HOME}/bin"), "$$/home/alice/bin");
+        // An escaped reference does not stop later ones from expanding.
+        assert_eq!(expand("$${HOME}:${HOME}"), "$${HOME}:/home/alice");
+        assert_eq!(expand("$$HOME:$HOME"), "$$HOME:/home/alice");
+    }
+
+    #[test]
+    fn test_resolve_variables_dollar_escape() {
+        std::env::set_var("CIM_TEST_DOLLAR_ESCAPE", "/expanded");
+        let mut raw = std::collections::HashMap::new();
+        raw.insert("A".to_string(), "$$CIM_TEST_DOLLAR_ESCAPE/bin".to_string());
+        raw.insert(
+            "B".to_string(),
+            "$${CIM_TEST_DOLLAR_ESCAPE}/bin".to_string(),
+        );
+        raw.insert("C".to_string(), "$CIM_TEST_DOLLAR_ESCAPE/bin".to_string());
+        let vars = resolve_variables(&raw);
+        assert_eq!(vars["A"], "$$CIM_TEST_DOLLAR_ESCAPE/bin");
+        assert_eq!(vars["B"], "$${CIM_TEST_DOLLAR_ESCAPE}/bin");
+        assert_eq!(vars["C"], "/expanded/bin");
+        for v in vars.values() {
+            assert!(
+                !has_unresolved_env_var_refs(v),
+                "unexpected warning for {}",
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn test_find_unresolved_env_var_name_dollar_escape() {
+        assert_eq!(find_unresolved_env_var_name("$$UNSET_VAR/path"), None);
+        assert_eq!(find_unresolved_env_var_name("$${UNSET_VAR}/path"), None);
+        assert_eq!(
+            find_unresolved_env_var_name("$$$UNSET_VAR/path"),
+            Some("UNSET_VAR".to_string())
+        );
     }
 
     #[test]
