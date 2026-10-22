@@ -19,8 +19,8 @@ use crate::version::{print_update_notice, spawn_version_check};
 use clap::CommandFactory;
 use dsdk_cli::config::SdkConfigCore;
 use dsdk_cli::workspace::{
-    get_all_sources, load_config_with_extends, require_workspace_config, resolve_mirror,
-    WorkspaceMarker, WORKSPACE_MARKER_FILE,
+    expand_env_vars, expand_manifest_vars_in_config, get_all_sources, load_config_with_extends,
+    require_workspace_config, resolve_mirror, WorkspaceMarker, WORKSPACE_MARKER_FILE,
 };
 use dsdk_cli::{config, docker_manager, git_operations, messages};
 use regex::Regex;
@@ -543,7 +543,9 @@ fn resolve_update_workspace() -> Result<(PathBuf, PathBuf), ()> {
     Ok((workspace_path, config_path))
 }
 
-/// Load the sdk.yml config and apply any user config overrides on top of it.
+/// Load the sdk.yml config, apply any user config overrides on top of it, and
+/// expand env-var and `${{ VAR }}` manifest-variable references in git URLs
+/// and other path/URL fields.
 fn load_update_sdk_config(
     config_path: &Path,
     verbose: bool,
@@ -569,6 +571,20 @@ fn load_update_sdk_config(
             None
         }
     };
+
+    // Expand environment variables in git repository URLs
+    for git in &mut sdk_config.gits {
+        let expanded = expand_env_vars(&git.url);
+        if expanded != git.url {
+            if verbose {
+                messages::verbose(&format!("Expanded git URL: {} -> {}", git.url, expanded));
+            }
+            git.url = expanded;
+        }
+    }
+
+    // Expand manifest ${{ VAR }} variables in path/URL fields
+    expand_manifest_vars_in_config(&mut sdk_config);
 
     Ok((sdk_config, user_config))
 }
