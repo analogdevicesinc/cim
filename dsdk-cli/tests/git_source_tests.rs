@@ -273,3 +273,44 @@ fn test_list_targets_and_init_from_scp_like_source() {
     let marker = fs::read_to_string(ws.join(".workspace")).unwrap();
     assert!(marker.contains(&scp), "marker: {}", marker);
 }
+
+#[test]
+fn test_marker_source_for_local_checkout_with_version_is_refetched() {
+    // A non-bare checkout used with -v must be re-read from git at that
+    // version by later commands (cim release resolves copy_files sources
+    // against this directory), not from the repository's live working tree.
+    let f = Fixture::new();
+    let wt = f.root().join("manifest-wt");
+    let wt_str = wt.to_string_lossy().to_string();
+    // Uncommitted change on top of main: must not leak into either result.
+    fs::write(wt.join("targets/demo/sdk.yml"), "# dirty\ngits: []\n").unwrap();
+
+    let ws = f.root().join("ws-wt-tag");
+    let ws_str = ws.to_string_lossy().to_string();
+    f.cim_ok(
+        f.root(),
+        &[
+            "init",
+            "-t",
+            "demo",
+            "-s",
+            &wt_str,
+            "-v",
+            "v1.0",
+            "-w",
+            &ws_str,
+            "--no-mirror",
+        ],
+    );
+    assert!(workspace_sdk(&ws).contains(MARKER_V1));
+
+    let (dir, _keep) =
+        dsdk_cli::workspace::resolve_config_source_dir_from_marker(&ws, &ws.join("sdk.yml"));
+    let sdk = fs::read_to_string(dir.join("sdk.yml")).unwrap();
+    assert!(
+        sdk.contains(MARKER_V1),
+        "source dir {} is not the target at v1.0: {}",
+        dir.display(),
+        sdk
+    );
+}
