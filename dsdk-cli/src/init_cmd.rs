@@ -1638,7 +1638,7 @@ fn setup_direnv_if_used(sdk_config: &config::SdkConfig, workspace_path: &Path, s
 }
 
 /// Initialize a new workspace
-pub(crate) fn handle_init_command(config: InitConfig) {
+pub(crate) fn handle_init_command(config: InitConfig) -> bool {
     // Start background version check so it runs concurrently with the rest of init
     let version_check = spawn_version_check();
 
@@ -1653,7 +1653,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     );
 
     let Ok(resolved) = resolve_target_config_path(&config, &sources, user_config.as_ref()) else {
-        return;
+        return false;
     };
 
     let Ok(extends_resolution) = load_and_prepare_sdk_config(
@@ -1663,7 +1663,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         user_config.as_ref(),
         config.verbose,
     ) else {
-        return;
+        return false;
     };
     let mut sdk_config = extends_resolution.merged;
 
@@ -1678,7 +1678,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
             }
             Err(e) => {
                 messages::error(&e);
-                return;
+                return false;
             }
         }
     } else {
@@ -1703,7 +1703,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
     );
 
     if prepare_workspace_directory(&workspace_path, config.force).is_err() {
-        return;
+        return false;
     }
 
     let Ok(dest_config_path) = populate_workspace_files(
@@ -1712,7 +1712,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         &resolved.config_path,
         resolved.config_url.as_deref(),
     ) else {
-        return;
+        return false;
     };
 
     let Ok(skip_mirror) = create_marker_and_get_skip_mirror(MarkerParams {
@@ -1729,7 +1729,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
         no_mirror_flag: config.no_mirror,
         user_config: user_config.as_ref(),
     }) else {
-        return;
+        return false;
     };
 
     // Create filtered config based on match pattern
@@ -1803,6 +1803,7 @@ pub(crate) fn handle_init_command(config: InitConfig) {
 
     // Print any available update notice after the main work is done
     crate::version::print_update_notice(version_check);
+    true
 }
 
 /// Temporary struct to hold filtered git configurations for operations

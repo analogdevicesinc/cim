@@ -87,7 +87,7 @@ fn main() {
                 }
             };
 
-            handle_init_command(InitConfig {
+            if !handle_init_command(InitConfig {
                 target: target_name,
                 source: common.source.clone(),
                 version: common.version.clone(),
@@ -105,7 +105,9 @@ fn main() {
                 symlink: *symlink,
                 yes: common.yes,
                 _cert_validation: common.cert_validation.as_deref(),
-            });
+            }) {
+                std::process::exit(1);
+            }
         }
         Commands::Bootstrap { target, common } => {
             handle_bootstrap_command(BootstrapConfig {

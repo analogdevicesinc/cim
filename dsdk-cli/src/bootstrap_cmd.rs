@@ -191,7 +191,7 @@ fn run_workspace_init(
     workspace_path: &Path,
     run: ResolvedBootstrapRun,
 ) {
-    handle_init_command(InitConfig {
+    if !handle_init_command(InitConfig {
         target: target.to_string(),
         source: run.resolved_source,
         version: run.version,
@@ -209,11 +209,11 @@ fn run_workspace_init(
         symlink: run.symlink,
         yes: cfg.yes,
         _cert_validation: cfg.cert_validation.as_deref(),
-    });
+    }) {
+        std::process::exit(1);
+    }
 
-    // handle_init_command doesn't return a success/failure signal (some of its error
-    // paths exit the process directly, others just print and return), so the presence
-    // of a generated Makefile is used as the proxy for "the workspace is buildable".
+    // Bootstrap requires a generated Makefile before running build phases.
     if !workspace_path.join("Makefile").exists() {
         messages::error("Bootstrap failed: workspace was not fully created (see errors above)");
         std::process::exit(1);
