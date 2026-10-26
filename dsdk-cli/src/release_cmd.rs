@@ -16,11 +16,9 @@ use dsdk_cli::download::{
 use dsdk_cli::workspace::{
     copy_dir_recursive, expand_env_vars, expand_manifest_vars_in_config, is_url,
     load_config_with_user_overrides, require_workspace_config,
-    resolve_config_source_dir_from_marker, resolve_mirror,
+    resolve_config_source_dir_from_marker, resolve_mirror, SDK_CONFIG_FILE,
 };
 
-#[cfg(test)]
-use dsdk_cli::workspace::SDK_CONFIG_FILE;
 use dsdk_cli::{config, git_operations, messages};
 use regex::Regex;
 use std::collections::HashSet;
@@ -1459,6 +1457,60 @@ struct SyncFilesContext<'a> {
     force: bool,
 }
 
+fn resolve_local_extends_copy_file_sources(
+    sdk_config: &mut config::SdkConfig,
+    config_source_dir: &Path,
+) -> Result<(), String> {
+    let Some(targets_dir) = config_source_dir.parent() else {
+        return Ok(());
+    };
+    if targets_dir.file_name().and_then(|name| name.to_str()) != Some("targets") {
+        return Ok(());
+    }
+    let Some(source_root) = targets_dir.parent() else {
+        return Ok(());
+    };
+
+    let source_config_path = config_source_dir.join(SDK_CONFIG_FILE);
+    let target = config_source_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "Could not determine target name from {}",
+                config_source_dir.display()
+            )
+        })?;
+    let source_config = config::load_config(&source_config_path)
+        .map_err(|e| format!("Failed to load {}: {}", source_config_path.display(), e))?;
+    if source_config.extends.is_none() {
+        return Ok(());
+    }
+    let sources = [source_root.to_string_lossy().into_owned()];
+    let mut source_resolution =
+        crate::init_cmd::resolve_extends_chain_from_source(&source_config_path, target, &sources)?;
+    expand_manifest_vars_in_config(&mut source_resolution.merged);
+
+    if let (Some(workspace_files), Some(source_files)) = (
+        sdk_config.copy_files.as_mut(),
+        source_resolution.merged.copy_files.as_ref(),
+    ) {
+        for workspace_file in workspace_files {
+            if is_url(&workspace_file.source) {
+                continue;
+            }
+            if let Some(source_file) = source_files
+                .iter()
+                .find(|source_file| source_file.dest == workspace_file.dest)
+            {
+                workspace_file.source.clone_from(&source_file.source);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn report_dry_run_url_sync(
     copy_file: &config::CopyFileConfig,
     dest_path: &Path,
@@ -1718,15 +1770,16 @@ pub(crate) fn handle_sync_files_hash_command(
     // Expand manifest ${{ VAR }} variables in copy_files source and dest
     expand_manifest_vars_in_config(&mut sdk_config);
 
-    // Get copy_files configuration
-    let Some(copy_files) = &sdk_config.copy_files else {
-        messages::status("No copy_files section found in sdk.yml");
-        return;
-    };
-
-    if copy_files.is_empty() {
-        messages::status("copy_files section is empty");
-        return;
+    match sdk_config.copy_files.as_ref() {
+        Some(copy_files) if !copy_files.is_empty() => {}
+        Some(_) => {
+            messages::status("copy_files section is empty");
+            return;
+        }
+        None => {
+            messages::status("No copy_files section found in sdk.yml");
+            return;
+        }
     }
 
     // Expand mirror path
@@ -1740,7 +1793,18 @@ pub(crate) fn handle_sync_files_hash_command(
     };
     // _temp_clone_dir must stay alive for the duration of the function
 
+    if let Err(e) = resolve_local_extends_copy_file_sources(&mut sdk_config, &config_source_dir) {
+        messages::error(&format!(
+            "Failed to resolve local copy_files sources: {}",
+            e
+        ));
+        std::process::exit(1);
+    }
+
     // Filter files if a specific filter is provided
+    let Some(copy_files) = sdk_config.copy_files.as_ref() else {
+        return;
+    };
     let files_to_process = filter_copy_files(copy_files, file_filter);
 
     if files_to_process.is_empty() {
@@ -2139,6 +2203,64 @@ gits:
             fs::read_to_string(workspace_dir.join("patches/two.patch"))
                 .expect("Failed to read copied patch"),
             "two"
+        );
+    }
+
+    #[test]
+    fn test_sync_copy_files_resolves_inherited_local_sources() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let source_root = temp_dir.path().join("manifests");
+        let base_dir = source_root.join("targets/base");
+        let derived_dir = source_root.join("targets/derived");
+        let workspace_dir = temp_dir.path().join("workspace");
+        let overlays_dir = workspace_dir.join(dsdk_cli::workspace::OVERLAYS_DIR);
+        fs::create_dir_all(&base_dir).expect("Failed to create base target");
+        fs::create_dir_all(&derived_dir).expect("Failed to create derived target");
+        fs::create_dir_all(&overlays_dir).expect("Failed to create overlays directory");
+        fs::create_dir_all(&workspace_dir).expect("Failed to create workspace");
+        fs::write(base_dir.join("motd.txt"), "base message")
+            .expect("Failed to write base copy file");
+
+        let base_sdk = "gits: []\ncopy_files:\n  - source: motd.txt\n    dest: motd.txt\n";
+        let derived_sdk = "extends: base\ngits: []\n";
+        fs::write(base_dir.join(SDK_CONFIG_FILE), base_sdk).expect("Failed to write base config");
+        fs::write(derived_dir.join(SDK_CONFIG_FILE), derived_sdk)
+            .expect("Failed to write derived config");
+        fs::write(
+            overlays_dir.join(format!("base-{}", SDK_CONFIG_FILE)),
+            base_sdk,
+        )
+        .expect("Failed to write workspace base config");
+        let workspace_config = workspace_dir.join(SDK_CONFIG_FILE);
+        fs::write(&workspace_config, derived_sdk).expect("Failed to write workspace config");
+
+        let mut sdk_config = dsdk_cli::workspace::load_config_with_extends(&workspace_config)
+            .expect("Failed to load workspace config");
+        resolve_local_extends_copy_file_sources(&mut sdk_config, &derived_dir)
+            .expect("Failed to resolve inherited source");
+
+        let copy_file = &sdk_config.copy_files.as_ref().expect("Missing copy_files")[0];
+        assert_eq!(
+            copy_file.source,
+            base_dir.join("motd.txt").to_string_lossy()
+        );
+
+        let ctx = SyncFilesContext {
+            workspace_path: &workspace_dir,
+            mirror_path: temp_dir.path(),
+            config_source_dir: &derived_dir,
+            mode_str: "",
+            dry_run: false,
+            force: true,
+        };
+        let mut counts = SyncCounts::default();
+        process_local_copy_file(copy_file, &ctx, &mut counts);
+
+        assert_eq!(counts.synced, 1);
+        assert_eq!(counts.failed, 0);
+        assert_eq!(
+            fs::read_to_string(workspace_dir.join("motd.txt")).expect("Failed to read synced file"),
+            "base message"
         );
     }
 
