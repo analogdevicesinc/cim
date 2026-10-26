@@ -10,8 +10,8 @@
 // limitations under the License.
 
 use dsdk_cli::download::{
-    compute_file_sha256, copy_single_file, download_file_with_cache, generate_cache_path,
-    DownloadConfig,
+    compute_file_sha256, copy_single_file, download_file_with_cache, expand_glob_pattern,
+    generate_cache_path, has_wildcards, DownloadConfig,
 };
 use dsdk_cli::workspace::{
     copy_dir_recursive, expand_env_vars, expand_manifest_vars_in_config, is_url,
@@ -1591,35 +1591,70 @@ fn process_local_copy_file(
     counts: &mut SyncCounts,
 ) {
     let expanded_source = expand_env_vars(&copy_file.source);
-    let source_path = if Path::new(&expanded_source).is_absolute() {
-        PathBuf::from(&expanded_source)
+    let wildcard_source = has_wildcards(&expanded_source);
+    let sources = if wildcard_source {
+        match expand_glob_pattern(&expanded_source, ctx.config_source_dir) {
+            Ok(matches) if !matches.is_empty() => matches,
+            Ok(_) => {
+                messages::error(&format!("  No files matched pattern: {}", copy_file.source));
+                counts.failed += 1;
+                return;
+            }
+            Err(e) => {
+                messages::error(&format!(
+                    "  Failed to expand pattern {}: {}",
+                    copy_file.source, e
+                ));
+                counts.failed += 1;
+                return;
+            }
+        }
     } else {
-        ctx.config_source_dir.join(&expanded_source)
+        let source_path = if Path::new(&expanded_source).is_absolute() {
+            PathBuf::from(&expanded_source)
+        } else {
+            ctx.config_source_dir.join(&expanded_source)
+        };
+        if !source_path.exists() {
+            messages::error(&format!(
+                "  Source file does not exist: {}",
+                source_path.display()
+            ));
+            counts.failed += 1;
+            return;
+        }
+        vec![(source_path, PathBuf::new())]
     };
 
     let expanded_dest = expand_env_vars(&copy_file.dest);
-    let dest_path = ctx.workspace_path.join(&expanded_dest);
-
     messages::status(&format!(
         "{}Processing: {} -> {}",
         ctx.mode_str, copy_file.source, copy_file.dest
     ));
 
-    if !source_path.exists() {
-        messages::error(&format!(
-            "  Source file does not exist: {}",
-            source_path.display()
-        ));
-        counts.failed += 1;
-        return;
-    }
+    for (source_path, relative_path) in sources {
+        let dest_path = if wildcard_source {
+            ctx.workspace_path.join(&expanded_dest).join(relative_path)
+        } else {
+            ctx.workspace_path.join(&expanded_dest)
+        };
 
+        process_local_copy_match(copy_file, &source_path, &dest_path, ctx, counts);
+    }
+}
+
+fn process_local_copy_match(
+    copy_file: &config::CopyFileConfig,
+    source_path: &Path,
+    dest_path: &Path,
+    ctx: &SyncFilesContext,
+    counts: &mut SyncCounts,
+) {
     if ctx.dry_run {
         messages::status(&format!("  Would copy to: {}", dest_path.display()));
         counts.synced += 1;
         return;
     }
-
     // Check if destination exists and --force is not set
     if dest_path.exists() && !ctx.force {
         messages::info(&format!(
@@ -1632,7 +1667,7 @@ fn process_local_copy_file(
 
     // Handle directories
     if source_path.is_dir() {
-        match copy_dir_recursive(&source_path, &dest_path) {
+        match copy_dir_recursive(source_path, dest_path) {
             Ok(_) => {
                 messages::success(&format!("  Synced directory: {}", copy_file.dest));
                 counts.synced += 1;
@@ -1647,7 +1682,7 @@ fn process_local_copy_file(
         }
     } else {
         // Single file copy
-        match copy_single_file(&source_path, &dest_path, &copy_file.source, &copy_file.dest) {
+        match copy_single_file(source_path, dest_path, &copy_file.source, &copy_file.dest) {
             Ok(_) => {
                 messages::success(&format!("  Synced: {}", copy_file.dest));
                 counts.synced += 1;
@@ -2058,6 +2093,53 @@ gits:
             let result = Regex::new(pattern);
             assert!(result.is_err(), "Pattern '{}' should be invalid", pattern);
         }
+    }
+
+    #[test]
+    fn test_sync_copy_files_expands_wildcard_sources() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let source_dir = temp_dir.path().join("source");
+        let workspace_dir = temp_dir.path().join("workspace");
+        let patches_dir = source_dir.join("patches");
+        fs::create_dir_all(&patches_dir).expect("Failed to create patches directory");
+        fs::create_dir_all(&workspace_dir).expect("Failed to create workspace directory");
+        fs::write(patches_dir.join("one.patch"), "one").expect("Failed to write first patch");
+        fs::write(patches_dir.join("two.patch"), "two").expect("Failed to write second patch");
+
+        let copy_file = config::CopyFileConfig {
+            source: "patches/*.patch".to_string(),
+            dest: "patches/".to_string(),
+            cache: None,
+            symlink: None,
+            sha256: None,
+            post_data: None,
+            headers: None,
+            basic_auth: None,
+        };
+        let ctx = SyncFilesContext {
+            workspace_path: &workspace_dir,
+            mirror_path: temp_dir.path(),
+            config_source_dir: &source_dir,
+            mode_str: "",
+            dry_run: false,
+            force: true,
+        };
+        let mut counts = SyncCounts::default();
+
+        process_local_copy_file(&copy_file, &ctx, &mut counts);
+
+        assert_eq!(counts.synced, 2);
+        assert_eq!(counts.failed, 0);
+        assert_eq!(
+            fs::read_to_string(workspace_dir.join("patches/one.patch"))
+                .expect("Failed to read copied patch"),
+            "one"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_dir.join("patches/two.patch"))
+                .expect("Failed to read copied patch"),
+            "two"
+        );
     }
 
     /// Verify that manifest variables are resolved in copy_files entries before
