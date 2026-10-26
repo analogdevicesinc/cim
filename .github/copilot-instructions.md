@@ -41,6 +41,7 @@ Two composition features let manifests avoid duplication:
 - Legacy location `$HOME/devel/sdk-manager-manifests` is also checked automatically for backward compatibility
 - Our remote location is at: `https://github.com/joabech/cim-manifests`
 - cim can point to any other location via the `cim init --source <path-or-url>` option.
+- A source repo can host its own manifests: a root `.cim.yml` (`members:` directory globs and/or a `targets:` map of name -> repo-relative `sdk.yml`) replaces the `targets/` lookup, and `--manifest-path` (`-M`) overrides it. `discover_targets()`/`ManifestSelection` in `manifest_index.rs` are the single source of truth for `list-targets`, `init` and `extends:` base lookup; the `targets/` layout is `members: ["targets/*"]`.
 
 ## Workspace structure
 - `.workspace`: Workspace marker file created by init command for automatic workspace detection.

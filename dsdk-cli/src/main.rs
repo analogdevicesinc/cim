@@ -90,6 +90,7 @@ fn main() {
             if !handle_init_command(InitConfig {
                 target: target_name,
                 source: common.source.clone(),
+                manifest_path: common.manifest_path.clone(),
                 version: common.version.clone(),
                 workspace: common.workspace.clone(),
                 no_mirror: common.no_mirror,
@@ -113,6 +114,7 @@ fn main() {
             handle_bootstrap_command(BootstrapConfig {
                 target: target.clone(),
                 source: common.source.clone(),
+                manifest_path: common.manifest_path.clone(),
                 version: common.version.clone(),
                 workspace: common.workspace.clone(),
                 no_mirror: common.no_mirror,

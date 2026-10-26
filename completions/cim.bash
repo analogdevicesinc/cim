@@ -14,12 +14,14 @@
 #
 # Supports all commands and options:
 #   - list-targets: --source (-s), --target (-t), --format (-f), --verbose
-#   - init: --target (-t), --source (-s), --version (-v), --workspace (-w),
+#   - init: --target (-t), --source (-s), --manifest-path (-M), --version (-v),
+#           --workspace (-w),
 #           --no-mirror (-N), --mirror (-m), --force (-f), --match (-p),
 #           --include-group (-g), --exclude-group (-G), --verbose,
 #           --install (-i), --full (-F), --no-sudo (-S), --symlink (-l),
 #           --yes (-y), --cert-validation (-c), --no-includes
-#   - bootstrap: --target (-t), --source (-s), --version (-v), --workspace (-w),
+#   - bootstrap: --target (-t), --source (-s), --manifest-path (-M),
+#           --version (-v), --workspace (-w),
 #           --no-mirror (-N), --mirror (-m), --match (-p), --include-group (-g),
 #           --exclude-group (-G), --verbose, --yes (-y), --cert-validation (-c)
 #   - update: --no-mirror (-N), --mirror (-m), --match (-p), --include-group (-g),
@@ -182,6 +184,10 @@ _cim_completions() {
                     COMPREPLY=( $(compgen -d "${cur}") $(compgen -W "https://github.com/ http://localhost:" -- "${cur}") )
                     return 0
                     ;;
+                -M|--manifest-path)
+                    COMPREPLY=( $(compgen -f "${cur}") )
+                    return 0
+                    ;;
                 -v|--version)
                     _complete_versions
                     return 0
@@ -217,7 +223,7 @@ _cim_completions() {
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror -N --mirror -m --force -f --match -p --include-group -g --exclude-group -G --install -i --full -F --no-sudo -S --symlink -l --yes -y --verbose --cert-validation -c --no-includes --help -h" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--target -t --source -s --manifest-path -M --version -v --workspace -w --no-mirror -N --mirror -m --force -f --match -p --include-group -g --exclude-group -G --install -i --full -F --no-sudo -S --symlink -l --yes -y --verbose --cert-validation -c --no-includes --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac
@@ -232,6 +238,10 @@ _cim_completions() {
                 -s|--source)
                     # Complete directories and common URL prefixes
                     COMPREPLY=( $(compgen -d "${cur}") $(compgen -W "https://github.com/ http://localhost:" -- "${cur}") )
+                    return 0
+                    ;;
+                -M|--manifest-path)
+                    COMPREPLY=( $(compgen -f "${cur}") )
                     return 0
                     ;;
                 -v|--version)
@@ -260,7 +270,7 @@ _cim_completions() {
                     return 0
                     ;;
                 *)
-                    COMPREPLY=( $(compgen -W "--target -t --source -s --version -v --workspace -w --no-mirror -N --mirror -m --match -p --include-group -g --exclude-group -G --yes -y --verbose --cert-validation -c --help -h" -- "${cur}") )
+                    COMPREPLY=( $(compgen -W "--target -t --source -s --manifest-path -M --version -v --workspace -w --no-mirror -N --mirror -m --match -p --include-group -g --exclude-group -G --yes -y --verbose --cert-validation -c --help -h" -- "${cur}") )
                     return 0
                     ;;
             esac

@@ -23,6 +23,12 @@ pub struct WorkspaceSelectionArgs {
     /// Defaults to $HOME/devel/cim-manifests.
     #[arg(short, long, value_name = "URL|PATH")]
     pub source: Option<String>,
+    /// Manifest path relative to the source repo
+    ///
+    /// Overrides the source repository's .cim.yml and targets/ layout;
+    /// --target then only names the workspace.
+    #[arg(short = 'M', long, value_name = "PATH")]
+    pub manifest_path: Option<PathBuf>,
     /// Target version (branch or tag)
     ///
     /// When omitted, the target's default version is used.
@@ -613,6 +619,7 @@ mod tests {
                 target,
                 verbose,
                 format,
+                ..
             }) => {
                 assert!(source.is_none());
                 assert!(target.is_none());
@@ -634,6 +641,7 @@ mod tests {
                 target,
                 verbose,
                 format,
+                ..
             }) => {
                 assert_eq!(source, &Some("/path/to/source".to_string()));
                 assert!(target.is_none());
