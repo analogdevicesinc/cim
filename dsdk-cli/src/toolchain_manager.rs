@@ -1508,17 +1508,33 @@ impl ToolchainManager {
         // We could implement this by listing contents and filtering, but for now
         // we'll just extract directly
 
-        let output = Command::new("unzip")
+        let (tool, result) = match Command::new("unzip")
             .arg("-o") // overwrite files
             .arg("-q") // quiet mode
             .arg(archive_path)
             .arg("-d")
             .arg(dest_path)
-            .output()?;
+            .output()
+        {
+            // unzip is not installed by default on Windows, but the bundled
+            // tar (bsdtar) can extract zip archives.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+                "tar",
+                Command::new("tar")
+                    .arg("-xf")
+                    .arg(archive_path)
+                    .arg("-C")
+                    .arg(dest_path)
+                    .output(),
+            ),
+            result => ("unzip", result),
+        };
 
+        let output = result.map_err(|e| format!("failed to run {}: {}", tool, e))?;
         if !output.status.success() {
             return Err(format!(
-                "unzip extraction failed: {}",
+                "{} extraction failed: {}",
+                tool,
                 String::from_utf8_lossy(&output.stderr)
             )
             .into());
