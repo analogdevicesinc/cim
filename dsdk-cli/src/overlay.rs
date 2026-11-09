@@ -110,6 +110,8 @@ pub struct InstallPatch {
     pub sentinel: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub commands: Option<Vec<String>>,
+    #[serde(default)]
+    pub os: Option<String>,
 }
 
 /// A patch applied to an existing `copy_files:` entry, identified by `dest`
@@ -308,6 +310,9 @@ fn apply_install_patch(target: &mut InstallConfig, patch: &InstallPatch) {
     }
     if patch.commands.is_some() {
         target.commands = patch.commands.clone();
+    }
+    if patch.os.is_some() {
+        target.os = patch.os.clone();
     }
 }
 

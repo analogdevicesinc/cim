@@ -448,6 +448,8 @@ cim makefile [--no-dividers] [--include-group NAMES] [--exclude-group NAMES]
   actually present in the workspace. `install:` steps whose
   `depends_on_gits` names a git excluded this way are pruned from the
   Makefile — see `depends_on_gits` in the `install:` section below.
+  Likewise, `install:` steps whose `os` doesn't match the host are left
+  out.
 
 To suppress auto-discovered per-git `build/<name>.mk` fragments for
 specific repositories, add an `exclude` list to the `makefile_include`
@@ -1095,6 +1097,10 @@ copy_files:
 #           a standalone tool); such steps always run and are unaffected by
 #           group/overlay git filtering -- the only way to remove them is an
 #           overlay's `install: remove:`.
+# os: optional host OS filter (darwin, linux or windows), same values as
+#           toolchains:. On any other host the step is left out of the
+#           generated Makefile (and "cim install tools --list"), and so is
+#           any step that depends_on it. Omit it to install on every host.
 ################################################################################
 install:
   - name: protoc
@@ -1103,6 +1109,7 @@ install:
       @cd opt/protoc && unzip -q -o ../../downloads/protoc-21.7-linux-x86_64.zip
       @ln -sf ../opt/protoc/bin/protoc bin/protoc
     sentinel: true
+    os: linux
 
   - name: zephyr-python-deps
     depends_on_gits:

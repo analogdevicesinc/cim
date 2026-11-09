@@ -16,7 +16,7 @@ use dsdk_cli::workspace::{
     get_current_workspace, load_config_with_user_overrides, require_workspace_config,
     resolve_mirror, WorkspaceMarker, OS_DEPS_FILE, PYTHON_DEPS_FILE, WORKSPACE_MARKER_FILE,
 };
-use dsdk_cli::{config, messages, toolchain_manager};
+use dsdk_cli::{config, host, messages, toolchain_manager};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -372,7 +372,13 @@ fn handle_install_tools(
     };
 
     if list {
-        show_install_targets(install_configs);
+        let host_info = host::detect_host_info();
+        let applicable: Vec<config::InstallConfig> =
+            host::applicable_entries(install_configs, &host_info, "install step", |i| &i.name)
+                .into_iter()
+                .cloned()
+                .collect();
+        show_install_targets(&applicable);
         return;
     }
 

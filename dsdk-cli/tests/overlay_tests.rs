@@ -75,6 +75,7 @@ fn new_install_with_gits(
         sentinel: None,
         commands: None,
         depends_on_gits: depends_on_gits.map(|v| v.into_iter().map(String::from).collect()),
+        os: None,
     }
 }
 
@@ -325,6 +326,7 @@ fn test_merge_install_own_remove_modify() {
             depends_on: None,
             sentinel: Some(true),
             commands: None,
+            os: None,
         }],
     };
 
@@ -712,6 +714,7 @@ fn test_compute_owned_entries_across_all_sections() {
                 depends_on: None,
                 sentinel: None,
                 commands: None,
+                os: None,
             }],
         }),
         copy_files: None,

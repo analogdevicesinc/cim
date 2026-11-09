@@ -12,7 +12,7 @@
 //! Host OS/architecture detection and the shared `os:`/`arch:` filter used
 //! by every sdk.yml section that can be restricted to a given host.
 
-use crate::config::{CopyFileConfig, ToolchainConfig};
+use crate::config::{CopyFileConfig, InstallConfig, ToolchainConfig};
 use crate::messages;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::Command;
@@ -95,6 +95,12 @@ impl HostFilter for ToolchainConfig {
 }
 
 impl HostFilter for CopyFileConfig {
+    fn os(&self) -> Option<&str> {
+        self.os.as_deref()
+    }
+}
+
+impl HostFilter for InstallConfig {
     fn os(&self) -> Option<&str> {
         self.os.as_deref()
     }

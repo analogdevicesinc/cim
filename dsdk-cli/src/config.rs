@@ -484,6 +484,11 @@ pub struct InstallConfig {
     /// `install: remove:`.
     #[serde(default)]
     pub depends_on_gits: Option<Vec<String>>,
+    /// Optional OS filter (e.g., "darwin", "linux", "windows"). On any other
+    /// host the step is dropped from the generated Makefile, together with
+    /// any step that `depends_on` it. Unset means every host.
+    #[serde(default)]
+    pub os: Option<String>,
 }
 
 impl InstallConfig {
