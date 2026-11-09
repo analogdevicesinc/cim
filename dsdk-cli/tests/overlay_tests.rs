@@ -88,6 +88,7 @@ fn new_copy_file(dest: &str) -> CopyFileConfig {
         symlink: None,
         headers: None,
         basic_auth: None,
+        os: None,
     }
 }
 
@@ -360,6 +361,7 @@ fn test_merge_copy_files_own_remove_modify() {
             symlink: None,
             headers: None,
             basic_auth: None,
+            os: None,
         }],
     };
 

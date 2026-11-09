@@ -10,7 +10,7 @@
 // limitations under the License.
 
 use crate::workspace::{expand_env_vars, is_url, OS_DEPS_FILE, PYTHON_DEPS_FILE, SDK_CONFIG_FILE};
-use crate::{config, messages};
+use crate::{config, host, messages};
 use glob::glob;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
@@ -1037,6 +1037,8 @@ fn verify_destination_checksum(
 /// Also supports downloading files from URLs:
 /// - `https://example.com/file.tar.gz` - downloads file directly to destination
 /// - `cache: true` - optional caching in mirror for reuse
+///
+/// Entries whose `os:` doesn't match the host are skipped.
 pub fn process_copy_files(
     workspace_path: &Path,
     config_source_dir: &Path,
@@ -1044,9 +1046,13 @@ pub fn process_copy_files(
     mirror_path: &Path,
     is_remote_git_source: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let host_info = host::detect_host_info();
+    let copy_files =
+        host::applicable_entries(copy_files, &host_info, "copy_files entry", |cf| &cf.dest);
+
     // Separate URL downloads from local file operations
     let (url_files, local_files): (Vec<_>, Vec<_>) =
-        copy_files.iter().partition(|cf| is_url(&cf.source));
+        copy_files.into_iter().partition(|cf| is_url(&cf.source));
 
     if !url_files.is_empty() {
         download_url_copy_files(workspace_path, mirror_path, &url_files)?;
@@ -1480,5 +1486,44 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_copy_files_skips_entries_for_other_os() {
+        let source_dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mirror = tempfile::tempdir().unwrap();
+        fs::write(source_dir.path().join("src.txt"), "hello").unwrap();
+
+        let host_os = host::detect_host_info().os;
+        let entry = |dest: &str, os: Option<&str>| config::CopyFileConfig {
+            source: "src.txt".to_string(),
+            dest: dest.to_string(),
+            cache: None,
+            sha256: None,
+            post_data: None,
+            symlink: None,
+            headers: None,
+            basic_auth: None,
+            os: os.map(String::from),
+        };
+        let copy_files = vec![
+            entry("any.txt", None),
+            entry("host.txt", Some(&host_os)),
+            entry("other.txt", Some("not-a-real-os")),
+        ];
+
+        process_copy_files(
+            workspace.path(),
+            source_dir.path(),
+            &copy_files,
+            mirror.path(),
+            false,
+        )
+        .unwrap();
+
+        assert!(workspace.path().join("any.txt").exists());
+        assert!(workspace.path().join("host.txt").exists());
+        assert!(!workspace.path().join("other.txt").exists());
     }
 }

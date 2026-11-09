@@ -12,7 +12,8 @@
 //! Host OS/architecture detection and the shared `os:`/`arch:` filter used
 //! by every sdk.yml section that can be restricted to a given host.
 
-use crate::config::ToolchainConfig;
+use crate::config::{CopyFileConfig, ToolchainConfig};
+use crate::messages;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::Command;
 
@@ -57,6 +58,32 @@ pub fn is_applicable<T: HostFilter + ?Sized>(entry: &T, host_info: &HostInfo) ->
         && entry.arch().is_none_or(|arch| arch == host_info.arch)
 }
 
+/// Keep only the entries that apply to `host_info`, logging each skipped one
+/// as `<kind> '<name>'`.
+pub fn applicable_entries<'a, T: HostFilter>(
+    entries: &'a [T],
+    host_info: &HostInfo,
+    kind: &str,
+    name_of: impl Fn(&T) -> &str,
+) -> Vec<&'a T> {
+    entries
+        .iter()
+        .filter(|entry| {
+            let applicable = is_applicable(*entry, host_info);
+            if !applicable {
+                messages::verbose(&format!(
+                    "Skipping {} '{}': not for host {} {}",
+                    kind,
+                    name_of(entry),
+                    host_info.os,
+                    host_info.arch
+                ));
+            }
+            applicable
+        })
+        .collect()
+}
+
 impl HostFilter for ToolchainConfig {
     fn os(&self) -> Option<&str> {
         self.os.as_deref()
@@ -64,6 +91,12 @@ impl HostFilter for ToolchainConfig {
 
     fn arch(&self) -> Option<&str> {
         self.arch.as_deref()
+    }
+}
+
+impl HostFilter for CopyFileConfig {
+    fn os(&self) -> Option<&str> {
+        self.os.as_deref()
     }
 }
 

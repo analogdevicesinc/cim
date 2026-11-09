@@ -639,6 +639,10 @@ pub struct CopyFileConfig {
     /// expansion contract as `headers`, via `resolved_basic_auth()`.
     #[serde(default)]
     pub basic_auth: Option<String>,
+    /// Optional OS filter (e.g., "darwin", "linux", "windows"); the entry is
+    /// skipped on any other host. Unset means every host.
+    #[serde(default)]
+    pub os: Option<String>,
 }
 
 /// Expand env vars in each `headers:` value and validate the result.
@@ -2871,6 +2875,7 @@ default_source = "https://example.com/manifests"
             symlink: None,
             headers,
             basic_auth,
+            os: None,
         }
     }
 

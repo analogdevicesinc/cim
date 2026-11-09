@@ -1437,15 +1437,14 @@ fn filter_copy_files(
     copy_files: &[config::CopyFileConfig],
     file_filter: Option<&str>,
 ) -> Vec<config::CopyFileConfig> {
-    if let Some(filter) = file_filter {
-        copy_files
-            .iter()
-            .filter(|cf| cf.dest.contains(filter) || cf.source.contains(filter))
-            .cloned()
-            .collect()
-    } else {
-        copy_files.to_vec()
-    }
+    let host_info = dsdk_cli::host::detect_host_info();
+    dsdk_cli::host::applicable_entries(copy_files, &host_info, "copy_files entry", |cf| &cf.dest)
+        .into_iter()
+        .filter(|cf| {
+            file_filter.is_none_or(|filter| cf.dest.contains(filter) || cf.source.contains(filter))
+        })
+        .cloned()
+        .collect()
 }
 
 struct SyncFilesContext<'a> {
@@ -2179,6 +2178,7 @@ gits:
             post_data: None,
             headers: None,
             basic_auth: None,
+            os: None,
         };
         let ctx = SyncFilesContext {
             workspace_path: &workspace_dir,
@@ -2368,6 +2368,7 @@ gits:
             post_data: None,
             headers: None,
             basic_auth: None,
+            os: None,
         };
 
         let result = ensure_file_in_mirror(&copy_file, temp_dir.path(), mirror_dir.path());
@@ -2398,6 +2399,7 @@ gits:
             post_data: None,
             headers: None,
             basic_auth: None,
+            os: None,
         };
 
         let result = ensure_file_in_mirror(&copy_file, temp_dir.path(), mirror_dir.path());
