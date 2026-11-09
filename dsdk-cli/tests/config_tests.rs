@@ -529,6 +529,7 @@ fn test_user_config_list_all_with_copy_files() {
                     symlink: None,
                     headers: None,
                     basic_auth: None,
+                    os: None,
                 },
                 CopyFileConfig {
                     source: "file2.txt".to_string(),
@@ -539,6 +540,7 @@ fn test_user_config_list_all_with_copy_files() {
                     symlink: None,
                     headers: None,
                     basic_auth: None,
+                    os: None,
                 },
             ]),
             ..Default::default()
@@ -603,6 +605,7 @@ fn test_user_config_get_value_copy_files() {
                 symlink: None,
                 headers: None,
                 basic_auth: None,
+                os: None,
             }]),
             ..Default::default()
         },
@@ -1308,6 +1311,7 @@ fn test_apply_to_sdk_config_no_longer_overrides_mirror() {
                 symlink: None,
                 headers: None,
                 basic_auth: None,
+                os: None,
             }]),
             ..Default::default()
         },

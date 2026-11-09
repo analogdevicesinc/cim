@@ -1038,6 +1038,10 @@ flash:
 # basic_auth: "user:password" string, curl -u style, for URL downloads that
 #          need HTTP Basic auth. Same $VAR expansion and fail-fast behavior
 #          as headers.
+# os: optional host OS filter (darwin, linux or windows), same values as
+#          toolchains:. The entry is only processed on a matching host; omit
+#          it to process the entry on every host. Note that "cim utils
+#          hash-copy-files" still hashes every entry regardless of os.
 ################################################################################
 copy_files:
   - source: extra.mk
@@ -1059,6 +1063,12 @@ copy_files:
     dest: downloads/generic-foobar.zip
     basic_auth: "token:$MY_API_TOKEN"
     cache: true
+
+  # Only downloaded on macOS hosts
+  - source: https://my-remote-server.com/macos/foobar.zip
+    dest: downloads/macos-foobar.zip
+    cache: true
+    os: darwin
 
 
 ################################################################################

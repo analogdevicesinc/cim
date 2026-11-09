@@ -132,6 +132,8 @@ pub struct CopyFilePatch {
     pub headers: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub basic_auth: Option<String>,
+    #[serde(default)]
+    pub os: Option<String>,
 }
 
 /// remove/modify diff for the `gits:` section of sdk.yml's `overlay:` key.
@@ -330,6 +332,9 @@ fn apply_copy_file_patch(target: &mut CopyFileConfig, patch: &CopyFilePatch) {
     }
     if patch.basic_auth.is_some() {
         target.basic_auth = patch.basic_auth.clone();
+    }
+    if patch.os.is_some() {
+        target.os = patch.os.clone();
     }
 }
 
