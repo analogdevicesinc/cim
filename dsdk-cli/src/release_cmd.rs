@@ -1376,10 +1376,10 @@ pub(crate) fn handle_toolchains_hash_command(
     let mirror_path = resolve_mirror(None);
 
     // Filter toolchains to only those applicable to this host
-    let host_info = dsdk_cli::toolchain_manager::detect_host_info();
+    let host_info = dsdk_cli::host::detect_host_info();
     let applicable: Vec<_> = toolchains
         .iter()
-        .filter(|tc| dsdk_cli::toolchain_manager::is_toolchain_applicable(tc, &host_info))
+        .filter(|tc| dsdk_cli::host::is_applicable(*tc, &host_info))
         .collect();
 
     if applicable.is_empty() {
