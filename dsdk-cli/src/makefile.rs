@@ -1525,6 +1525,7 @@ mod tests {
                     "cd repo && DOCKER_DEFAULT_PLATFORM=${{ DOCKER_DEFAULT_PLATFORM }} ./run.sh --new".to_string(),
                 ]),
                 depends_on_gits: None,
+                os: None,
             }]),
             gits: vec![],
             variables: Some(vars),
@@ -1612,6 +1613,7 @@ mod tests {
                 sentinel: Some(true),
                 commands: Some(vec!["echo install".to_string()]),
                 depends_on_gits: None,
+                os: None,
             }]),
             gits: vec![git_config],
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -1677,6 +1679,7 @@ mod tests {
                 sentinel: Some(true),
                 commands: Some(vec!["echo install".to_string()]),
                 depends_on_gits: None,
+                os: None,
             }]),
             gits: vec![git_config],
             makefile_include: Some(config::MakefileInclude::Legacy(vec![
@@ -2875,6 +2878,7 @@ mod tests {
                 sentinel: None,
                 commands: Some(vec!["echo installing ninja".to_string()]),
                 depends_on_gits: None,
+                os: None,
             }]),
             ..Default::default()
         };

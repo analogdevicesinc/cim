@@ -2149,8 +2149,9 @@ fn strip_removed_install_refs_from_target(
 /// carries enough fields to drive git cloning), this is safe to pass into
 /// `generate_makefile_content` without silently dropping Makefile sections.
 ///
-/// Also prunes `install:` steps whose `depends_on_gits` names a git that
-/// didn't survive filtering (cascading through `depends_on` chains, see
+/// Also prunes `install:` steps whose `os:` doesn't match the host or whose
+/// `depends_on_gits` names a git that didn't survive filtering (cascading
+/// through `depends_on` chains, see
 /// `filter_install_configs_by_gits`), and strips any now-dangling
 /// `install-<name>` reference left behind in `envsetup`/`build`/`test`/
 /// `clean`/`flash`/`help`'s `depends_on` or in a git's `build_depends_on` --
@@ -2174,9 +2175,15 @@ pub(crate) fn filtered_sdk_config_for_makefile(
     let git_names: std::collections::HashSet<&str> =
         filtered.gits.iter().map(|g| g.name.as_str()).collect();
     let installs_before = sdk_config.install.clone().unwrap_or_default();
-    filtered.install = filtered
-        .install
-        .map(|installs| filter_install_configs_by_gits(&installs, &git_names));
+    let host_info = dsdk_cli::host::detect_host_info();
+    filtered.install = filtered.install.map(|installs| {
+        let host_installs: Vec<config::InstallConfig> =
+            dsdk_cli::host::applicable_entries(&installs, &host_info, "install step", |i| &i.name)
+                .into_iter()
+                .cloned()
+                .collect();
+        filter_install_configs_by_gits(&host_installs, &git_names)
+    });
 
     let surviving_install_refs: std::collections::HashSet<String> = filtered
         .install
@@ -3030,6 +3037,7 @@ gits:
             sentinel: None,
             commands: None,
             depends_on_gits: depends_on_gits.map(|v| v.into_iter().map(String::from).collect()),
+            os: None,
         }
     }
 
@@ -3210,6 +3218,44 @@ gits:
              but the (now also gone) zephyr git name is left untouched -- \
              build_depends_on validation runs pre-filter, this only guards \
              the install-side dangling reference"
+        );
+    }
+
+    #[test]
+    fn test_filtered_sdk_config_for_makefile_drops_install_steps_for_other_os() {
+        let host_os = dsdk_cli::host::detect_host_info().os;
+        let any_os = install_step("any-os", None, None);
+        let mut this_os = install_step("this-os", None, None);
+        this_os.os = Some(host_os);
+        let mut other_os = install_step("other-os", None, None);
+        other_os.os = Some("not-a-real-os".to_string());
+        let needs_other_os = install_step("needs-other-os", Some(vec!["other-os"]), None);
+
+        let mut sdk_config = config::SdkConfig {
+            install: Some(vec![any_os, this_os, other_os, needs_other_os]),
+            ..Default::default()
+        };
+        sdk_config.envsetup = Some(config::SdkTarget::CommandsWithDeps {
+            commands: vec![],
+            depends_on: Some(vec![
+                "install-other-os".to_string(),
+                "install-this-os".to_string(),
+            ]),
+        });
+
+        let filtered = filtered_sdk_config_for_makefile(&sdk_config, &None, &[], &[]);
+
+        let install_names: Vec<&str> = filtered
+            .install
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(install_names, vec!["any-os", "this-os"]);
+        assert_eq!(
+            filtered.envsetup.unwrap().depends_on().unwrap().to_vec(),
+            vec!["install-this-os".to_string()]
         );
     }
 
