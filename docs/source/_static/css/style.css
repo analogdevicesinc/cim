@@ -1,0 +1,14 @@
+/* Custom styles for CIM documentation */
+
+/* Center the sidebar logo */
+.sphinxsidebar #logo {
+  display: block !important;
+  max-width: 13rem;
+  margin: 1rem auto 0 auto !important;
+  text-align: center;
+}
+
+.sphinxsidebar #logo img {
+  display: block;
+  margin: 0 auto;
+}
