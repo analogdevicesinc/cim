@@ -36,10 +36,10 @@
 
 use crate::config::{
     deserialize_string_or_vec, CopyFileConfig, GitConfig, InstallConfig, MakefileInclude,
-    MakefileIncludeConfig, SdkConfig, SdkConfigCore, ToolchainConfig,
+    MakefileIncludeConfig, SdkConfig, SdkConfigCore, SdkTarget, ToolchainConfig,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A patch applied to an existing `gits:` entry identified by `name`. Only
 /// fields explicitly set in the `overlay:` key are overridden; all other
@@ -614,6 +614,93 @@ fn merge_makefile_include(
     }
 }
 
+/// Merge the `envsetup:` section across an `extends:` chain. Unlike the
+/// other phase targets, `depends_on` is additive: `base`'s entries come
+/// first, followed by `derived`'s own, with exact duplicates skipped, so a
+/// derived target only lists its own setup steps and still picks up any
+/// step the base adds later. `commands` stay a whole-value override, but
+/// only when `derived` has commands of its own; a depends-only `envsetup:`
+/// in `derived` keeps the base's commands.
+fn merge_envsetup(base: Option<SdkTarget>, derived: Option<SdkTarget>) -> Option<SdkTarget> {
+    let (base, derived) = match (base, derived) {
+        (base, None) => return base,
+        (None, derived) => return derived,
+        (Some(b), Some(d)) => (b, d),
+    };
+
+    let commands = if derived.commands().is_empty() {
+        base.commands().to_vec()
+    } else {
+        derived.commands().to_vec()
+    };
+    let mut depends_on = base.depends_on().unwrap_or_default().to_vec();
+    for dep in derived.depends_on().unwrap_or_default() {
+        if !depends_on.contains(dep) {
+            depends_on.push(dep.clone());
+        }
+    }
+
+    match (commands.is_empty(), depends_on.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(SdkTarget::Commands(commands)),
+        _ => Some(SdkTarget::CommandsWithDeps {
+            commands,
+            depends_on: Some(depends_on),
+        }),
+    }
+}
+
+/// Drop the base's references to install steps this overlay removes with
+/// `install: remove:` (unless the derived target defines a replacement
+/// under the same name). The references live in the phase targets'
+/// `depends_on` and in the gits' `build_depends_on`; without this, a
+/// derived target that inherits them gets a Makefile that fails with "No
+/// rule to make target 'install-<name>'". Only inherited references are
+/// stripped: a dangling reference in the derived target's own sdk.yml is
+/// left alone, as it is the author's own mistake.
+fn strip_removed_install_refs(base: &mut SdkConfig, derived: &SdkConfig, overlay: &OverlayConfig) {
+    let Some(install_overlay) = overlay.install.as_ref() else {
+        return;
+    };
+    let redefined: HashSet<&str> = derived
+        .install
+        .iter()
+        .flatten()
+        .map(|i| i.name.as_str())
+        .collect();
+    let removed: HashSet<String> = install_overlay
+        .remove
+        .iter()
+        .filter(|name| !redefined.contains(name.as_str()))
+        .map(|name| format!("install-{}", name))
+        .collect();
+    if removed.is_empty() {
+        return;
+    }
+
+    for target in [
+        &mut base.envsetup,
+        &mut base.build,
+        &mut base.test,
+        &mut base.clean,
+        &mut base.flash,
+        &mut base.help,
+    ] {
+        if let Some(SdkTarget::CommandsWithDeps {
+            depends_on: Some(deps),
+            ..
+        }) = target
+        {
+            deps.retain(|d| !removed.contains(d));
+        }
+    }
+    for git in &mut base.gits {
+        if let Some(deps) = git.build_depends_on.as_mut() {
+            deps.retain(|d| !removed.contains(d));
+        }
+    }
+}
+
 /// Merge a base target's resolved `SdkConfig` with a derived target's own
 /// `SdkConfig` (the one declaring `extends:`) and that derived target's own
 /// `overlay:` key, producing the effective, in-memory `SdkConfig` for this
@@ -623,15 +710,19 @@ fn merge_makefile_include(
 /// derived target's own new entries, merged with `base`'s list by
 /// concatenation (a name/dest collision with a base entry is a hard error;
 /// use the `overlay:` key's `modify:` to change a base entry instead).
-/// `makefile_include:` is merged additively (see `merge_makefile_include`).
-/// The remaining scalar sections (build/test/clean/flash/help/envsetup/
-/// build_folder/direnv/phases) in `derived` override the corresponding
-/// value inherited from `base` when present.
+/// `makefile_include:` is merged additively (see `merge_makefile_include`),
+/// and so is `envsetup:`'s `depends_on` (see `merge_envsetup`). The
+/// remaining scalar sections (build/test/clean/flash/help/build_folder/
+/// direnv/phases) in `derived` override the corresponding value inherited
+/// from `base` when present. Inherited references to install steps that
+/// the overlay removes are stripped first (see
+/// `strip_removed_install_refs`).
 pub fn apply_overlay(
-    base: SdkConfig,
+    mut base: SdkConfig,
     derived: SdkConfig,
     overlay: &OverlayConfig,
 ) -> Result<SdkConfig, String> {
+    strip_removed_install_refs(&mut base, &derived, overlay);
     let gits = merge_gits(base.gits, derived.gits, overlay.gits.as_ref())?;
     let toolchains = merge_toolchains(
         base.toolchains,
@@ -657,7 +748,7 @@ pub fn apply_overlay(
         install,
         makefile_include: merge_makefile_include(base.makefile_include, derived.makefile_include),
         build_folder: derived.build_folder.or(base.build_folder),
-        envsetup: derived.envsetup.or(base.envsetup),
+        envsetup: merge_envsetup(base.envsetup, derived.envsetup),
         test: derived.test.or(base.test),
         clean: derived.clean.or(base.clean),
         build: derived.build.or(base.build),

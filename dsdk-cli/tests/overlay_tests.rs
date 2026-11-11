@@ -23,7 +23,7 @@ mod common;
 
 use common::{create_complex_sdk_config, create_minimal_sdk_config};
 use dsdk_cli::config::{
-    CopyFileConfig, GitConfig, InstallConfig, MakefileInclude, MakefileIncludeConfig,
+    CopyFileConfig, GitConfig, InstallConfig, MakefileInclude, MakefileIncludeConfig, SdkTarget,
     ToolchainConfig,
 };
 use dsdk_cli::overlay::{
@@ -563,6 +563,173 @@ fn test_apply_overlay_makefile_include_one_sided_is_preserved() {
     let mi = merged.makefile_include.expect("makefile_include missing");
     assert_eq!(mi.files(), &["include base.mk".to_string()]);
     assert!(mi.exclude().is_empty());
+}
+
+// ---------------------------------------------------------------------
+// apply_overlay: envsetup depends_on is merged additively, and inherited
+// references to install steps removed by the overlay are stripped
+// ---------------------------------------------------------------------
+
+fn envsetup(commands: &[&str], depends_on: &[&str]) -> Option<SdkTarget> {
+    Some(SdkTarget::CommandsWithDeps {
+        commands: commands.iter().map(|s| s.to_string()).collect(),
+        depends_on: Some(depends_on.iter().map(|s| s.to_string()).collect()),
+    })
+}
+
+fn remove_install(names: &[&str]) -> OverlayConfig {
+    OverlayConfig {
+        install: Some(InstallOverlay {
+            remove: names.iter().map(|s| s.to_string()).collect(),
+            modify: vec![],
+        }),
+        ..Default::default()
+    }
+}
+
+fn base_with_setup_steps() -> dsdk_cli::config::SdkConfig {
+    let mut base = create_minimal_sdk_config();
+    base.install = Some(vec![
+        new_install("step-a", None),
+        new_install("step-b", None),
+        new_install("step-c", None),
+    ]);
+    base.envsetup = envsetup(&[], &["install-step-a", "install-step-b", "install-step-c"]);
+    base
+}
+
+fn deps(target: &Option<SdkTarget>) -> Vec<String> {
+    target
+        .as_ref()
+        .and_then(|t| t.depends_on())
+        .unwrap_or_default()
+        .to_vec()
+}
+
+#[test]
+fn test_apply_overlay_inherited_envsetup_drops_removed_install_step() {
+    let derived = create_minimal_sdk_config();
+    let merged = apply_overlay(
+        base_with_setup_steps(),
+        derived,
+        &remove_install(&["step-b"]),
+    )
+    .expect("apply_overlay should succeed");
+    assert_eq!(
+        deps(&merged.envsetup),
+        vec!["install-step-a", "install-step-c"]
+    );
+}
+
+#[test]
+fn test_apply_overlay_envsetup_keeps_ref_to_redefined_install_step() {
+    let mut derived = create_minimal_sdk_config();
+    derived.install = Some(vec![new_install("step-b", None)]);
+    let merged = apply_overlay(
+        base_with_setup_steps(),
+        derived,
+        &remove_install(&["step-b"]),
+    )
+    .expect("apply_overlay should succeed");
+    assert_eq!(
+        deps(&merged.envsetup),
+        vec!["install-step-a", "install-step-b", "install-step-c"]
+    );
+}
+
+#[test]
+fn test_apply_overlay_envsetup_depends_on_is_joined_and_deduped() {
+    // A derived target that still repeats the base's list (the old way)
+    // gets the same result as one that only lists its own steps.
+    let mut derived = create_minimal_sdk_config();
+    derived.install = Some(vec![new_install("step-own", None)]);
+    derived.envsetup = envsetup(
+        &[],
+        &["install-step-a", "install-step-c", "install-step-own"],
+    );
+    let merged = apply_overlay(
+        base_with_setup_steps(),
+        derived,
+        &remove_install(&["step-b"]),
+    )
+    .expect("apply_overlay should succeed");
+    assert_eq!(
+        deps(&merged.envsetup),
+        vec!["install-step-a", "install-step-c", "install-step-own"]
+    );
+}
+
+#[test]
+fn test_apply_overlay_envsetup_own_commands_replace_base_commands_only() {
+    let mut base = base_with_setup_steps();
+    base.envsetup = envsetup(&["@echo base"], &["install-step-a"]);
+    let mut derived = create_minimal_sdk_config();
+    derived.envsetup = Some(SdkTarget::Commands(vec!["@echo derived".to_string()]));
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let setup = merged.envsetup.expect("envsetup missing");
+    assert_eq!(setup.commands(), &["@echo derived".to_string()]);
+    assert_eq!(
+        setup.depends_on(),
+        Some(&["install-step-a".to_string()][..])
+    );
+}
+
+#[test]
+fn test_apply_overlay_depends_only_envsetup_keeps_base_commands() {
+    let mut base = base_with_setup_steps();
+    base.envsetup = envsetup(&["@echo base"], &["install-step-a"]);
+    let mut derived = create_minimal_sdk_config();
+    derived.install = Some(vec![new_install("step-own", None)]);
+    derived.envsetup = envsetup(&[], &["install-step-own"]);
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let setup = merged.envsetup.expect("envsetup missing");
+    assert_eq!(setup.commands(), &["@echo base".to_string()]);
+    assert_eq!(
+        deps(&Some(setup)),
+        vec!["install-step-a", "install-step-own"]
+    );
+}
+
+#[test]
+fn test_apply_overlay_strips_removed_install_ref_from_base_git_build_depends_on() {
+    let mut base = base_with_setup_steps();
+    base.gits = vec![GitConfig {
+        build_depends_on: Some(vec![
+            "install-step-b".to_string(),
+            "sdk-envsetup".to_string(),
+        ]),
+        ..new_git("app", "https://example.com/app.git", "main")
+    }];
+    let merged = apply_overlay(
+        base,
+        create_minimal_sdk_config(),
+        &remove_install(&["step-b"]),
+    )
+    .expect("apply_overlay should succeed");
+    assert_eq!(
+        merged.gits[0].build_depends_on.as_deref(),
+        Some(&["sdk-envsetup".to_string()][..])
+    );
+}
+
+#[test]
+fn test_apply_overlay_keeps_dangling_ref_in_derived_own_envsetup() {
+    // Only inherited references are stripped; the derived target's own
+    // reference to a step it removed is left for the author to fix.
+    let mut derived = create_minimal_sdk_config();
+    derived.envsetup = envsetup(&[], &["install-step-b"]);
+    let merged = apply_overlay(
+        base_with_setup_steps(),
+        derived,
+        &remove_install(&["step-b"]),
+    )
+    .expect("apply_overlay should succeed");
+    assert_eq!(
+        deps(&merged.envsetup),
+        vec!["install-step-a", "install-step-c", "install-step-b"]
+    );
 }
 
 // ---------------------------------------------------------------------
