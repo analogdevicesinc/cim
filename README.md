@@ -1391,10 +1391,10 @@ A derived target's `sdk.yml` carries two distinct kinds of content:
 - **New entries** unique to this target: added directly to the normal
   `gits:`/`toolchains:`/`install:`/`copy_files:`/`variables:` lists/maps,
   exactly as in a target with no `extends:` at all. Scalar sections
-  (`build`/`test`/`clean`/`flash`/`envsetup`/`build_folder`/`direnv`/
-  `phases`) are plain whole-value overrides of the base's value.
-  `makefile_include:` is the one exception — it's merged additively (see
-  below), not overridden.
+  (`build`/`test`/`clean`/`flash`/`help`/`build_folder`/`direnv`/`phases`) are
+  plain whole-value overrides of the base's value. `makefile_include:`
+  and `envsetup:`'s `depends_on` are the exceptions — they are merged
+  additively (see below), not overridden.
 - **`overlay:`** (a key on the same `sdk.yml`): `remove:`/`modify:`
   operations against content *inherited* from the base. There is no
   `add:` here — anything new goes directly in the sections above instead.
@@ -1453,6 +1453,20 @@ extended by multiple teams' own targets — since each derived target can
 contribute its own `-include` directives and auto-discovery exclusions
 without having to know about or copy forward whatever the base (or any
 other derived target) already set.
+
+`envsetup:` is merged the same way for its `depends_on`: the base's
+entries come first, followed by the derived target's own, with exact
+duplicates skipped. A derived target lists only its own setup steps, and
+still gets any step the base adds later. Its `commands` replace the
+base's commands, but only if it has commands of its own; an `envsetup:`
+with only `depends_on` keeps the base's commands.
+
+When an overlay removes an install step with `install: remove:`, cim
+also drops the base's references to it (`install-<name>` in the phase
+targets' `depends_on` and in the gits' `build_depends_on`), so the
+Makefile has no prerequisite without a rule. This is not done when the
+derived target defines a new install step with the same name. A
+reference in the derived target's own `sdk.yml` is not changed.
 
 `os-dependencies.yml`/`python-dependencies.yml` are also per-level:
 each level of the `extends:` chain can have its own copy (not merged,
