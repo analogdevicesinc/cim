@@ -558,6 +558,61 @@ pub enum UtilsCommand {
     },
     /// Update cim to the latest release
     Update,
+    /// Print a shell completion script
+    #[command(
+        disable_help_subcommand = true,
+        subcommand_value_name = "SHELL",
+        subcommand_help_heading = "Shells",
+        after_help = COMPLETION_HELP
+    )]
+    Completion {
+        #[command(subcommand)]
+        shell: Option<CompletionShell>,
+    },
+}
+
+const COMPLETION_HELP: &str = "\
+Prints a completion script for SHELL to stdout.
+Run 'cim utils completion <SHELL> --help' for setup steps.
+
+Examples:
+  eval \"$(cim utils completion bash)\"
+  source <(cim utils completion zsh)
+  cim utils completion powershell | Out-String | Invoke-Expression";
+
+const BASH_HELP: &str = "\
+Load completions in the current shell:
+  eval \"$(cim utils completion bash)\"
+
+Load them in every new shell by adding that line to ~/.bashrc.
+macOS ships bash 3.2; install a newer bash first: brew install bash";
+
+const ZSH_HELP: &str = "\
+Load completions in the current shell:
+  source <(cim utils completion zsh)
+
+Load them in every new shell by adding that line to ~/.zshrc,
+after compinit has run. If completion is not enabled yet, add first:
+  autoload -U compinit && compinit";
+
+const POWERSHELL_HELP: &str = "\
+Load completions in the current session:
+  cim utils completion powershell | Out-String | Invoke-Expression
+
+Load them in every new session by adding that line to $PROFILE.";
+
+/// Shells supported by `cim utils completion`
+#[derive(Debug, Subcommand, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionShell {
+    /// Completion script for bash
+    #[command(after_help = BASH_HELP)]
+    Bash,
+    /// Completion script for zsh
+    #[command(after_help = ZSH_HELP)]
+    Zsh,
+    /// Completion script for PowerShell
+    #[command(after_help = POWERSHELL_HELP)]
+    Powershell,
 }
 
 #[cfg(test)]
@@ -739,6 +794,75 @@ mod tests {
                 assert!(common.yes);
             }
             _ => panic!("Expected Bootstrap command"),
+        }
+    }
+
+    #[test]
+    fn test_utils_completion_parses_each_shell() {
+        for (name, want) in [
+            ("bash", CompletionShell::Bash),
+            ("zsh", CompletionShell::Zsh),
+            ("powershell", CompletionShell::Powershell),
+        ] {
+            let cli = Cli::try_parse_from(["cim", "utils", "completion", name]).unwrap();
+            assert!(
+                matches!(
+                    cli.command,
+                    Some(Commands::Utils {
+                        utils_command: UtilsCommand::Completion { shell: Some(s) }
+                    }) if s == want
+                ),
+                "{name} did not parse to {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_utils_completion_without_shell_is_none() {
+        let cli = Cli::try_parse_from(["cim", "utils", "completion"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Utils {
+                utils_command: UtilsCommand::Completion { shell: None }
+            })
+        ));
+    }
+
+    #[test]
+    fn test_utils_completion_rejects_unsupported_shell() {
+        for name in ["fish", "elvish", "help"] {
+            assert!(
+                Cli::try_parse_from(["cim", "utils", "completion", name]).is_err(),
+                "{name} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_completion_shell_help_shows_registration() {
+        let cmd = Cli::command();
+        let completion = cmd
+            .find_subcommand("utils")
+            .unwrap()
+            .find_subcommand("completion")
+            .unwrap();
+        for (name, line) in [
+            ("bash", r#"eval "$(cim utils completion bash)""#),
+            ("zsh", "source <(cim utils completion zsh)"),
+            (
+                "powershell",
+                "cim utils completion powershell | Out-String | Invoke-Expression",
+            ),
+        ] {
+            let sub = completion.find_subcommand(name).unwrap().clone();
+            assert!(
+                sub.clone().render_help().to_string().contains(line),
+                "{name} -h lacks setup line"
+            );
+            assert!(
+                sub.clone().render_long_help().to_string().contains(line),
+                "{name} --help lacks setup line"
+            );
         }
     }
 }
