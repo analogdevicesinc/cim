@@ -273,3 +273,9 @@ if [ -n "$resolved" ] && [ "$resolved" != "$dest" ]; then
 fi
 
 printf '\n\342\234\223 Installation complete. Run: cim --help\n'
+
+# Releases before `cim utils completion` existed reject it, so only point at
+# the setup steps when the installed binary has the command.
+if "$dest" utils completion >/dev/null 2>&1; then
+	printf '\nTo enable shell completion, run: cim utils completion --help\n'
+fi
