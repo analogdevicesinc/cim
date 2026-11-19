@@ -13,7 +13,6 @@ Two composition features let manifests avoid duplication:
 ## Project and directory Structure
 .
 ├── README.md     : cim README file
-├── completions   : Bash completions
 ├── dsdk-cli      : The main CLI tool
 │   └── src       : Source code for the CLI tool
 ├── dsdk-vscode   : VSCode extension for the SDK tool
