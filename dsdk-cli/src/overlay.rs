@@ -588,37 +588,70 @@ pub fn merge_variables(
 }
 
 /// Merge the `makefile_include:` section across an `extends:` chain.
-/// Unlike the other scalar sections, this one is additive rather than a
-/// whole-value override: `base`'s `files`/`exclude` come first, followed by
-/// `derived`'s own entries, with exact-duplicate strings/names skipped so a
-/// derived target repeating an inherited entry doesn't emit it twice.
+///
+/// Like the phase targets, a derived value replaces the base's as a whole
+/// once it uses `${{ INHERIT }}` as an item of `files:` and/or `exclude:`
+/// (the marker stands for the base's items at that position).
+///
+/// Transitional: without the marker, the base's entries are still merged in
+/// first (exact duplicates skipped), as releases up to now always did, and a
+/// warning asks the author to write the marker. A later release will make
+/// this a plain replacement, as for the phase targets.
 fn merge_makefile_include(
     base: Option<MakefileInclude>,
     derived: Option<MakefileInclude>,
-) -> Option<MakefileInclude> {
-    match (base, derived) {
-        (None, None) => None,
-        (Some(b), None) => Some(b),
-        (None, Some(d)) => Some(d),
-        (Some(b), Some(d)) => {
-            let mut files = b.files().to_vec();
-            for f in d.files() {
-                if !files.contains(f) {
-                    files.push(f.clone());
-                }
-            }
-            let mut exclude = b.exclude().to_vec();
-            for e in d.exclude() {
-                if !exclude.contains(e) {
-                    exclude.push(e.clone());
-                }
-            }
-            Some(MakefileInclude::Structured(MakefileIncludeConfig {
-                files,
-                exclude,
-            }))
+) -> Result<Option<MakefileInclude>, String> {
+    let Some(derived) = derived else {
+        return Ok(base);
+    };
+    let (base_files, base_exclude): (&[String], &[String]) = match &base {
+        Some(b) => (b.files(), b.exclude()),
+        None => (&[], &[]),
+    };
+    let explicit = derived
+        .files()
+        .iter()
+        .chain(derived.exclude())
+        .any(|i| mentions_inherit(i));
+
+    let (files, exclude) = if explicit {
+        (
+            expand_inherit(derived.files(), base_files, "makefile_include: files", true)?,
+            expand_inherit(
+                derived.exclude(),
+                base_exclude,
+                "makefile_include: exclude",
+                true,
+            )?,
+        )
+    } else {
+        if !base_files.is_empty() || !base_exclude.is_empty() {
+            crate::messages::info(&format!(
+                "Warning: makefile_include: the entries of the base target are only \
+                 merged in implicitly for now; add '{}' to files:/exclude: to keep \
+                 them, as a later release will replace them instead",
+                INHERIT_MARKER
+            ));
         }
-    }
+        let mut files = base_files.to_vec();
+        for f in derived.files() {
+            if !files.contains(f) {
+                files.push(f.clone());
+            }
+        }
+        let mut exclude = base_exclude.to_vec();
+        for e in derived.exclude() {
+            if !exclude.contains(e) {
+                exclude.push(e.clone());
+            }
+        }
+        (files, exclude)
+    };
+
+    Ok(Some(MakefileInclude::Structured(MakefileIncludeConfig {
+        files,
+        exclude,
+    })))
 }
 
 /// The marker a derived target writes, as a whole list item in a phase
@@ -742,6 +775,19 @@ pub fn validate_inherit_usage(config: &SdkConfig) -> Result<(), String> {
         ("flash", &config.flash),
         ("help", &config.help),
     ];
+    if let Some(mi) = &config.makefile_include {
+        if mi
+            .files()
+            .iter()
+            .chain(mi.exclude())
+            .any(|i| mentions_inherit(i))
+        {
+            return Err(format!(
+                "makefile_include: '{}' can only be used in a target that declares extends:",
+                INHERIT_MARKER
+            ));
+        }
+    }
     for (name, target) in sections {
         let Some(target) = target else { continue };
         let items = target
@@ -818,11 +864,11 @@ fn strip_removed_install_refs(base: &mut SdkConfig, derived: &SdkConfig, overlay
 /// derived target's own new entries, merged with `base`'s list by
 /// concatenation (a name/dest collision with a base entry is a hard error;
 /// use the `overlay:` key's `modify:` to change a base entry instead).
-/// `makefile_include:` is merged additively (see `merge_makefile_include`).
-/// The phase targets (envsetup/build/test/clean/flash/help) in `derived`
-/// replace the value inherited from `base` as a whole, unless they use
-/// `${{ INHERIT }}` to include the base's `commands:`/`depends_on:` (see
-/// `merge_phase_target`). The remaining scalar sections
+/// `makefile_include:` and the phase targets (envsetup/build/test/clean/
+/// flash/help) in `derived` replace the value inherited from `base` as a whole, unless they use
+/// `${{ INHERIT }}` to include the base's list (see `merge_phase_target`
+/// and, for `makefile_include:`, `merge_makefile_include`, which still
+/// merges implicitly for now). The remaining scalar sections
 /// (build_folder/direnv/phases) override the inherited value when present.
 /// Inherited references to install steps that the overlay removes are
 /// stripped first (see `strip_removed_install_refs`), so they never come
@@ -856,7 +902,7 @@ pub fn apply_overlay(
         toolchains,
         copy_files,
         install,
-        makefile_include: merge_makefile_include(base.makefile_include, derived.makefile_include),
+        makefile_include: merge_makefile_include(base.makefile_include, derived.makefile_include)?,
         build_folder: derived.build_folder.or(base.build_folder),
         envsetup: merge_phase_target("envsetup", base.envsetup, derived.envsetup)?,
         test: merge_phase_target("test", base.test, derived.test)?,

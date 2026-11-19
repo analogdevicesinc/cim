@@ -500,7 +500,8 @@ fn test_apply_overlay_missing_overlay_is_noop_on_lists() {
 }
 
 // ---------------------------------------------------------------------
-// apply_overlay: makefile_include is merged additively, not overridden
+// apply_overlay: makefile_include without INHERIT is still merged
+// additively (transitional, with a warning)
 // ---------------------------------------------------------------------
 
 #[test]
@@ -563,6 +564,87 @@ fn test_apply_overlay_makefile_include_one_sided_is_preserved() {
     let mi = merged.makefile_include.expect("makefile_include missing");
     assert_eq!(mi.files(), &["include base.mk".to_string()]);
     assert!(mi.exclude().is_empty());
+}
+
+fn structured_include(files: &[&str], exclude: &[&str]) -> Option<MakefileInclude> {
+    Some(MakefileInclude::Structured(MakefileIncludeConfig {
+        files: strings(files),
+        exclude: strings(exclude),
+    }))
+}
+
+#[test]
+fn test_makefile_include_inherit_places_base_entries_where_marked() {
+    let mut base = create_complex_sdk_config();
+    base.makefile_include = structured_include(&["include base.mk"], &["qemu"]);
+    let mut derived = create_minimal_sdk_config();
+    derived.makefile_include = structured_include(
+        &["include first.mk", "${{ INHERIT }}", "include last.mk"],
+        &["${{ INHERIT }}", "other"],
+    );
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let mi = merged.makefile_include.expect("makefile_include missing");
+    assert_eq!(
+        mi.files(),
+        &strings(&["include first.mk", "include base.mk", "include last.mk"])[..]
+    );
+    assert_eq!(mi.exclude(), &strings(&["qemu", "other"])[..]);
+}
+
+#[test]
+fn test_makefile_include_inherit_only_in_files_drops_base_exclude() {
+    // With the marker present the derived value is explicit: leaving it out
+    // of exclude: un-excludes what the base excluded.
+    let mut base = create_complex_sdk_config();
+    base.makefile_include = structured_include(&["include base.mk"], &["qemu"]);
+    let mut derived = create_minimal_sdk_config();
+    derived.makefile_include = structured_include(&["${{ INHERIT }}", "include own.mk"], &[]);
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let mi = merged.makefile_include.expect("makefile_include missing");
+    assert_eq!(
+        mi.files(),
+        &strings(&["include base.mk", "include own.mk"])[..]
+    );
+    assert!(mi.exclude().is_empty());
+}
+
+#[test]
+fn test_makefile_include_inherit_works_in_legacy_list_form() {
+    let mut base = create_complex_sdk_config();
+    base.makefile_include = Some(MakefileInclude::Legacy(strings(&["include base.mk"])));
+    let mut derived = create_minimal_sdk_config();
+    derived.makefile_include = Some(MakefileInclude::Legacy(strings(&[
+        "include own.mk",
+        "${{ INHERIT }}",
+    ])));
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let mi = merged.makefile_include.expect("makefile_include missing");
+    assert_eq!(
+        mi.files(),
+        &strings(&["include own.mk", "include base.mk"])[..]
+    );
+}
+
+#[test]
+fn test_makefile_include_inherit_embedded_is_an_error() {
+    let mut base = create_complex_sdk_config();
+    base.makefile_include = structured_include(&["include base.mk"], &[]);
+    let mut derived = create_minimal_sdk_config();
+    derived.makefile_include = structured_include(&["include ${{ INHERIT }}.mk"], &[]);
+    let err = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect_err("embedded marker should fail");
+    assert!(err.contains("makefile_include: files"), "{}", err);
+}
+
+#[test]
+fn test_makefile_include_inherit_without_extends_is_rejected() {
+    let mut config = create_minimal_sdk_config();
+    config.makefile_include = structured_include(&["${{ INHERIT }}"], &[]);
+    let err = validate_inherit_usage(&config).expect_err("no base to inherit from");
+    assert!(err.contains("makefile_include"), "{}", err);
 }
 
 // ---------------------------------------------------------------------
