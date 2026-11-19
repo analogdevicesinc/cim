@@ -9,14 +9,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cli::UtilsCommand;
+use crate::cli::{Cli, CompletionShell, UtilsCommand};
 use crate::release_cmd::{
     handle_copy_files_hash_command, handle_sync_files_hash_command, handle_toolchains_hash_command,
 };
 use crate::version::{
     fetch_latest_release_version, find_cim_in_path, is_newer_version, platform_archive_name,
 };
+use clap::CommandFactory;
 use dsdk_cli::messages;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -256,6 +258,48 @@ fn install_new_binary(
     ));
 }
 
+/// Write the completion script for `shell`, generated from the CLI definition.
+fn write_completion(shell: CompletionShell, out: &mut dyn Write) {
+    let generator = match shell {
+        CompletionShell::Bash => clap_complete::Shell::Bash,
+        CompletionShell::Zsh => clap_complete::Shell::Zsh,
+        CompletionShell::Powershell => clap_complete::Shell::PowerShell,
+    };
+    clap_complete::generate(generator, &mut Cli::command(), "cim", out);
+}
+
+/// Print the completion script for `shell` to stdout, or, without a shell,
+/// the `completion` help (supported shells and usage) and exit 0.
+fn handle_completion_command(shell: Option<CompletionShell>) {
+    match shell {
+        Some(shell) => {
+            // clap_complete panics on write errors, so render into memory
+            // first and write the script to stdout in one go.
+            let mut script = Vec::new();
+            write_completion(shell, &mut script);
+            let mut stdout = std::io::stdout().lock();
+            match stdout.write_all(&script).and_then(|()| stdout.flush()) {
+                Ok(()) => {}
+                // The reader went away (e.g. `| head`); nothing left to do.
+                Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => {}
+                Err(err) => {
+                    messages::error(&format!("Failed to write completion script: {err}"));
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            // Let clap render the help so the usage line carries the full
+            // `cim utils completion` bin name; a DisplayHelp error exits 0.
+            if let Err(err) =
+                Cli::command().try_get_matches_from(["cim", "utils", "completion", "--help"])
+            {
+                err.exit();
+            }
+        }
+    }
+}
+
 /// Handle utility commands for workspace maintenance
 pub(crate) fn handle_utils_command(utils_command: &UtilsCommand) {
     match utils_command {
@@ -286,5 +330,40 @@ pub(crate) fn handle_utils_command(utils_command: &UtilsCommand) {
         UtilsCommand::Update => {
             handle_utils_update_command();
         }
+        UtilsCommand::Completion { shell } => {
+            handle_completion_command(*shell);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn script_for(shell: CompletionShell) -> String {
+        let mut buf = Vec::new();
+        write_completion(shell, &mut buf);
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn test_write_completion_for_each_shell() {
+        for shell in [
+            CompletionShell::Bash,
+            CompletionShell::Zsh,
+            CompletionShell::Powershell,
+        ] {
+            let script = script_for(shell);
+            for word in ["cim", "list-targets", "init", "completion"] {
+                assert!(script.contains(word), "{shell:?} script lacks {word}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_zsh_completion_registers_when_sourced() {
+        let script = script_for(CompletionShell::Zsh);
+        assert!(script.starts_with("#compdef cim"));
+        assert!(script.contains("compdef _cim cim"));
     }
 }
