@@ -1426,8 +1426,7 @@ A derived target's `sdk.yml` carries two distinct kinds of content:
   (`envsetup`/`build`/`test`/`clean`/`flash`/`help`/`build_folder`/`direnv`/
   `phases`) are plain whole-value overrides of the base's value; the phase
   targets can opt in to including the base's value with `${{ INHERIT }}`
-  (see below). `makefile_include:` is the exception — it is merged
-  additively (see below), not overridden.
+  (see below). `makefile_include:` follows the same rule.
 - **`overlay:`** (a key on the same `sdk.yml`): `remove:`/`modify:`
   operations against content *inherited* from the base. There is no
   `add:` here — anything new goes directly in the sections above instead.
@@ -1477,15 +1476,29 @@ base only) → **combine** (base-after-removal plus this target's own new
 that don't exist, and `sdk.yml` entries that collide with an inherited
 name, are hard errors rather than silent no-ops.
 
-`makefile_include:` is merged additively rather than treated as a
-whole-value override: the base's `files:`/`exclude:` come first,
-followed by the derived target's own entries, with exact duplicates
-skipped. This matters for a shared base target extended by several
-independent derived targets — e.g. a low-level `platform-sdk` target
-extended by multiple teams' own targets — since each derived target can
-contribute its own `-include` directives and auto-discovery exclusions
-without having to know about or copy forward whatever the base (or any
-other derived target) already set.
+`makefile_include:` follows the same rule as the phase targets: a derived
+`makefile_include:` replaces the base's, and `${{ INHERIT }}` as an item
+of `files:` and/or `exclude:` stands for the base's items at that
+position. This matters for a shared base target extended by several
+independent derived targets, since each can add its own `-include`
+directives and auto-discovery exclusions while keeping what the base
+set, and can leave the base's exclusions out to bring those fragments
+back:
+
+```yaml
+makefile_include:
+  files:
+    - ${{ INHERIT }}        # the base's includes
+    - include team-a.mk
+  exclude:
+    - ${{ INHERIT }}        # keep the base's exclusions
+```
+
+For now, a derived `makefile_include:` without `${{ INHERIT }}` still has
+the base's entries merged in first (exact duplicates skipped), as in
+earlier releases, and cim prints a warning. A later release will make
+that a plain replacement, so add `${{ INHERIT }}` to keep the base's
+entries.
 
 The phase targets (`envsetup:`, `build:`, `test:`, `clean:`, `flash:`
 and `help:`) follow one rule: if the derived target defines one, it
