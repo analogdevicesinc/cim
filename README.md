@@ -130,24 +130,49 @@ Or copy to a directory in your PATH:
 cp target/release/cim ~/.local/bin/
 ```
 
-### Shell Completion (Bash)
+### Shell Completion
 
-Bash completion is available for all commands and flags.
+`cim utils completion <SHELL>` prints a completion script for bash, zsh or
+PowerShell. The script is generated from the CLI itself, so it always matches
+the installed version, including after `cim utils update`. Run
+`cim utils completion` to list the supported shells, or
+`cim utils completion <SHELL> --help` for the setup steps below.
+
+**bash** - add to `~/.bashrc`:
 
 ```bash
-# Recommended: auto-detects the best install method (system-wide or user-only)
-./completions/install.sh
-
-# Or pick one explicitly
-./completions/install.sh --user      # ~/.local/share/bash-completion/completions
-./completions/install.sh --system    # system-wide (may require sudo)
-
-# Or just source it for the current shell session
-source completions/cim.bash
+eval "$(cim utils completion bash)"
 ```
 
-macOS ships with an outdated bash (3.2) that doesn't support completion.
-Install a newer one first: `brew install bash bash-completion`.
+macOS ships bash 3.2; install a newer bash first: `brew install bash`.
+
+**zsh** - add to `~/.zshrc`, after `compinit` has run (oh-my-zsh and most
+frameworks run it for you):
+
+```zsh
+# Only needed if completion is not enabled yet
+autoload -U compinit && compinit
+
+source <(cim utils completion zsh)
+```
+
+**PowerShell** - add to `$PROFILE`:
+
+```powershell
+cim utils completion powershell | Out-String | Invoke-Expression
+```
+
+**Upgrading from `completions/install.sh`** - earlier versions of this
+repository included a hand-written bash script that is no longer maintained.
+Remove any copy it installed, so it does not override the generated script:
+
+```bash
+rm -f ~/.local/share/bash-completion/completions/cim
+sudo rm -f /usr/share/bash-completion/completions/cim /etc/bash_completion.d/cim
+```
+
+and delete the `source .../completions/cim` or `source .../cim.bash` line
+it added to `~/.bashrc`.
 
 ---
 
@@ -733,6 +758,13 @@ cim utils sync-copy-files [--dry-run] [--verbose] [--force]
 
 ```bash
 cim utils update
+```
+
+**completion** - Print a shell completion script (see
+[Shell Completion](#shell-completion))
+
+```bash
+cim utils completion [bash|zsh|powershell]
 ```
 
 ### Configuration File
