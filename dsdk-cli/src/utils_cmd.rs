@@ -60,6 +60,16 @@ pub(crate) fn handle_utils_update_command() {
         return;
     };
 
+    // Self-update is not supported on Windows; bail out before downloading anything
+    if cfg!(target_os = "windows") {
+        messages::error(
+            "Self-update via 'cim utils update' is not supported on Windows. \
+             Please download and install manually from: \
+             https://github.com/analogdevicesinc/cim/releases/latest",
+        );
+        return;
+    }
+
     let Ok(tmp_dir) = download_release_archive(&archive_name, current_version) else {
         return;
     };
@@ -67,29 +77,16 @@ pub(crate) fn handle_utils_update_command() {
 
     messages::status("Extracting cim binary...");
 
-    // Self-update is not supported on Windows
-    #[cfg(target_os = "windows")]
-    {
-        messages::error(
-            "Self-update via 'cim utils update' is not supported on Windows. \
-             Please download and install manually from: \
-             https://github.com/analogdevicesinc/cim/releases/latest",
-        );
-    }
-
     // Extract the `cim` binary from the archive and replace the current binary
-    #[cfg(not(target_os = "windows"))]
-    {
-        let Ok(new_binary_path) = extract_cim_binary(&archive_path, tmp_dir.path()) else {
-            return;
-        };
-        install_new_binary(
-            &exe_path,
-            &new_binary_path,
-            current_version,
-            &latest_version,
-        );
-    }
+    let Ok(new_binary_path) = extract_cim_binary(&archive_path, tmp_dir.path()) else {
+        return;
+    };
+    install_new_binary(
+        &exe_path,
+        &new_binary_path,
+        current_version,
+        &latest_version,
+    );
 }
 
 /// Locate the installed cim binary by searching PATH, so we update the one the
@@ -164,7 +161,6 @@ fn download_release_archive(
 
 /// Extract the `cim` binary from the downloaded `.tar.gz` archive and mark it
 /// executable, returning its path inside the temp dir.
-#[cfg(not(target_os = "windows"))]
 fn extract_cim_binary(archive_path: &Path, tmp_dir_path: &Path) -> Result<PathBuf, ()> {
     use flate2::read::GzDecoder;
     use tar::Archive;
@@ -209,6 +205,7 @@ fn extract_cim_binary(archive_path: &Path, tmp_dir_path: &Path) -> Result<PathBu
     }
 
     // Set executable bit on the new binary
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&extract_path, std::fs::Permissions::from_mode(0o755)).map_err(
@@ -223,7 +220,6 @@ fn extract_cim_binary(archive_path: &Path, tmp_dir_path: &Path) -> Result<PathBu
 
 /// Rename the current binary to `cim.old` and copy the newly extracted binary
 /// into its place.
-#[cfg(not(target_os = "windows"))]
 fn install_new_binary(
     exe_path: &Path,
     new_binary_path: &Path,
