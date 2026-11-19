@@ -807,6 +807,36 @@ fn test_inherit_embedded_in_a_command_is_an_error() {
 }
 
 #[test]
+fn test_inherit_line_in_block_string_keeps_multiline_shell_intact() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let write = |name: &str, yaml: &str| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, yaml).expect("write sdk.yml");
+        dsdk_cli::config::load_config(&path).expect("load_config")
+    };
+    let base = write(
+        "base.yml",
+        "gits: []\nbuild:\n  commands: |\n    @if [ -n \"$$A\" ]; then \\\n      echo a; \\\n    fi\n",
+    );
+    let derived = write(
+        "derived.yml",
+        "extends: base\ngits: []\nbuild:\n  commands: |\n    @echo before\n    ${{ INHERIT }}\n    @echo after\n",
+    );
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    assert_eq!(
+        merged.build.expect("build missing").commands(),
+        &strings(&[
+            "@echo before",
+            "@if [ -n \"$$A\" ]; then \\",
+            "  echo a; \\",
+            "fi",
+            "@echo after",
+        ])[..]
+    );
+}
+
+#[test]
 fn test_inherit_in_three_level_chain_resolves_bottom_up() {
     let mut root = create_minimal_sdk_config();
     root.build = phase(&["root"], &[]);

@@ -1523,6 +1523,15 @@ value of the level below. `INHERIT` can't be used as a `variables:`
 name. It always inserts the base's list as one block; there is no way to
 inherit all but one of its commands.
 
+Each item of `commands:` becomes one Makefile recipe line, and Make runs
+every line in its own shell. A multi-line shell construct (`if`/`else`,
+a loop) must therefore be joined with a trailing `\` and `;`, as in any
+Makefile, and a `cd` does not carry over to the next line. In a block
+string (`commands: |`) `${{ INHERIT }}` is just a line of its own, and an
+inherited block that contains such a construct stays intact. Don't end
+the line before `${{ INHERIT }}` with `\`, since Make would join it with
+the first inherited line.
+
 When an overlay removes an install step with `install: remove:`, cim
 also drops the base's references to it (`install-<name>` in the phase
 targets' `depends_on` and in the gits' `build_depends_on`), so the
