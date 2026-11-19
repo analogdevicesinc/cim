@@ -123,12 +123,18 @@ name/dest collision is a hard error) → **modify** (against the
 combined result). `merge_variables()` follows the same idea for the
 `variables:` map (own upserts base, then overlay `remove:`/`set:`).
 
-Scalar sections (`build`/`test`/`clean`/`flash`/`help`/`build_folder`/
-`direnv`/`phases`) are whole-value overrides, with two exceptions:
-`merge_makefile_include()` merges `files:`/`exclude:` additively, and
-`merge_envsetup()` merges `envsetup:`'s `depends_on` additively (base
-first, duplicates skipped; `commands` replace the base's only when the
-derived target has its own). Before the merge,
+Scalar sections (`envsetup`/`build`/`test`/`clean`/`flash`/`help`/
+`makefile_include`/`build_folder`/`direnv`/`phases`) are whole-value
+overrides. The phase targets and `makefile_include:` can include the
+base's list with `${{ INHERIT }}` as a list item of their
+`commands:`/`depends_on:` (`files:`/`exclude:`) via
+`merge_phase_target()`/`merge_makefile_include()` (`INHERIT_MARKER`). The
+marker is resolved at merge time against the already merged level below, never reaches the Makefile, is
+rejected by `validate_inherit_usage()` (called from `load_config()`) in a
+target without `extends:`, and a manifest variable named `INHERIT` is
+reserved. Transitional: a `makefile_include:` without the marker still
+merges the base's entries in, with a warning (to become a plain
+replacement). Before the merge,
 `strip_removed_install_refs()` drops the base's `install-<name>`
 references (phase `depends_on`, gits' `build_depends_on`) to steps
 removed with `install: remove:`, unless the derived target redefines a

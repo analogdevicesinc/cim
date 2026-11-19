@@ -1423,10 +1423,10 @@ A derived target's `sdk.yml` carries two distinct kinds of content:
 - **New entries** unique to this target: added directly to the normal
   `gits:`/`toolchains:`/`install:`/`copy_files:`/`variables:` lists/maps,
   exactly as in a target with no `extends:` at all. Scalar sections
-  (`build`/`test`/`clean`/`flash`/`help`/`build_folder`/`direnv`/`phases`) are
-  plain whole-value overrides of the base's value. `makefile_include:`
-  and `envsetup:`'s `depends_on` are the exceptions — they are merged
-  additively (see below), not overridden.
+  (`envsetup`/`build`/`test`/`clean`/`flash`/`help`/`build_folder`/`direnv`/
+  `phases`) are plain whole-value overrides of the base's value; the phase
+  targets can opt in to including the base's value with `${{ INHERIT }}`
+  (see below). `makefile_include:` follows the same rule.
 - **`overlay:`** (a key on the same `sdk.yml`): `remove:`/`modify:`
   operations against content *inherited* from the base. There is no
   `add:` here — anything new goes directly in the sections above instead.
@@ -1476,22 +1476,74 @@ base only) → **combine** (base-after-removal plus this target's own new
 that don't exist, and `sdk.yml` entries that collide with an inherited
 name, are hard errors rather than silent no-ops.
 
-`makefile_include:` is merged additively rather than treated as a
-whole-value override: the base's `files:`/`exclude:` come first,
-followed by the derived target's own entries, with exact duplicates
-skipped. This matters for a shared base target extended by several
-independent derived targets — e.g. a low-level `platform-sdk` target
-extended by multiple teams' own targets — since each derived target can
-contribute its own `-include` directives and auto-discovery exclusions
-without having to know about or copy forward whatever the base (or any
-other derived target) already set.
+`makefile_include:` follows the same rule as the phase targets: a derived
+`makefile_include:` replaces the base's, and `${{ INHERIT }}` as an item
+of `files:` and/or `exclude:` stands for the base's items at that
+position. This matters for a shared base target extended by several
+independent derived targets, since each can add its own `-include`
+directives and auto-discovery exclusions while keeping what the base
+set, and can leave the base's exclusions out to bring those fragments
+back:
 
-`envsetup:` is merged the same way for its `depends_on`: the base's
-entries come first, followed by the derived target's own, with exact
-duplicates skipped. A derived target lists only its own setup steps, and
-still gets any step the base adds later. Its `commands` replace the
-base's commands, but only if it has commands of its own; an `envsetup:`
-with only `depends_on` keeps the base's commands.
+```yaml
+makefile_include:
+  files:
+    - ${{ INHERIT }}        # the base's includes
+    - include team-a.mk
+  exclude:
+    - ${{ INHERIT }}        # keep the base's exclusions
+```
+
+For now, a derived `makefile_include:` without `${{ INHERIT }}` still has
+the base's entries merged in first (exact duplicates skipped), as in
+earlier releases, and cim prints a warning. A later release will make
+that a plain replacement, so add `${{ INHERIT }}` to keep the base's
+entries.
+
+The phase targets (`envsetup:`, `build:`, `test:`, `clean:`, `flash:`
+and `help:`) follow one rule: if the derived target defines one, it
+replaces the base's value as a whole, both `commands:` and `depends_on:`.
+If it doesn't define one, it inherits the base's unchanged. To extend the
+base's value instead of replacing it, put `${{ INHERIT }}` as a list item
+of `commands:` and/or `depends_on:`, where the base's items belong:
+
+```yaml
+# example/sdk.yml (base)
+build:
+  depends_on: [sdk-envsetup]
+  commands:
+    - make all
+
+# derived sdk.yml
+extends: example
+build:
+  depends_on:
+    - ${{ INHERIT }}        # sdk-envsetup, from the base
+    - install-extra-tool
+  commands:
+    - echo "before the base build"
+    - ${{ INHERIT }}        # make all, from the base
+    - ./post-process.sh
+```
+
+`commands:` and `depends_on:` are independent: using `${{ INHERIT }}` in
+one does not inherit the other. To drop an inherited item, leave out
+`${{ INHERIT }}` and list the ones you want. `${{ INHERIT }}` must be a
+list item of its own (not part of a longer command), is an error in a
+target that doesn't declare `extends:`, and expands to nothing if the
+base has no such section. In a chain it stands for the already merged
+value of the level below. `INHERIT` can't be used as a `variables:`
+name. It always inserts the base's list as one block; there is no way to
+inherit all but one of its commands.
+
+Each item of `commands:` becomes one Makefile recipe line, and Make runs
+every line in its own shell. A multi-line shell construct (`if`/`else`,
+a loop) must therefore be joined with a trailing `\` and `;`, as in any
+Makefile, and a `cd` does not carry over to the next line. In a block
+string (`commands: |`) `${{ INHERIT }}` is just a line of its own, and an
+inherited block that contains such a construct stays intact. Don't end
+the line before `${{ INHERIT }}` with `\`, since Make would join it with
+the first inherited line.
 
 When an overlay removes an install step with `install: remove:`, cim
 also drops the base's references to it (`install-<name>` in the phase

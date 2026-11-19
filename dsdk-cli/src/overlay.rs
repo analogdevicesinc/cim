@@ -33,6 +33,13 @@
 //! the same name directly in sdk.yml) while still catching genuine name
 //! collisions as hard errors, and lets `modify:` reach either an inherited
 //! base entry or one of this target's own new entries.
+//!
+//! The phase targets (`envsetup:`/`build:`/`test:`/`clean:`/`flash:`/
+//! `help:`) are not lists of named entries. A derived target's value
+//! replaces the base's as a whole, so nothing needs removing or modifying.
+//! To extend instead of replace, the derived target puts `${{ INHERIT }}`
+//! as a list item of its `commands:` and/or `depends_on:` where the base's
+//! items belong.
 
 use crate::config::{
     deserialize_string_or_vec, CopyFileConfig, GitConfig, InstallConfig, MakefileInclude,
@@ -581,73 +588,220 @@ pub fn merge_variables(
 }
 
 /// Merge the `makefile_include:` section across an `extends:` chain.
-/// Unlike the other scalar sections, this one is additive rather than a
-/// whole-value override: `base`'s `files`/`exclude` come first, followed by
-/// `derived`'s own entries, with exact-duplicate strings/names skipped so a
-/// derived target repeating an inherited entry doesn't emit it twice.
+///
+/// Like the phase targets, a derived value replaces the base's as a whole
+/// once it uses `${{ INHERIT }}` as an item of `files:` and/or `exclude:`
+/// (the marker stands for the base's items at that position).
+///
+/// Transitional: without the marker, the base's entries are still merged in
+/// first (exact duplicates skipped), as releases up to now always did, and a
+/// warning asks the author to write the marker. A later release will make
+/// this a plain replacement, as for the phase targets.
 fn merge_makefile_include(
     base: Option<MakefileInclude>,
     derived: Option<MakefileInclude>,
-) -> Option<MakefileInclude> {
-    match (base, derived) {
-        (None, None) => None,
-        (Some(b), None) => Some(b),
-        (None, Some(d)) => Some(d),
-        (Some(b), Some(d)) => {
-            let mut files = b.files().to_vec();
-            for f in d.files() {
-                if !files.contains(f) {
-                    files.push(f.clone());
-                }
-            }
-            let mut exclude = b.exclude().to_vec();
-            for e in d.exclude() {
-                if !exclude.contains(e) {
-                    exclude.push(e.clone());
-                }
-            }
-            Some(MakefileInclude::Structured(MakefileIncludeConfig {
-                files,
-                exclude,
-            }))
+) -> Result<Option<MakefileInclude>, String> {
+    let Some(derived) = derived else {
+        return Ok(base);
+    };
+    let (base_files, base_exclude): (&[String], &[String]) = match &base {
+        Some(b) => (b.files(), b.exclude()),
+        None => (&[], &[]),
+    };
+    let explicit = derived
+        .files()
+        .iter()
+        .chain(derived.exclude())
+        .any(|i| mentions_inherit(i));
+
+    let (files, exclude) = if explicit {
+        (
+            expand_inherit(derived.files(), base_files, "makefile_include: files", true)?,
+            expand_inherit(
+                derived.exclude(),
+                base_exclude,
+                "makefile_include: exclude",
+                true,
+            )?,
+        )
+    } else {
+        if !base_files.is_empty() || !base_exclude.is_empty() {
+            crate::messages::info(&format!(
+                "Warning: makefile_include: the entries of the base target are only \
+                 merged in implicitly for now; add '{}' to files:/exclude: to keep \
+                 them, as a later release will replace them instead",
+                INHERIT_MARKER
+            ));
         }
-    }
+        let mut files = base_files.to_vec();
+        for f in derived.files() {
+            if !files.contains(f) {
+                files.push(f.clone());
+            }
+        }
+        let mut exclude = base_exclude.to_vec();
+        for e in derived.exclude() {
+            if !exclude.contains(e) {
+                exclude.push(e.clone());
+            }
+        }
+        (files, exclude)
+    };
+
+    Ok(Some(MakefileInclude::Structured(MakefileIncludeConfig {
+        files,
+        exclude,
+    })))
 }
 
-/// Merge the `envsetup:` section across an `extends:` chain. Unlike the
-/// other phase targets, `depends_on` is additive: `base`'s entries come
-/// first, followed by `derived`'s own, with exact duplicates skipped, so a
-/// derived target only lists its own setup steps and still picks up any
-/// step the base adds later. `commands` stay a whole-value override, but
-/// only when `derived` has commands of its own; a depends-only `envsetup:`
-/// in `derived` keeps the base's commands.
-fn merge_envsetup(base: Option<SdkTarget>, derived: Option<SdkTarget>) -> Option<SdkTarget> {
-    let (base, derived) = match (base, derived) {
-        (base, None) => return base,
-        (None, derived) => return derived,
-        (Some(b), Some(d)) => (b, d),
-    };
+/// The marker a derived target writes, as a whole list item in a phase
+/// target's `commands:` or `depends_on:`, to include the value inherited
+/// from the base at that position.
+pub const INHERIT_MARKER: &str = "${{ INHERIT }}";
 
-    let commands = if derived.commands().is_empty() {
-        base.commands().to_vec()
-    } else {
-        derived.commands().to_vec()
-    };
-    let mut depends_on = base.depends_on().unwrap_or_default().to_vec();
-    for dep in derived.depends_on().unwrap_or_default() {
-        if !depends_on.contains(dep) {
-            depends_on.push(dep.clone());
+fn inherit_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"\$\{\{\s*INHERIT\s*\}\}").expect("valid regex"))
+}
+
+/// True if `item` is exactly the inherit marker (surrounding whitespace and
+/// the spacing inside the braces don't matter).
+fn is_inherit_marker(item: &str) -> bool {
+    let item = item.trim();
+    inherit_regex()
+        .find(item)
+        .is_some_and(|m| m.start() == 0 && m.end() == item.len())
+}
+
+/// True if `item` mentions the inherit marker anywhere.
+fn mentions_inherit(item: &str) -> bool {
+    inherit_regex().is_match(item)
+}
+
+/// Replace every inherit marker in `own` with the `inherited` items. A
+/// marker embedded in a longer string is an error, since it expands to
+/// several items. With `dedup`, an inherited item already present is not
+/// added again.
+fn expand_inherit(
+    own: &[String],
+    inherited: &[String],
+    what: &str,
+    dedup: bool,
+) -> Result<Vec<String>, String> {
+    let mut result: Vec<String> = Vec::new();
+    for item in own {
+        if is_inherit_marker(item) {
+            for inh in inherited {
+                if !dedup || !result.contains(inh) {
+                    result.push(inh.clone());
+                }
+            }
+        } else if mentions_inherit(item) {
+            return Err(format!(
+                "{}: '{}' must be a list item of its own, not part of '{}'",
+                what, INHERIT_MARKER, item
+            ));
+        } else if !dedup || !result.contains(item) {
+            result.push(item.clone());
         }
     }
+    Ok(result)
+}
 
-    match (commands.is_empty(), depends_on.is_empty()) {
+/// Merge one phase target (`envsetup`/`build`/`test`/`clean`/`flash`/`help`)
+/// across an `extends:` chain. A derived value replaces the base's as a
+/// whole, except that `${{ INHERIT }}` as a list item of its `commands:`
+/// or `depends_on:` stands for the base's list at that position. A derived
+/// target without the section inherits the base's unchanged. Using the
+/// marker when the base has no such section expands to nothing.
+fn merge_phase_target(
+    name: &str,
+    base: Option<SdkTarget>,
+    derived: Option<SdkTarget>,
+) -> Result<Option<SdkTarget>, String> {
+    let Some(derived) = derived else {
+        return Ok(base);
+    };
+    let base_commands = base.as_ref().map(|b| b.commands()).unwrap_or_default();
+    let base_deps = base
+        .as_ref()
+        .and_then(|b| b.depends_on())
+        .unwrap_or_default();
+
+    let commands = expand_inherit(
+        derived.commands(),
+        base_commands,
+        &format!("{}: commands", name),
+        false,
+    )?;
+    let depends_on = expand_inherit(
+        derived.depends_on().unwrap_or_default(),
+        base_deps,
+        &format!("{}: depends_on", name),
+        true,
+    )?;
+
+    Ok(match (commands.is_empty(), depends_on.is_empty()) {
         (true, true) => None,
         (false, true) => Some(SdkTarget::Commands(commands)),
         _ => Some(SdkTarget::CommandsWithDeps {
             commands,
             depends_on: Some(depends_on),
         }),
+    })
+}
+
+/// Reject `${{ INHERIT }}` in a manifest that has no base to inherit from,
+/// and a manifest variable that would shadow the marker's name.
+pub fn validate_inherit_usage(config: &SdkConfig) -> Result<(), String> {
+    if config
+        .variables
+        .as_ref()
+        .is_some_and(|v| v.contains_key("INHERIT"))
+    {
+        return Err(format!(
+            "variables: 'INHERIT' is reserved for '{}' and can't be defined",
+            INHERIT_MARKER
+        ));
     }
+    if config.extends.is_some() {
+        return Ok(());
+    }
+    let sections = [
+        ("envsetup", &config.envsetup),
+        ("build", &config.build),
+        ("test", &config.test),
+        ("clean", &config.clean),
+        ("flash", &config.flash),
+        ("help", &config.help),
+    ];
+    if let Some(mi) = &config.makefile_include {
+        if mi
+            .files()
+            .iter()
+            .chain(mi.exclude())
+            .any(|i| mentions_inherit(i))
+        {
+            return Err(format!(
+                "makefile_include: '{}' can only be used in a target that declares extends:",
+                INHERIT_MARKER
+            ));
+        }
+    }
+    for (name, target) in sections {
+        let Some(target) = target else { continue };
+        let items = target
+            .commands()
+            .iter()
+            .chain(target.depends_on().unwrap_or_default());
+        if items.into_iter().any(|i| mentions_inherit(i)) {
+            return Err(format!(
+                "{}: '{}' can only be used in a target that declares extends:",
+                name, INHERIT_MARKER
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Drop the base's references to install steps this overlay removes with
@@ -710,13 +864,15 @@ fn strip_removed_install_refs(base: &mut SdkConfig, derived: &SdkConfig, overlay
 /// derived target's own new entries, merged with `base`'s list by
 /// concatenation (a name/dest collision with a base entry is a hard error;
 /// use the `overlay:` key's `modify:` to change a base entry instead).
-/// `makefile_include:` is merged additively (see `merge_makefile_include`),
-/// and so is `envsetup:`'s `depends_on` (see `merge_envsetup`). The
-/// remaining scalar sections (build/test/clean/flash/help/build_folder/
-/// direnv/phases) in `derived` override the corresponding value inherited
-/// from `base` when present. Inherited references to install steps that
-/// the overlay removes are stripped first (see
-/// `strip_removed_install_refs`).
+/// `makefile_include:` and the phase targets (envsetup/build/test/clean/
+/// flash/help) in `derived` replace the value inherited from `base` as a whole, unless they use
+/// `${{ INHERIT }}` to include the base's list (see `merge_phase_target`
+/// and, for `makefile_include:`, `merge_makefile_include`, which still
+/// merges implicitly for now). The remaining scalar sections
+/// (build_folder/direnv/phases) override the inherited value when present.
+/// Inherited references to install steps that the overlay removes are
+/// stripped first (see `strip_removed_install_refs`), so they never come
+/// back through `${{ INHERIT }}`.
 pub fn apply_overlay(
     mut base: SdkConfig,
     derived: SdkConfig,
@@ -746,14 +902,14 @@ pub fn apply_overlay(
         toolchains,
         copy_files,
         install,
-        makefile_include: merge_makefile_include(base.makefile_include, derived.makefile_include),
+        makefile_include: merge_makefile_include(base.makefile_include, derived.makefile_include)?,
         build_folder: derived.build_folder.or(base.build_folder),
-        envsetup: merge_envsetup(base.envsetup, derived.envsetup),
-        test: derived.test.or(base.test),
-        clean: derived.clean.or(base.clean),
-        build: derived.build.or(base.build),
-        flash: derived.flash.or(base.flash),
-        help: derived.help.or(base.help),
+        envsetup: merge_phase_target("envsetup", base.envsetup, derived.envsetup)?,
+        test: merge_phase_target("test", base.test, derived.test)?,
+        clean: merge_phase_target("clean", base.clean, derived.clean)?,
+        build: merge_phase_target("build", base.build, derived.build)?,
+        flash: merge_phase_target("flash", base.flash, derived.flash)?,
+        help: merge_phase_target("help", base.help, derived.help)?,
         variables,
         phases: derived.phases.or(base.phases),
         direnv: derived.direnv.or(base.direnv),

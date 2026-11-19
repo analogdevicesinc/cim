@@ -1223,6 +1223,9 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<SdkConfig, Box<dyn std::er
     let config: SdkConfig = noyalib::from_str(&preprocessed)
         .map_err(|e| enhance_config_error(&file_content, &path_buf, &e))?;
 
+    crate::overlay::validate_inherit_usage(&config)
+        .map_err(|e| format!("{}: {}", path_buf.display(), e))?;
+
     Ok(config)
 }
 
