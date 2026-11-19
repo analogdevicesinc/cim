@@ -28,9 +28,9 @@ use dsdk_cli::config::{
 };
 use dsdk_cli::overlay::{
     apply_overlay, compute_owned_entries, merge_copy_files, merge_gits, merge_install,
-    merge_toolchains, merge_variables, validate_dependencies, CopyFilePatch, CopyFilesOverlay,
-    GitPatch, GitsOverlay, InstallOverlay, InstallPatch, OverlayConfig, ToolchainPatch,
-    ToolchainsOverlay, VariablesOverlay,
+    merge_toolchains, merge_variables, validate_dependencies, validate_inherit_usage,
+    CopyFilePatch, CopyFilesOverlay, GitPatch, GitsOverlay, InstallOverlay, InstallPatch,
+    OverlayConfig, ToolchainPatch, ToolchainsOverlay, VariablesOverlay,
 };
 use std::collections::{BTreeMap, HashMap};
 
@@ -566,7 +566,7 @@ fn test_apply_overlay_makefile_include_one_sided_is_preserved() {
 }
 
 // ---------------------------------------------------------------------
-// apply_overlay: envsetup depends_on is merged additively, and inherited
+// apply_overlay: phase targets replace the base's as a whole, and inherited
 // references to install steps removed by the overlay are stripped
 // ---------------------------------------------------------------------
 
@@ -638,29 +638,21 @@ fn test_apply_overlay_envsetup_keeps_ref_to_redefined_install_step() {
 }
 
 #[test]
-fn test_apply_overlay_envsetup_depends_on_is_joined_and_deduped() {
-    // A derived target that still repeats the base's list (the old way)
-    // gets the same result as one that only lists its own steps.
+fn test_apply_overlay_envsetup_without_marker_replaces_base_entirely() {
+    let mut base = base_with_setup_steps();
+    base.envsetup = envsetup(&["@echo base"], &["install-step-a"]);
     let mut derived = create_minimal_sdk_config();
     derived.install = Some(vec![new_install("step-own", None)]);
-    derived.envsetup = envsetup(
-        &[],
-        &["install-step-a", "install-step-c", "install-step-own"],
-    );
-    let merged = apply_overlay(
-        base_with_setup_steps(),
-        derived,
-        &remove_install(&["step-b"]),
-    )
-    .expect("apply_overlay should succeed");
-    assert_eq!(
-        deps(&merged.envsetup),
-        vec!["install-step-a", "install-step-c", "install-step-own"]
-    );
+    derived.envsetup = envsetup(&["@echo derived"], &["install-step-own"]);
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let setup = merged.envsetup.expect("envsetup missing");
+    assert_eq!(setup.commands(), &["@echo derived".to_string()]);
+    assert_eq!(deps(&Some(setup)), vec!["install-step-own"]);
 }
 
 #[test]
-fn test_apply_overlay_envsetup_own_commands_replace_base_commands_only() {
+fn test_apply_overlay_commands_only_envsetup_drops_base_deps() {
     let mut base = base_with_setup_steps();
     base.envsetup = envsetup(&["@echo base"], &["install-step-a"]);
     let mut derived = create_minimal_sdk_config();
@@ -669,14 +661,11 @@ fn test_apply_overlay_envsetup_own_commands_replace_base_commands_only() {
         .expect("apply_overlay should succeed");
     let setup = merged.envsetup.expect("envsetup missing");
     assert_eq!(setup.commands(), &["@echo derived".to_string()]);
-    assert_eq!(
-        setup.depends_on(),
-        Some(&["install-step-a".to_string()][..])
-    );
+    assert!(setup.depends_on().is_none());
 }
 
 #[test]
-fn test_apply_overlay_depends_only_envsetup_keeps_base_commands() {
+fn test_apply_overlay_depends_only_envsetup_drops_base_commands() {
     let mut base = base_with_setup_steps();
     base.envsetup = envsetup(&["@echo base"], &["install-step-a"]);
     let mut derived = create_minimal_sdk_config();
@@ -685,11 +674,206 @@ fn test_apply_overlay_depends_only_envsetup_keeps_base_commands() {
     let merged = apply_overlay(base, derived, &OverlayConfig::default())
         .expect("apply_overlay should succeed");
     let setup = merged.envsetup.expect("envsetup missing");
+    assert!(setup.commands().is_empty());
+    assert_eq!(deps(&Some(setup)), vec!["install-step-own"]);
+}
+
+// ---------------------------------------------------------------------
+// apply_overlay: ${{ INHERIT }} includes the base's commands/depends_on
+// ---------------------------------------------------------------------
+
+fn phase(commands: &[&str], depends_on: &[&str]) -> Option<SdkTarget> {
+    if depends_on.is_empty() {
+        Some(SdkTarget::Commands(
+            commands.iter().map(|s| s.to_string()).collect(),
+        ))
+    } else {
+        envsetup(commands, depends_on)
+    }
+}
+
+fn strings(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn test_inherit_in_commands_wraps_base_commands() {
+    let mut base = create_minimal_sdk_config();
+    base.build = phase(&["make all", "make install"], &["sdk-envsetup"]);
+    let mut derived = create_minimal_sdk_config();
+    derived.build = phase(&["echo pre", "${{ INHERIT }}", "echo post"], &[]);
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let build = merged.build.expect("build missing");
+    assert_eq!(
+        build.commands(),
+        &strings(&["echo pre", "make all", "make install", "echo post"])[..]
+    );
+    // depends_on is a separate list: no marker there, so base's is dropped.
+    assert!(build.depends_on().is_none());
+}
+
+#[test]
+fn test_inherit_in_depends_on_keeps_base_deps_and_adds_own() {
+    let mut base = base_with_setup_steps();
+    base.envsetup = envsetup(&["@echo base"], &["install-step-a", "install-step-b"]);
+    let mut derived = create_minimal_sdk_config();
+    derived.install = Some(vec![new_install("step-own", None)]);
+    derived.envsetup = envsetup(
+        &["${{ INHERIT }}"],
+        &["${{ INHERIT }}", "install-step-own", "install-step-a"],
+    );
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    let setup = merged.envsetup.expect("envsetup missing");
     assert_eq!(setup.commands(), &["@echo base".to_string()]);
+    // Duplicates are skipped, base entries come first.
     assert_eq!(
         deps(&Some(setup)),
-        vec!["install-step-a", "install-step-own"]
+        vec!["install-step-a", "install-step-b", "install-step-own"]
     );
+}
+
+#[test]
+fn test_inherit_works_for_every_phase_target() {
+    let mut base = create_minimal_sdk_config();
+    base.envsetup = phase(&["base"], &[]);
+    base.build = phase(&["base"], &[]);
+    base.test = phase(&["base"], &[]);
+    base.clean = phase(&["base"], &[]);
+    base.flash = phase(&["base"], &[]);
+    base.help = phase(&["base"], &[]);
+    let mut derived = create_minimal_sdk_config();
+    derived.envsetup = phase(&["${{ INHERIT }}", "own"], &[]);
+    derived.build = phase(&["${{ INHERIT }}", "own"], &[]);
+    derived.test = phase(&["${{ INHERIT }}", "own"], &[]);
+    derived.clean = phase(&["${{ INHERIT }}", "own"], &[]);
+    derived.flash = phase(&["${{ INHERIT }}", "own"], &[]);
+    derived.help = phase(&["${{ INHERIT }}", "own"], &[]);
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    for target in [
+        &merged.envsetup,
+        &merged.build,
+        &merged.test,
+        &merged.clean,
+        &merged.flash,
+        &merged.help,
+    ] {
+        let target = target.as_ref().expect("phase target missing");
+        assert_eq!(target.commands(), &strings(&["base", "own"])[..]);
+    }
+}
+
+#[test]
+fn test_inherit_marker_spacing_is_flexible() {
+    let mut base = create_minimal_sdk_config();
+    base.build = phase(&["base"], &[]);
+    let mut derived = create_minimal_sdk_config();
+    derived.build = phase(&["${{INHERIT}}", "  ${{   INHERIT }}  "], &[]);
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    assert_eq!(
+        merged.build.expect("build missing").commands(),
+        &strings(&["base", "base"])[..]
+    );
+}
+
+#[test]
+fn test_inherit_without_base_section_expands_to_nothing() {
+    let base = create_minimal_sdk_config();
+    let mut derived = create_minimal_sdk_config();
+    derived.build = phase(&["${{ INHERIT }}", "own"], &[]);
+    derived.test = phase(&["${{ INHERIT }}"], &[]);
+    let merged = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    assert_eq!(
+        merged.build.expect("build missing").commands(),
+        &["own".to_string()]
+    );
+    assert!(merged.test.is_none());
+}
+
+#[test]
+fn test_inherit_embedded_in_a_command_is_an_error() {
+    let mut base = create_minimal_sdk_config();
+    base.build = phase(&["base"], &[]);
+    let mut derived = create_minimal_sdk_config();
+    derived.build = phase(&["echo ${{ INHERIT }}"], &[]);
+    let err = apply_overlay(base, derived, &OverlayConfig::default())
+        .expect_err("embedded marker should fail");
+    assert!(err.contains("build: commands"), "{}", err);
+    assert!(err.contains("list item of its own"), "{}", err);
+}
+
+#[test]
+fn test_inherit_in_three_level_chain_resolves_bottom_up() {
+    let mut root = create_minimal_sdk_config();
+    root.build = phase(&["root"], &[]);
+    let mut mid = create_minimal_sdk_config();
+    mid.build = phase(&["mid-pre", "${{ INHERIT }}"], &[]);
+    let mut top = create_minimal_sdk_config();
+    top.build = phase(&["${{ INHERIT }}", "top-post"], &[]);
+
+    let mid_merged =
+        apply_overlay(root, mid, &OverlayConfig::default()).expect("apply_overlay should succeed");
+    let top_merged = apply_overlay(mid_merged, top, &OverlayConfig::default())
+        .expect("apply_overlay should succeed");
+    assert_eq!(
+        top_merged.build.expect("build missing").commands(),
+        &strings(&["mid-pre", "root", "top-post"])[..]
+    );
+}
+
+#[test]
+fn test_inherit_does_not_bring_back_removed_install_step_refs() {
+    let mut derived = create_minimal_sdk_config();
+    derived.envsetup = envsetup(&["${{ INHERIT }}"], &["${{ INHERIT }}"]);
+    let merged = apply_overlay(
+        base_with_setup_steps(),
+        derived,
+        &remove_install(&["step-b"]),
+    )
+    .expect("apply_overlay should succeed");
+    assert_eq!(
+        deps(&merged.envsetup),
+        vec!["install-step-a", "install-step-c"]
+    );
+}
+
+#[test]
+fn test_inherit_without_extends_is_rejected() {
+    let mut config = create_minimal_sdk_config();
+    config.build = phase(&["${{ INHERIT }}"], &[]);
+    let err = validate_inherit_usage(&config).expect_err("no base to inherit from");
+    assert!(err.contains("extends:"), "{}", err);
+
+    config.build = phase(&["make"], &["${{ INHERIT }}"]);
+    assert!(validate_inherit_usage(&config).is_err());
+
+    config.build = phase(&["make"], &[]);
+    assert!(validate_inherit_usage(&config).is_ok());
+}
+
+#[test]
+fn test_inherit_variable_name_is_reserved() {
+    let mut config = create_minimal_sdk_config();
+    config.variables = Some(HashMap::from([("INHERIT".to_string(), "x".to_string())]));
+    let err = validate_inherit_usage(&config).expect_err("reserved name");
+    assert!(err.contains("reserved"), "{}", err);
+}
+
+#[test]
+fn test_load_config_rejects_inherit_in_standalone_manifest() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sdk.yml");
+    std::fs::write(
+        &path,
+        "gits: []\nbuild:\n  commands:\n    - ${{ INHERIT }}\n",
+    )
+    .expect("write sdk.yml");
+    let err = dsdk_cli::config::load_config(&path).expect_err("should be rejected");
+    assert!(err.to_string().contains("INHERIT"), "{}", err);
 }
 
 #[test]
@@ -726,10 +910,7 @@ fn test_apply_overlay_keeps_dangling_ref_in_derived_own_envsetup() {
         &remove_install(&["step-b"]),
     )
     .expect("apply_overlay should succeed");
-    assert_eq!(
-        deps(&merged.envsetup),
-        vec!["install-step-a", "install-step-c", "install-step-b"]
-    );
+    assert_eq!(deps(&merged.envsetup), vec!["install-step-b"]);
 }
 
 // ---------------------------------------------------------------------
